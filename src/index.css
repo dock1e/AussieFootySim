@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    font-feature-settings: "tnum" 1; /* tabular numbers for stat columns */
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-base-600 bg-base-800 p-4;
+  }
+  .stat-pill {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-wide;
+  }
+  .stat-pill-good {
+    @apply bg-good/15 text-good;
+  }
+  .stat-pill-warn {
+    @apply bg-warn/15 text-warn;
+  }
+  .stat-pill-bad {
+    @apply bg-bad/15 text-bad;
+  }
+  .stat-pill-info {
+    @apply bg-info/15 text-info;
+  }
+}

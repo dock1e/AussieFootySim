@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+
+# generated game data (rebuilt from ../Player Database/players_master.csv via `npm run build:data`)
+src/data/generated/
+
+# balance simulator output
+sim-results/
+*.jsonl
+
+npm-debug.log*
+.vscode/*
+!.vscode/extensions.json

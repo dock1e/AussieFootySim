@@ -18,6 +18,7 @@ npm run build:data   # regenerate src/data/generated/players.json from ../Player
 npm run dev           # start the Vite dev server
 npm test               # run the Vitest suite
 npm run build          # type-check + production build
+npm run simulate -- --games=1000 --seed=1 --out=sim-results/results.jsonl   # headless balance-testing CLI
 ```
 
 Re-run `npm run build:data` any time the vault's `players_master.csv` changes — the

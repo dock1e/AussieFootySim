@@ -1,6 +1,6 @@
-import type { Archetype } from "../types/archetype";
-import type { Player } from "../types/player";
-import { averageOvr } from "./loadPlayers";
+import type { Archetype } from "../types/archetype.ts";
+import type { Player } from "../types/player.ts";
+import { averageOvr } from "./loadPlayers.ts";
 
 /**
  * Groups the 14 archetypes into the four position lines used throughout

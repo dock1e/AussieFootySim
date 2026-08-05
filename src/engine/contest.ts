@@ -76,3 +76,27 @@ export function resolveContest(attacker: Player, defender: Player, type: Contest
     roll,
   };
 }
+
+export interface ThresholdResult {
+  success: boolean;
+  rating: number;
+  difficulty: number;
+  probability: number;
+  roll: number;
+}
+
+/**
+ * The other contest shape from Engine.md's "Attribute -> contest mapping"
+ * table: a rating checked against a difficulty figure rather than against a
+ * named opponent — set shots, snap shots, and (here) disposal-under-pressure,
+ * where "the nearest opponent's tackle and strengthManOnMan" is folded into
+ * a single difficulty number by the caller rather than being a full second
+ * player object. Same logistic curve as resolveContest/winProbability, so
+ * the same balance-simulator tuning process (Engine.md "Balance simulator")
+ * applies to both.
+ */
+export function resolveThreshold(rating: number, difficulty: number, rng: Rng, k: number = DEFAULT_K): ThresholdResult {
+  const probability = winProbability(rating, difficulty, k);
+  const roll = rng();
+  return { success: roll < probability, rating, difficulty, probability, roll };
+}

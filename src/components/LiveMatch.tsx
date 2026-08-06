@@ -1,0 +1,251 @@
+import { useMemo, useState } from "react";
+import { CLUBS } from "../types/club";
+import { getPlayersByClub } from "../data/loadPlayers";
+import { pickBest22 } from "../engine/team";
+import { simulateMatch, type MatchResult, type BoxScoreLine } from "../engine/match";
+import { mulberry32 } from "../engine/rng";
+import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
+import { MatchCanvas } from "./MatchCanvas";
+import { FullTimeResult } from "./FullTimeResult";
+
+const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8];
+
+const TEAM_STAT_KEYS = ["disposals", "marks", "tackles", "clearances", "hitouts"] as const;
+
+export function LiveMatch() {
+  const [homeClub, setHomeClub] = useState(CLUBS[10].name); // Melbourne, arbitrary
+  const [awayClub, setAwayClub] = useState(CLUBS[3].name); // Collingwood, arbitrary
+  const [result, setResult] = useState<MatchResult | null>(null);
+  const [lastSeed, setLastSeed] = useState<number | null>(null);
+
+  const homeTeam = useMemo(() => pickBest22(homeClub, getPlayersByClub(homeClub)), [homeClub]);
+  const awayTeam = useMemo(() => pickBest22(awayClub, getPlayersByClub(awayClub)), [awayClub]);
+  const homeIds = useMemo(() => new Set(homeTeam.players.map((p) => p.PlayerID)), [homeTeam]);
+  const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
+
+  const playback = useMatchPlayback(result, homeIds, awayIds);
+
+  function startMatch() {
+    const seed = Math.floor(Math.random() * 1_000_000_000);
+    const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed);
+    setLastSeed(seed);
+    setResult(fresh);
+  }
+
+  if (playback.isComplete && result) {
+    return (
+      <FullTimeResult
+        result={result}
+        homeTeam={homeTeam}
+        awayTeam={awayTeam}
+        onNewMatch={() => {
+          setResult(null);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card flex flex-wrap items-center gap-4">
+        <select
+          className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
+          value={homeClub}
+          onChange={(e) => setHomeClub(e.target.value)}
+          disabled={!!result}
+        >
+          {CLUBS.map((c) => (
+            <option key={c.ClubID} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <span className="text-slate-500">vs</span>
+        <select
+          className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
+          value={awayClub}
+          onChange={(e) => setAwayClub(e.target.value)}
+          disabled={!!result}
+        >
+          {CLUBS.map((c) => (
+            <option key={c.ClubID} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        {!result ? (
+          <button
+            onClick={startMatch}
+            disabled={homeClub === awayClub}
+            className="ml-auto rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-40"
+          >
+            Simulate &amp; Watch
+          </button>
+        ) : (
+          <button
+            onClick={() => setResult(null)}
+            className="ml-auto rounded-lg bg-base-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-base-600"
+          >
+            New match-up
+          </button>
+        )}
+      </div>
+
+      {!result && (
+        <div className="card text-sm text-slate-400">
+          Pick two clubs and hit Simulate &amp; Watch. Each team fields a best-22 by OVR (no
+          Selection Committee yet — see ROADMAP.md), and the match runs against a fresh random
+          seed every time.
+        </div>
+      )}
+
+      {result && (
+        <>
+          <div className="card">
+            <div className="mb-3 flex items-center justify-between text-xs uppercase tracking-wide text-slate-400">
+              <span>
+                {playback.currentEvent ? `Quarter ${playback.currentEvent.quarter}` : "Pre-match"} &middot; tick{" "}
+                {playback.currentIndex + 1}/{result.events.length}
+              </span>
+              <span>seed {lastSeed}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <ScoreBlock name={homeTeam.name} goals={playback.liveScore.homeGoals} behinds={playback.liveScore.homeBehinds} points={playback.liveScore.homePoints} align="left" />
+              <div className="px-4 text-2xl text-slate-600">vs</div>
+              <ScoreBlock name={awayTeam.name} goals={playback.liveScore.awayGoals} behinds={playback.liveScore.awayBehinds} points={playback.liveScore.awayPoints} align="right" />
+            </div>
+          </div>
+
+          <MatchCanvas home={homeTeam} away={awayTeam} event={playback.currentEvent} liveBoxScore={playback.liveBoxScore} />
+
+          <div className="card flex flex-wrap items-center gap-2">
+            {playback.isPlaying ? (
+              <button onClick={playback.pause} className="rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
+                Pause
+              </button>
+            ) : (
+              <button onClick={playback.play} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+                {playback.currentIndex < 0 ? "Play" : "Resume"}
+              </button>
+            )}
+            <div className="flex items-center gap-1">
+              {SPEEDS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => playback.setSpeed(s)}
+                  className={`rounded-lg px-3 py-2 text-xs font-medium ${
+                    playback.speed === s ? "bg-accent text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
+                  }`}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+            <button onClick={playback.skipToFullTime} className="ml-auto rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
+              Skip to Full Time
+            </button>
+            <button onClick={playback.restart} className="rounded-lg bg-base-800 px-4 py-2 text-sm text-slate-400 hover:bg-base-700">
+              Restart
+            </button>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <TeamStatBars label={homeTeam.name} otherLabel={awayTeam.name} own={teamTotals(playback.liveBoxScore, homeIds)} other={teamTotals(playback.liveBoxScore, awayIds)} />
+            <PlayByPlay events={result.events.slice(0, playback.currentIndex + 1)} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ScoreBlock({
+  name,
+  goals,
+  behinds,
+  points,
+  align,
+}: {
+  name: string;
+  goals: number;
+  behinds: number;
+  points: number;
+  align: "left" | "right";
+}) {
+  return (
+    <div className={align === "left" ? "text-left" : "text-right"}>
+      <div className="text-sm text-slate-400">{name}</div>
+      <div className="text-3xl font-bold tabular-nums">{points}</div>
+      <div className="text-xs text-slate-500 tabular-nums">
+        {goals}.{behinds}
+      </div>
+    </div>
+  );
+}
+
+function teamTotals(box: Record<number, BoxScoreLine>, ids: Set<number>) {
+  const totals: Record<string, number> = {};
+  for (const key of TEAM_STAT_KEYS) totals[key] = 0;
+  for (const [idStr, line] of Object.entries(box)) {
+    if (!ids.has(Number(idStr))) continue;
+    for (const key of TEAM_STAT_KEYS) totals[key] += line[key];
+  }
+  return totals;
+}
+
+function TeamStatBars({
+  label,
+  otherLabel,
+  own,
+  other,
+}: {
+  label: string;
+  otherLabel: string;
+  own: Record<string, number>;
+  other: Record<string, number>;
+}) {
+  return (
+    <div className="card">
+      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
+        {label} <span className="text-slate-600">vs</span> {otherLabel}
+      </div>
+      <div className="space-y-2">
+        {TEAM_STAT_KEYS.map((key) => {
+          const total = own[key] + other[key];
+          const pct = total === 0 ? 50 : (own[key] / total) * 100;
+          return (
+            <div key={key}>
+              <div className="mb-0.5 flex justify-between text-xs tabular-nums text-slate-400">
+                <span>{own[key]}</span>
+                <span className="capitalize text-slate-500">{key}</span>
+                <span>{other[key]}</span>
+              </div>
+              <div className="flex h-1.5 overflow-hidden rounded-full bg-base-700">
+                <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+                <div className="h-full bg-info" style={{ width: `${100 - pct}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PlayByPlay({ events }: { events: MatchResult["events"] }) {
+  const recent = [...events].reverse().slice(0, 40);
+  return (
+    <div className="card">
+      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Play by play</div>
+      <div className="max-h-64 space-y-1 overflow-y-auto text-sm">
+        {recent.length === 0 && <div className="text-slate-500">Kick-off coming up…</div>}
+        {recent.map((ev) => (
+          <div key={ev.tick} className="flex gap-2 text-slate-300">
+            <span className="w-10 shrink-0 tabular-nums text-slate-500">Q{ev.quarter}</span>
+            <span>{ev.description}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

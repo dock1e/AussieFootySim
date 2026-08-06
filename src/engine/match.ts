@@ -50,6 +50,12 @@ function emptyLine(): BoxScoreLine {
   };
 }
 
+export interface StatDelta {
+  playerId: number;
+  stat: keyof BoxScoreLine;
+  delta: number;
+}
+
 export interface MatchEvent {
   tick: number;
   quarter: 1 | 2 | 3 | 4;
@@ -58,6 +64,14 @@ export interface MatchEvent {
   phase: Phase;
   description: string;
   playerIds: number[];
+  /**
+   * Which box-score fields this event changed, and by how much. Lets a UI
+   * derive a genuinely *live* score/box-score by reducing over
+   * `events[0..i]` during playback, rather than only having the final
+   * result — see User Interface.md "live small-multiples box score...
+   * updates alongside the ground view" and src/hooks/useMatchPlayback.ts.
+   */
+  statDeltas: StatDelta[];
 }
 
 export interface TeamResult {
@@ -128,9 +142,17 @@ function lineFor(ctx: Ctx, player: Player): BoxScoreLine {
   return line;
 }
 
-function log(ctx: Ctx, zone: Zone, possession: Side, phase: Phase, description: string, playerIds: number[]) {
+function log(
+  ctx: Ctx,
+  zone: Zone,
+  possession: Side,
+  phase: Phase,
+  description: string,
+  playerIds: number[],
+  statDeltas: StatDelta[] = [],
+) {
   if (!ctx.recordEvents) return;
-  ctx.events.push({ tick: ctx.tick, quarter: ctx.quarter, zone, possession, phase, description, playerIds });
+  ctx.events.push({ tick: ctx.tick, quarter: ctx.quarter, zone, possession, phase, description, playerIds, statDeltas });
 }
 
 interface State {
@@ -149,7 +171,9 @@ function runStoppage(ctx: Ctx, state: State): State {
   const ruckResult = resolveContest(homeRuck, awayRuck, "ruck", ctx.rng);
   const ruckWinner = ruckResult.winner === "attacker" ? homeRuck : awayRuck;
   lineFor(ctx, ruckWinner).hitouts += 1;
-  log(ctx, state.zone, state.possession, "STOPPAGE", `${ruckWinner.lname} wins the hit-out`, [ruckWinner.PlayerID]);
+  log(ctx, state.zone, state.possession, "STOPPAGE", `${ruckWinner.lname} wins the hit-out`, [ruckWinner.PlayerID], [
+    { playerId: ruckWinner.PlayerID, stat: "hitouts", delta: 1 },
+  ]);
 
   const homeClear = bestByRating(home, clearanceRating);
   const awayClear = bestByRating(away, clearanceRating);
@@ -157,9 +181,15 @@ function runStoppage(ctx: Ctx, state: State): State {
   const winningSide: Side = clearResult.winner === "attacker" ? "home" : "away";
   const clearWinner = winningSide === "home" ? homeClear : awayClear;
   lineFor(ctx, clearWinner).clearances += 1;
-  log(ctx, MIDFIELD, winningSide, "STOPPAGE", `${clearWinner.lname} clears it for ${teamOf(ctx, winningSide).name}`, [
-    clearWinner.PlayerID,
-  ]);
+  log(
+    ctx,
+    MIDFIELD,
+    winningSide,
+    "STOPPAGE",
+    `${clearWinner.lname} clears it for ${teamOf(ctx, winningSide).name}`,
+    [clearWinner.PlayerID],
+    [{ playerId: clearWinner.PlayerID, stat: "clearances", delta: 1 }],
+  );
 
   return { phase: "GENERAL_PLAY", zone: MIDFIELD, possession: winningSide, carrier: clearWinner };
 }
@@ -176,10 +206,15 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
 
   if (!result.success) {
     lineFor(ctx, defender).tackles += 1;
-    log(ctx, state.zone, state.possession, "GENERAL_PLAY", `${defender.lname} tackles ${carrier.lname}`, [
-      defender.PlayerID,
-      carrier.PlayerID,
-    ]);
+    log(
+      ctx,
+      state.zone,
+      state.possession,
+      "GENERAL_PLAY",
+      `${defender.lname} tackles ${carrier.lname}`,
+      [defender.PlayerID, carrier.PlayerID],
+      [{ playerId: defender.PlayerID, stat: "tackles", delta: 1 }],
+    );
     const newSide = otherSide(state.possession);
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: defender };
   }
@@ -192,9 +227,19 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   else line.handballs += 1;
 
   const newZone = advanceZone(state.zone, state.possession);
-  log(ctx, newZone, state.possession, "GENERAL_PLAY", `${carrier.lname} finds space with a${isKick ? " kick" : " handball"}`, [
-    carrier.PlayerID,
-  ]);
+  log(
+    ctx,
+    newZone,
+    state.possession,
+    "GENERAL_PLAY",
+    `${carrier.lname} finds space with a${isKick ? " kick" : " handball"}`,
+    [carrier.PlayerID],
+    [
+      { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
+      { playerId: carrier.PlayerID, stat: "uncontestedPoss", delta: 1 },
+      { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
+    ],
+  );
 
   if (isForward50(newZone, state.possession) && ctx.rng() < P_SHOT_WHEN_ENTERING_FORWARD_50) {
     return { phase: "SHOT", zone: newZone, possession: state.possession, carrier };
@@ -219,16 +264,27 @@ function runContest(ctx: Ctx, state: State): State {
 
   if (result.winner === "attacker") {
     const line = lineFor(ctx, attackerRep);
+    const deltas: StatDelta[] = [];
     if (contestType === "markContested") {
       line.marks += 1;
       line.contestedMarks += 1;
+      deltas.push(
+        { playerId: attackerRep.PlayerID, stat: "marks", delta: 1 },
+        { playerId: attackerRep.PlayerID, stat: "contestedMarks", delta: 1 },
+      );
     } else {
       line.contestedPoss += 1;
+      deltas.push({ playerId: attackerRep.PlayerID, stat: "contestedPoss", delta: 1 });
     }
-    log(ctx, state.zone, attackingSide, "CONTEST", `${attackerRep.lname} wins the ${contestType === "markContested" ? "contested mark" : "ground ball"}`, [
-      attackerRep.PlayerID,
-      defenderRep.PlayerID,
-    ]);
+    log(
+      ctx,
+      state.zone,
+      attackingSide,
+      "CONTEST",
+      `${attackerRep.lname} wins the ${contestType === "markContested" ? "contested mark" : "ground ball"}`,
+      [attackerRep.PlayerID, defenderRep.PlayerID],
+      deltas,
+    );
     if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
       return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep };
     }
@@ -237,10 +293,15 @@ function runContest(ctx: Ctx, state: State): State {
 
   const line = lineFor(ctx, defenderRep);
   line.contestedPoss += 1;
-  log(ctx, state.zone, defendingSide, "CONTEST", `${defenderRep.lname} spoils it and takes control`, [
-    defenderRep.PlayerID,
-    attackerRep.PlayerID,
-  ]);
+  log(
+    ctx,
+    state.zone,
+    defendingSide,
+    "CONTEST",
+    `${defenderRep.lname} spoils it and takes control`,
+    [defenderRep.PlayerID, attackerRep.PlayerID],
+    [{ playerId: defenderRep.PlayerID, stat: "contestedPoss", delta: 1 }],
+  );
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: defenderRep };
 }
 
@@ -259,16 +320,30 @@ function runShot(ctx: Ctx, state: State): State {
   if (onTarget.success && ctx.rng() < P_GOAL_GIVEN_ON_TARGET) {
     line.goals += 1;
     scoreLine.goals += 1;
-    log(ctx, state.zone, state.possession, "SHOT", `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`, [
-      shooter.PlayerID,
-    ]);
+    log(
+      ctx,
+      state.zone,
+      state.possession,
+      "SHOT",
+      `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`,
+      [shooter.PlayerID],
+      [{ playerId: shooter.PlayerID, stat: "goals", delta: 1 }],
+    );
     return { phase: "STOPPAGE", zone: MIDFIELD, possession: state.possession, carrier: null };
   }
 
   if (onTarget.success) {
     line.behinds += 1;
     scoreLine.behinds += 1;
-    log(ctx, state.zone, state.possession, "SHOT", `Behind to ${shooter.lname}`, [shooter.PlayerID]);
+    log(
+      ctx,
+      state.zone,
+      state.possession,
+      "SHOT",
+      `Behind to ${shooter.lname}`,
+      [shooter.PlayerID],
+      [{ playerId: shooter.PlayerID, stat: "behinds", delta: 1 }],
+    );
   } else {
     log(ctx, state.zone, state.possession, "SHOT", `${shooter.lname}'s shot misses everything`, [shooter.PlayerID]);
   }

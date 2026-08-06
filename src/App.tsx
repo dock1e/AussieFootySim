@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Dashboard } from "./components/Dashboard";
 import { SquadList } from "./components/SquadList";
+import { LiveMatch } from "./components/LiveMatch";
 import { useGameStore } from "./store/useGameStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
-type Screen = "dashboard" | "squad";
+type Screen = "dashboard" | "squad" | "match";
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
@@ -22,6 +23,7 @@ export default function App() {
             [
               ["dashboard", "Dashboard"],
               ["squad", "Squad"],
+              ["match", "Match"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -38,7 +40,11 @@ export default function App() {
         <div className="text-xs text-slate-500 tabular-nums">{ALL_PLAYERS.length} players loaded</div>
       </header>
 
-      <main>{screen === "dashboard" ? <Dashboard /> : <SquadList players={squad} />}</main>
+      <main>
+        {screen === "dashboard" && <Dashboard />}
+        {screen === "squad" && <SquadList players={squad} />}
+        {screen === "match" && <LiveMatch />}
+      </main>
     </div>
   );
 }

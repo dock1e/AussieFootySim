@@ -94,6 +94,20 @@ describe("simulateMatch", () => {
     expect(withoutEvents.away).toEqual(withEvents.away);
   });
 
+  it("statDeltas replayed from the event log exactly reproduce the final box score", () => {
+    const result = simulateMatch(home, away, mulberry32(11), 11, { recordEvents: true });
+    const replay: Record<number, Record<string, number>> = {};
+    for (const p of [...home.players, ...away.players]) {
+      replay[p.PlayerID] = Object.fromEntries(Object.keys(result.boxScore[p.PlayerID]).map((k) => [k, 0]));
+    }
+    for (const ev of result.events) {
+      for (const d of ev.statDeltas) {
+        replay[d.playerId][d.stat] += d.delta;
+      }
+    }
+    expect(replay).toEqual(result.boxScore);
+  });
+
   it("stays within a non-degenerate score range across many seeds", () => {
     for (let seed = 100; seed < 130; seed++) {
       const result = simulateMatch(home, away, mulberry32(seed), seed, { recordEvents: false });

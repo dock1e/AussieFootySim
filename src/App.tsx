@@ -2,10 +2,11 @@ import { useState } from "react";
 import { Dashboard } from "./components/Dashboard";
 import { SquadList } from "./components/SquadList";
 import { LiveMatch } from "./components/LiveMatch";
+import { SeasonHub } from "./components/SeasonHub";
 import { useGameStore } from "./store/useGameStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
-type Screen = "dashboard" | "squad" | "match";
+type Screen = "dashboard" | "squad" | "season" | "match";
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
@@ -23,6 +24,7 @@ export default function App() {
             [
               ["dashboard", "Dashboard"],
               ["squad", "Squad"],
+              ["season", "Season"],
               ["match", "Match"],
             ] as const
           ).map(([key, label]) => (
@@ -43,6 +45,7 @@ export default function App() {
       <main>
         {screen === "dashboard" && <Dashboard />}
         {screen === "squad" && <SquadList players={squad} />}
+        {screen === "season" && <SeasonHub />}
         {screen === "match" && <LiveMatch />}
       </main>
     </div>

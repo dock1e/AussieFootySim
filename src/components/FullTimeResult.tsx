@@ -33,11 +33,14 @@ export function FullTimeResult({
   homeTeam,
   awayTeam,
   onNewMatch,
+  closeLabel = "New match-up",
 }: {
   result: MatchResult;
   homeTeam: MatchTeam;
   awayTeam: MatchTeam;
   onNewMatch: () => void;
+  /** Override the footer button's label — e.g. "Back to ladder" when this is reused to view a past season result rather than an ad-hoc exhibition match. */
+  closeLabel?: string;
 }) {
   const homeIds = useMemo(() => new Set(homeTeam.players.map((p) => p.PlayerID)), [homeTeam]);
   const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
@@ -157,7 +160,7 @@ export function FullTimeResult({
       </div>
 
       <button onClick={onNewMatch} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
-        New match-up
+        {closeLabel}
       </button>
     </div>
   );

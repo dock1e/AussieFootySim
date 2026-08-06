@@ -3,13 +3,12 @@ import type { BoxScoreLine, MatchResult } from "./match.ts";
 /**
  * Pure post-match summary helpers — split out from FullTimeResult.tsx so
  * they're framework-free and independently testable, same reasoning as the
- * rest of src/engine/. See FullTimeResult.tsx for the "why a placeholder
- * rating, not the real SimAFL Rating yet" caveat.
+ * rest of src/engine/. The old placeholder composite rating that used to
+ * live here (disposals + 2*marks + 2*tackles + 2*clearances + 0.5*hitouts +
+ * 6*goals) is gone — Best on Ground/Top Performers now use the real
+ * event-weighted SimAFL Rating from ratings.ts (Phase 5), not a box-score
+ * approximation.
  */
-
-export function ratingFor(line: BoxScoreLine): number {
-  return line.disposals + 2 * line.marks + 2 * line.tackles + 2 * line.clearances + 0.5 * line.hitouts + 6 * line.goals;
-}
 
 export interface QuarterPoints {
   quarter: 1 | 2 | 3 | 4;

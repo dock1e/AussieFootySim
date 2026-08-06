@@ -2,7 +2,8 @@ import { useMemo } from "react";
 import type { MatchResult, BoxScoreLine } from "../engine/match";
 import type { MatchTeam } from "../engine/team";
 import type { Player } from "../types/player";
-import { ratingFor, quarterlyPoints, sumTeam } from "../engine/summary";
+import { quarterlyPoints, sumTeam } from "../engine/summary";
+import { computeSimAFLRatings, fantasyPointsFor } from "../engine/ratings";
 
 /**
  * Full-time result screen — User Interface.md "Full-time result": score,
@@ -12,10 +13,12 @@ import { ratingFor, quarterlyPoints, sumTeam } from "../engine/summary";
  * Scoped down from the full spec on purpose (see ROADMAP.md): this
  * simulator has no "my club"/save-game concept yet, so the VICTORY/DEFEAT-
  * framed recap card doesn't have a perspective to frame itself from — shown
- * neutrally instead. "Best on Ground" uses a simple placeholder composite
- * (disposals + 2*marks + 2*tackles + 2*clearances + 0.5*hitouts + 6*goals),
- * not the real SimAFL Rating from Player Ratings.md, which needs the
- * zone/state-of-game multiplier plumbing that's a separate future pass.
+ * neutrally instead. Best on Ground/Top Performers are now ranked by the
+ * real event-weighted SimAFL Rating (Player Ratings.md, engine/ratings.ts,
+ * Phase 5) rather than the old placeholder box-score composite — shown
+ * alongside Fantasy Points as twin numbers per Player Ratings.md's own UI
+ * research ("showing Fantasy Points and SimAFL Rating as twin columns makes
+ * the difference between volume and quality visible at a glance").
  */
 
 const STAT_ROWS: { key: keyof BoxScoreLine; label: string }[] = [
@@ -46,13 +49,19 @@ export function FullTimeResult({
   const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
 
   const quarters = useMemo(() => quarterlyPoints(result, homeIds, awayIds), [result, homeIds, awayIds]);
+  const simRatings = useMemo(() => computeSimAFLRatings(result, homeTeam, awayTeam), [result, homeTeam, awayTeam]);
 
   const margin = result.home.points - result.away.points;
   const winner = margin > 0 ? homeTeam.name : margin < 0 ? awayTeam.name : null;
   const marginAbs = Math.abs(margin);
 
   const rated = [...homeTeam.players, ...awayTeam.players]
-    .map((p) => ({ player: p, line: result.boxScore[p.PlayerID], rating: ratingFor(result.boxScore[p.PlayerID]) }))
+    .map((p) => ({
+      player: p,
+      line: result.boxScore[p.PlayerID],
+      rating: simRatings[p.PlayerID]?.rating ?? 0,
+      fantasyPoints: fantasyPointsFor(result.boxScore[p.PlayerID]),
+    }))
     .sort((a, b) => b.rating - a.rating);
   const bestOnGround = rated[0];
   const topHome = rated.filter((r) => homeIds.has(r.player.PlayerID)).slice(0, 5);
@@ -117,11 +126,23 @@ export function FullTimeResult({
               </div>
               <div className="text-sm text-slate-400">{bestOnGround.player.Team}</div>
             </div>
-            <div className="grid grid-cols-4 gap-4 text-center text-sm tabular-nums">
-              <Stat label="D" value={bestOnGround.line.disposals} />
-              <Stat label="M" value={bestOnGround.line.marks} />
-              <Stat label="T" value={bestOnGround.line.tackles} />
-              <Stat label="G" value={bestOnGround.line.goals} />
+            <div className="flex items-center gap-4">
+              <div className="grid grid-cols-4 gap-4 text-center text-sm tabular-nums">
+                <Stat label="D" value={bestOnGround.line.disposals} />
+                <Stat label="M" value={bestOnGround.line.marks} />
+                <Stat label="T" value={bestOnGround.line.tackles} />
+                <Stat label="G" value={bestOnGround.line.goals} />
+              </div>
+              <div className="flex gap-3 border-l border-base-600 pl-4 text-center">
+                <div>
+                  <div className="text-xl font-bold tabular-nums text-accent">{bestOnGround.rating.toFixed(0)}</div>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">SimAFL Rating</div>
+                </div>
+                <div>
+                  <div className="text-xl font-semibold tabular-nums text-slate-300">{bestOnGround.fantasyPoints}</div>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Fantasy Pts</div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -231,22 +252,30 @@ function TopPerformers({
   rows,
 }: {
   title: string;
-  rows: { player: Player; line: BoxScoreLine; rating: number }[];
+  rows: { player: Player; line: BoxScoreLine; rating: number; fantasyPoints: number }[];
 }) {
   return (
     <div className="card">
       <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">{title}</div>
       <div className="space-y-1.5 text-sm">
-        {rows.map(({ player, line }, i) => (
-          <div key={player.PlayerID} className="flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <span className="w-4 text-slate-500 tabular-nums">{i + 1}</span>
-              <span>
+        {rows.map(({ player, line, rating, fantasyPoints }, i) => (
+          <div key={player.PlayerID} className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2 truncate">
+              <span className="w-4 shrink-0 text-slate-500 tabular-nums">{i + 1}</span>
+              <span className="truncate">
                 {player.fname} {player.lname}
               </span>
             </span>
-            <span className="tabular-nums text-slate-400">
-              {line.disposals}d {line.marks}m {line.tackles}t {line.goals}g
+            <span className="flex shrink-0 items-center gap-3 tabular-nums">
+              <span className="text-slate-500">
+                {line.disposals}d {line.marks}m {line.tackles}t {line.goals}g
+              </span>
+              <span className="text-slate-400" title="Fantasy Points">
+                {fantasyPoints}fp
+              </span>
+              <span className="w-10 text-right font-bold text-accent" title="SimAFL Rating">
+                {rating.toFixed(0)}
+              </span>
             </span>
           </div>
         ))}

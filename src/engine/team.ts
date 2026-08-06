@@ -17,7 +17,8 @@ export interface MatchTeam {
  * before interchange) — NOT a real position-suitability pick. Revisit once
  * the actual Selection Committee screen exists.
  */
-const LINE_TARGETS: Record<Line, number> = {
+/** Exported for reuse by listNeeds.ts's "best-23 quality" starter quota — see its own doc comment for why the same on-field split doubles as a roster-diagnosis number. */
+export const LINE_TARGETS: Record<Line, number> = {
   Defence: 6,
   Midfield: 7,
   Forwards: 7,

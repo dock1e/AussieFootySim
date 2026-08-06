@@ -4,6 +4,17 @@ dist-ssr
 *.local
 .DS_Store
 
+# tsc build artifacts — both tsconfigs are noEmit; anything matching these
+# patterns is stray output from a misconfigured run (see ROADMAP.md gap #1
+# writeup, Aug 2026) and safe to delete.
+*.tsbuildinfo
+scripts/*.js
+scripts/*.d.ts
+src/**/*.js
+src/**/*.d.ts
+vite.config.js
+vite.config.d.ts
+
 # generated game data (rebuilt from ../Player Database/players_master.csv via `npm run build:data`)
 src/data/generated/
 

@@ -94,10 +94,10 @@ describe("ageOnePlayer", () => {
   it("keeps every rated attribute within [1, 99]", () => {
     // A young, high-headroom, high-imp_ player pushing hard at the ceiling.
     const risingStar = makePlayer({ Age: 19, potentialTall: 99, potentialMid: 99, archetype: "Key Forward" });
-    for (const skill of DISCRETE_SKILLS) (risingStar as Record<string, number>)[`imp_${skill}`] = 99;
+    for (const skill of DISCRETE_SKILLS) (risingStar as unknown as Record<string, number>)[`imp_${skill}`] = 99;
     // An old, low-potential player in freefall.
     const veteran = makePlayer({ Age: 38, potentialTall: 30, potentialMid: 30, archetype: "Key Defender" });
-    for (const skill of DISCRETE_SKILLS) (veteran as Record<string, number>)[`deg_${skill}`] = 99;
+    for (const skill of DISCRETE_SKILLS) (veteran as unknown as Record<string, number>)[`deg_${skill}`] = 99;
 
     const agedStar = ageOnePlayer(risingStar);
     const agedVeteran = ageOnePlayer(veteran);
@@ -108,8 +108,8 @@ describe("ageOnePlayer", () => {
   it("a young player with headroom and strong imp_ rates trends up on average", () => {
     const young = makePlayer({ Age: 19, archetype: "Inside Mid", potentialMid: 95 });
     for (const skill of DISCRETE_SKILLS) {
-      (young as Record<string, number>)[`imp_${skill}`] = 80;
-      (young as Record<string, number>)[`deg_${skill}`] = 5;
+      (young as unknown as Record<string, number>)[`imp_${skill}`] = 80;
+      (young as unknown as Record<string, number>)[`deg_${skill}`] = 5;
     }
     const aged = ageOnePlayer(young);
     const before = RATED_ATTRIBUTES.reduce((s, a) => s + young[a], 0);
@@ -120,8 +120,8 @@ describe("ageOnePlayer", () => {
   it("an old player with strong deg_ rates and little headroom trends down on average", () => {
     const old = makePlayer({ Age: 34, archetype: "Key Defender", potentialTall: 55 }); // already near ceiling (attrs at 50)
     for (const skill of DISCRETE_SKILLS) {
-      (old as Record<string, number>)[`imp_${skill}`] = 5;
-      (old as Record<string, number>)[`deg_${skill}`] = 80;
+      (old as unknown as Record<string, number>)[`imp_${skill}`] = 5;
+      (old as unknown as Record<string, number>)[`deg_${skill}`] = 80;
     }
     const aged = ageOnePlayer(old);
     const before = RATED_ATTRIBUTES.reduce((s, a) => s + old[a], 0);
@@ -139,10 +139,10 @@ describe("ageOnePlayer", () => {
     // test would have failed: manMarking would have moved ~4x as far as
     // tenacity purely as an artifact of the mapping table's shape.
     const p = makePlayer({ Age: 24, archetype: "Inside Mid", potentialMid: 90 });
-    for (const attr of RATED_ATTRIBUTES) (p as Record<string, number>)[attr] = 50;
+    for (const attr of RATED_ATTRIBUTES) (p as unknown as Record<string, number>)[attr] = 50;
     for (const skill of DISCRETE_SKILLS) {
-      (p as Record<string, number>)[`imp_${skill}`] = 60;
-      (p as Record<string, number>)[`deg_${skill}`] = 20;
+      (p as unknown as Record<string, number>)[`imp_${skill}`] = 60;
+      (p as unknown as Record<string, number>)[`deg_${skill}`] = 20;
     }
     const aged = ageOnePlayer(p);
     const manMarkingDelta = aged.manMarking - p.manMarking; // referenced by 4 rows
@@ -153,8 +153,8 @@ describe("ageOnePlayer", () => {
   it("leaves attributes that no discrete skill references (endurance, consistancy) completely untouched", () => {
     const p = makePlayer({ Age: 24, endurance: 63, consistancy: 41 });
     for (const skill of DISCRETE_SKILLS) {
-      (p as Record<string, number>)[`imp_${skill}`] = 99;
-      (p as Record<string, number>)[`deg_${skill}`] = 0;
+      (p as unknown as Record<string, number>)[`imp_${skill}`] = 99;
+      (p as unknown as Record<string, number>)[`deg_${skill}`] = 0;
     }
     const aged = ageOnePlayer(p);
     expect(aged.endurance).toBe(63);
@@ -193,9 +193,9 @@ describe("recomputeOVR", () => {
   it("a maxed-out player scores higher than a floor player in the same pool", () => {
     const pool = makePool();
     const maxed = makePlayer({ PlayerID: 9001, archetype: "Inside Mid" });
-    for (const a of RATED_ATTRIBUTES) (maxed as Record<string, number>)[a] = 99;
+    for (const a of RATED_ATTRIBUTES) (maxed as unknown as Record<string, number>)[a] = 99;
     const floor = makePlayer({ PlayerID: 9002, archetype: "Inside Mid" });
-    for (const a of RATED_ATTRIBUTES) (floor as Record<string, number>)[a] = 1;
+    for (const a of RATED_ATTRIBUTES) (floor as unknown as Record<string, number>)[a] = 1;
 
     const recomputed = recomputeOVR([...pool, maxed, floor]);
     const maxedOvr = recomputed.find((p) => p.PlayerID === 9001)!.OVR;
@@ -212,15 +212,15 @@ describe("recomputeOVR", () => {
     const PRIMARY = ["strengthGroundLevel", "tenacity", "courage", "readPlay", "copeWithPressure"] as const;
     const NON_PRIMARY = ["manMarking", "verticalLeap", "aggression", "xFactor", "acceleration"] as const;
     const base = makePlayer({ archetype: "Inside Mid" });
-    for (const a of RATED_ATTRIBUTES) (base as Record<string, number>)[a] = 50;
+    for (const a of RATED_ATTRIBUTES) (base as unknown as Record<string, number>)[a] = 50;
 
     const concentrated = { ...base, PlayerID: 9101 };
-    for (const a of PRIMARY) (concentrated as Record<string, number>)[a] = 70;
-    for (const a of NON_PRIMARY) (concentrated as Record<string, number>)[a] = 30;
+    for (const a of PRIMARY) (concentrated as unknown as Record<string, number>)[a] = 70;
+    for (const a of NON_PRIMARY) (concentrated as unknown as Record<string, number>)[a] = 30;
 
     const spread = { ...base, PlayerID: 9102 };
-    for (const a of NON_PRIMARY) (spread as Record<string, number>)[a] = 70;
-    for (const a of PRIMARY) (spread as Record<string, number>)[a] = 30;
+    for (const a of NON_PRIMARY) (spread as unknown as Record<string, number>)[a] = 70;
+    for (const a of PRIMARY) (spread as unknown as Record<string, number>)[a] = 30;
 
     // Sanity: identical raw sums going in (5 attrs +20, 5 attrs -20, on both sides).
     const sum = (p: typeof base) => RATED_ATTRIBUTES.reduce((s, a) => s + p[a], 0);

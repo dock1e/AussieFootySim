@@ -1,4 +1,4 @@
-import { DISCRETE_SKILLS, type Player } from "../types/player.ts";
+import { DISCRETE_SKILLS, type Player, type ImprovementRates, type DeclineRates } from "../types/player.ts";
 
 /**
  * Builds a minimally-valid Player for tests, every rated attribute
@@ -6,11 +6,20 @@ import { DISCRETE_SKILLS, type Player } from "../types/player.ts";
  * a test only has to specify the fields it actually cares about.
  */
 export function makePlayer(overrides: Partial<Player> = {}): Player {
-  const impDeg: Record<string, number> = {};
+  // Built as a loosely-typed Record first (so the dynamic `imp_${skill}`/
+  // `deg_${skill}` key assignment below doesn't need any type gymnastics),
+  // then cast once via `unknown` to the *exact* 30-key shape it actually
+  // has. That precise cast — not `as Player` — is what matters below: with
+  // an honest ImprovementRates & DeclineRates type, TS can see this spread
+  // can't possibly clobber any of `base`'s other ~70 explicit fields (none
+  // of them are imp_/deg_ keys), instead of conservatively assuming it
+  // might overwrite all of them the way a full `as Player` cast implied.
+  const impDegRaw: Record<string, number> = {};
   for (const skill of DISCRETE_SKILLS) {
-    impDeg[`imp_${skill}`] = 50;
-    impDeg[`deg_${skill}`] = 10;
+    impDegRaw[`imp_${skill}`] = 50;
+    impDegRaw[`deg_${skill}`] = 10;
   }
+  const impDeg = impDegRaw as unknown as ImprovementRates & DeclineRates;
 
   const base: Player = {
     PlayerID: 999999,
@@ -62,7 +71,7 @@ export function makePlayer(overrides: Partial<Player> = {}): Player {
     clangerTend: 50,
     leadership: 50,
 
-    ...(impDeg as Player),
+    ...impDeg,
 
     totalValue: 500000,
     jumperNumber: 1,

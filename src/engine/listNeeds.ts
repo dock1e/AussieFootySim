@@ -180,7 +180,7 @@ export function buildLeaguePlayersByClub(): Map<string, Player[]> {
   return map;
 }
 
-function verdictFor(line: Line, listed: number, ideal: number, qualityCount: number, starterQuota: number, eliteCount: number): string {
+function verdictFor(listed: number, ideal: number, qualityCount: number, starterQuota: number, eliteCount: number): string {
   const clauses: string[] = [];
   if (qualityCount < starterQuota) {
     const n = starterQuota - qualityCount;
@@ -243,7 +243,7 @@ export function computeListNeeds(clubName: string, playersByClub: ReadonlyMap<st
       qualityCount,
       starterQuota,
       listed: s.players.length,
-      verdict: verdictFor(s.line, s.players.length, ideal, qualityCount, starterQuota, s.elite.length),
+      verdict: verdictFor(s.players.length, ideal, qualityCount, starterQuota, s.elite.length),
     };
   });
 

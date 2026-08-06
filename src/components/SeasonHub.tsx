@@ -18,11 +18,15 @@ import { CURRENT_SEASON_YEAR } from "../config";
  * end-of-season sequence (List Needs, Combine, Contracts, Trade Period,
  * Draft, awards) is scoped separately as Phase 4.
  *
- * There's still no Match Preparation/Selection Committee, so rounds simulate
- * headlessly in one click rather than being played one-by-one live — clicking
- * any already-played match re-opens the existing FullTimeResult screen to
- * inspect it after the fact. Watching a specific game live (via the Match
- * tab's playback) is a natural follow-up, not built into this first pass.
+ * Rounds still simulate headlessly in one click rather than being played
+ * one-by-one live — clicking any already-played match re-opens the existing
+ * FullTimeResult screen to inspect it after the fact. Watching a specific
+ * game live (via the Match tab's playback) is a natural follow-up, not built
+ * into this first pass. What *is* wired in (see useSeasonStore.ts): the
+ * user's own club fields its Selection Committee lineup (if complete) for
+ * the whole season, and its Selection-tab Standing Game Plan (tactics/game
+ * style) is re-applied fresh every round. Every other club is still an
+ * auto-picked, no-tactics AI opponent (ROADMAP.md gap #22).
  */
 type Viewing = { result: MatchResult; homeTeam: MatchTeam; awayTeam: MatchTeam; label: string };
 
@@ -53,7 +57,8 @@ export function SeasonHub() {
         <p className="mb-4 text-sm text-slate-400">
           Generates a full {SEASON_ROUNDS}-round home-and-away fixture across all 18 clubs (see
           ROADMAP.md for the fixture-draw simplification), plus a standard top-8 finals series
-          once it's complete.
+          once it's complete. Uses {myClub}'s Selection tab lineup and Standing Game Plan if
+          you've set them up — every other club auto-picks its best 22 with no tactics.
         </p>
         <button
           onClick={() => startNewSeason()}

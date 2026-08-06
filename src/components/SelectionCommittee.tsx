@@ -3,8 +3,12 @@ import type { Archetype } from "../types/archetype";
 import { POSITIONS, suitabilityFor, type Suitability } from "../types/archetype";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
+import { useTeamPlanStore } from "../store/useTeamPlanStore";
 import { getPlayersByClub } from "../data/loadPlayers";
-import { emptyLineup, isLineupComplete, lineupPlayerIds } from "../engine/selection";
+import { emptyLineup, isLineupComplete, lineupPlayerIds, lineupToMatchTeam } from "../engine/selection";
+import { pickBest22 } from "../engine/team";
+import { defaultTeamPlan } from "../engine/tactics";
+import { TeamPrep } from "./MatchPreparation";
 
 /**
  * Selection Committee — Configuration.md "Positions" (18 on-field slots + 4
@@ -13,7 +17,14 @@ import { emptyLineup, isLineupComplete, lineupPlayerIds } from "../engine/select
  * diagram — see src/engine/selection.ts's own doc comment for why that's a
  * fine trade-off here (match.ts doesn't consume *which* slot a player fills
  * anyway). Only edits the signed-in coach's own club (`useGameStore.myClub`)
- * — see LiveMatch.tsx for where a completed lineup actually feeds a match.
+ * — see LiveMatch.tsx for where a completed lineup actually feeds a
+ * Match-tab game, and useSeasonStore.ts for the Season tab.
+ *
+ * Also hosts the "Standing Game Plan" — a per-club default tactics/game
+ * style (useTeamPlanStore.ts), reusing MatchPreparation.tsx's own TeamPrep
+ * editor. This is what lets the Season tab's headless round simulation
+ * respect tactics at all, since it has no per-match interactive prep step
+ * the way the Match tab does.
  */
 const SECTION_BOUNDARIES: { label: string; from: number; to: number }[] = [
   { label: "Defence", from: 0, to: 6 },
@@ -41,6 +52,18 @@ export function SelectionCommittee() {
   const complete = isLineupComplete(lineup);
 
   const playerById = useMemo(() => new Map(players.map((p) => [p.PlayerID, p])), [players]);
+
+  // The same 22 the Match/Season tabs would actually field for this club
+  // right now — the completed lineup once it's full, best-22-by-OVR before
+  // that — so the Standing Game Plan below is always editing tactics for
+  // whoever's really going to take the park.
+  const myTeam = useMemo(
+    () => (complete ? lineupToMatchTeam(myClub, lineup, players) : pickBest22(myClub, players)),
+    [myClub, complete, lineup, players],
+  );
+
+  const { planFor, setGameStyle, setTactic } = useTeamPlanStore();
+  const plan = planFor(myClub) ?? defaultTeamPlan();
 
   return (
     <div className="space-y-4">
@@ -107,6 +130,25 @@ export function SelectionCommittee() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Standing Game Plan</div>
+        <div className="card text-xs text-slate-400">
+          Sets {myClub}'s default tactics and game style. The Match tab always lets you set tactics
+          fresh in Match Preparation before kick-off, but the Season tab simulates rounds headlessly
+          with no per-match prep step — this is what it uses instead. A tagger set here holds the
+          slot, but the actual target still has to be picked live in Match Preparation, since a
+          standing plan spans whatever opponent the fixture throws up next.
+        </div>
+        <TeamPrep
+          team={myTeam}
+          opponent={null}
+          style={plan.gameStyle}
+          setStyle={(style) => setGameStyle(myClub, style)}
+          tactics={plan.tactics}
+          onUpdateTactic={(playerId, pt) => setTactic(myClub, playerId, pt)}
+        />
       </div>
     </div>
   );

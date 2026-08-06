@@ -106,7 +106,16 @@ export function MatchPreparation({ homeTeam, awayTeam, onBack, onKickOff }: Matc
   );
 }
 
-function TeamPrep({
+/**
+ * Exported so SelectionCommittee.tsx can reuse the exact same grouped
+ * tactic/game-style editor for a club's "Standing Game Plan" (see
+ * useTeamPlanStore.ts) — `opponent: null` there, since a standing plan
+ * applies across whichever club the fixture throws up next, not one fixed
+ * opponent. Tagging's target picker needs a real opponent roster to choose
+ * from, so it degrades to an inert note instead of a dead dropdown in that
+ * case (see the `opponent === null` branch below).
+ */
+export function TeamPrep({
   team,
   opponent,
   style,
@@ -115,7 +124,7 @@ function TeamPrep({
   onUpdateTactic,
 }: {
   team: MatchTeam;
-  opponent: MatchTeam;
+  opponent: MatchTeam | null;
   style: GameStyle;
   setStyle: (s: GameStyle) => void;
   tactics: Map<number, PlayerTactic>;
@@ -172,22 +181,25 @@ function TeamPrep({
                         </option>
                       ))}
                     </select>
-                    {current === "Tagging" && (
-                      <select
-                        value={taggingTargetId ?? ""}
-                        onChange={(e) =>
-                          onUpdateTactic(p.PlayerID, { tactic: "Tagging", taggingTargetId: Number(e.target.value) || undefined })
-                        }
-                        className="rounded-md border border-amber-500/40 bg-base-900 px-1.5 py-1 text-xs text-amber-300"
-                      >
-                        <option value="">Pick a target&hellip;</option>
-                        {opponent.players.map((op) => (
-                          <option key={op.PlayerID} value={op.PlayerID}>
-                            {op.fname[0]}. {op.lname}
-                          </option>
-                        ))}
-                      </select>
-                    )}
+                    {current === "Tagging" &&
+                      (opponent ? (
+                        <select
+                          value={taggingTargetId ?? ""}
+                          onChange={(e) =>
+                            onUpdateTactic(p.PlayerID, { tactic: "Tagging", taggingTargetId: Number(e.target.value) || undefined })
+                          }
+                          className="rounded-md border border-amber-500/40 bg-base-900 px-1.5 py-1 text-xs text-amber-300"
+                        >
+                          <option value="">Pick a target&hellip;</option>
+                          {opponent.players.map((op) => (
+                            <option key={op.PlayerID} value={op.PlayerID}>
+                              {op.fname[0]}. {op.lname}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="italic text-slate-500">target set weekly in Match Preparation</span>
+                      ))}
                   </div>
                 );
               })}

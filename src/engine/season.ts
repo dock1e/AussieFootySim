@@ -6,6 +6,7 @@ import { mulberry32 } from "./rng.ts";
 import { generateFixture, matchesInRound, SEASON_ROUNDS, type FixtureMatch } from "./fixture.ts";
 import { computeLadder, top8, type LadderRow, type MatchOutcome } from "./ladder.ts";
 import { runFinalsSeries, type FinalsSeriesResult } from "./finals.ts";
+import type { TeamPlan } from "./tactics.ts";
 
 /**
  * Season orchestration — ties fixture.ts + match.ts + ladder.ts + finals.ts
@@ -16,10 +17,17 @@ import { runFinalsSeries, type FinalsSeriesResult } from "./finals.ts";
  * end-of-season sequence (List Needs, Combine, Contracts, Trade Period,
  * Draft, awards) is scoped separately as Phase 4 (see ROADMAP.md).
  *
- * There's still no Selection Committee, so every club (including whichever
- * one the UI treats as "yours") fields `pickBest22` every round — teams are
- * picked once at season start and stay fixed for its duration, same
- * simplification `scripts/simulate.ts` already makes.
+ * `buildTeams`'s `overrides` and `simulateRound`/`runFinals`'s `plans` are
+ * both optional, opt-in extension points (same backward-compatible pattern
+ * match.ts's own `homePlan`/`awayPlan` already established) — see
+ * useSeasonStore.ts for where they're actually populated from the Selection
+ * Committee lineup / standing game plan for whichever club the UI treats as
+ * "yours". Every *other* club still always fields `pickBest22` with no
+ * plan — there's no AI-side Selection Committee or tactics decision-making
+ * yet (see ROADMAP.md gap #22). Teams are still picked once at season start
+ * and held fixed for its duration (gap #16) — only plans are re-read fresh
+ * each round, since Engine.md frames tactics/game-style as something a coach
+ * can reasonably change week to week, unlike a roster pick.
  */
 
 export interface PlayedMatch {
@@ -39,9 +47,15 @@ export interface Season {
   premierClubId: number | null;
 }
 
-export function buildTeams(clubIds: number[]): Map<number, MatchTeam> {
+/** `overrides` lets a caller supply a specific MatchTeam for a club (e.g. a completed Selection Committee lineup) instead of the `pickBest22` fallback — any club not present in `overrides` is unaffected. */
+export function buildTeams(clubIds: number[], overrides?: Map<number, MatchTeam>): Map<number, MatchTeam> {
   const map = new Map<number, MatchTeam>();
   for (const id of clubIds) {
+    const override = overrides?.get(id);
+    if (override) {
+      map.set(id, override);
+      continue;
+    }
     const club = clubById(id);
     if (!club) continue;
     map.set(id, pickBest22(club.name, getPlayersByClub(club.name)));
@@ -89,8 +103,8 @@ export function nextUnplayedRound(season: Season): number | null {
   return null;
 }
 
-/** Simulates every game in `round` (a no-op if that round's already played) and returns a new Season with the results folded in and the ladder recomputed. */
-export function simulateRound(season: Season, round: number, teams: Map<number, MatchTeam>): Season {
+/** Simulates every game in `round` (a no-op if that round's already played) and returns a new Season with the results folded in and the ladder recomputed. `plans` (clubId -> TeamPlan) is optional and opt-in — a club absent from it plays with no tactics/game-style plan, same as omitting `homePlan`/`awayPlan` from `simulateMatch` directly. */
+export function simulateRound(season: Season, round: number, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>): Season {
   if (isRoundPlayed(season, round)) return season;
   const roundMatches = matchesInRound(season.fixture, round);
 
@@ -101,7 +115,9 @@ export function simulateRound(season: Season, round: number, teams: Map<number, 
       throw new Error(`simulateRound: missing MatchTeam for club ${m.homeClubId} or ${m.awayClubId}`);
     }
     const seed = matchSeed(season.seed, round, i);
-    const result = simulateMatch(home, away, mulberry32(seed), seed);
+    const homePlan = plans?.get(m.homeClubId);
+    const awayPlan = plans?.get(m.awayClubId);
+    const result = simulateMatch(home, away, mulberry32(seed), seed, { homePlan, awayPlan });
     return { round, homeClubId: m.homeClubId, awayClubId: m.awayClubId, result };
   });
 
@@ -110,8 +126,8 @@ export function simulateRound(season: Season, round: number, teams: Map<number, 
   return { ...season, played, ladder };
 }
 
-/** Runs the full 9-match finals series off the current ladder's top 8. Requires the home-and-away season to be complete; a no-op if finals have already been run. */
-export function runFinals(season: Season, teams: Map<number, MatchTeam>): Season {
+/** Runs the full 9-match finals series off the current ladder's top 8. Requires the home-and-away season to be complete; a no-op if finals have already been run. `plans` behaves the same as in `simulateRound`. */
+export function runFinals(season: Season, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>): Season {
   if (!isHomeAndAwayComplete(season)) {
     throw new Error("runFinals: home-and-away season is not complete yet");
   }
@@ -126,7 +142,9 @@ export function runFinals(season: Season, teams: Map<number, MatchTeam>): Season
       throw new Error(`runFinals: missing MatchTeam for club ${homeClubId} or ${awayClubId}`);
     }
     const seed = matchSeed(season.seed, SEASON_ROUNDS + 1, finalsMatchIndex++);
-    return simulateMatch(home, away, mulberry32(seed), seed);
+    const homePlan = plans?.get(homeClubId);
+    const awayPlan = plans?.get(awayClubId);
+    return simulateMatch(home, away, mulberry32(seed), seed, { homePlan, awayPlan });
   });
 
   return { ...season, finals, premierClubId: finals.premierClubId };

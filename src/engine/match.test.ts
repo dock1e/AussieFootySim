@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { mulberry32 } from "./rng";
 import { simulateMatch } from "./match";
 import { pickBest22 } from "./team";
+import { sanitizePlan } from "./tactics";
+import type { TeamPlan } from "./tactics";
 import { makePlayer } from "../testUtils/makePlayer";
 import type { Player } from "../types/player";
 import type { Archetype } from "../types/archetype";
@@ -114,5 +116,68 @@ describe("simulateMatch", () => {
       expect(result.home.points).toBeLessThan(300);
       expect(result.away.points).toBeLessThan(300);
     }
+  });
+});
+
+describe("simulateMatch with tactics/game-style plans", () => {
+  const home = pickBest22("Home", makeClubPool("Home"));
+  const away = pickBest22("Away", makeClubPool("Away"));
+
+  it("omitting plans entirely is byte-identical to the pre-tactics call shape", () => {
+    // Every caller written before tactics.ts existed (scripts/simulate.ts, season.ts, the
+    // Match tab) never passes homePlan/awayPlan — this is the regression guard that they keep
+    // producing exactly what they always did.
+    const withoutOpts = simulateMatch(home, away, mulberry32(55), 55);
+    const withEmptyOpts = simulateMatch(home, away, mulberry32(55), 55, {});
+    expect(withEmptyOpts).toEqual(withoutOpts);
+  });
+
+  it("sanitizePlan resets a tactic that doesn't belong to a player's own group back to their group default", () => {
+    const defender = home.players.find((p) => p.archetype === "Key Defender")!;
+    // "Tagging" is Midfield-only per Configuration.md's tactics menus — invalid for a defender.
+    const invalid: TeamPlan = { gameStyle: "Balanced", tactics: new Map([[defender.PlayerID, { tactic: "Tagging", taggingTargetId: away.players[0].PlayerID }]]) };
+    const cleaned = sanitizePlan(home.players, invalid);
+    expect(cleaned.tactics.get(defender.PlayerID)?.tactic).toBe("Defensive Shoulder");
+  });
+
+  it("simulateMatch doesn't throw when handed a plan with a cross-group-mismatched tactic", () => {
+    const defender = home.players.find((p) => p.archetype === "Key Defender")!;
+    const invalid: TeamPlan = { gameStyle: "Balanced", tactics: new Map([[defender.PlayerID, { tactic: "Tagging", taggingTargetId: away.players[0].PlayerID }]]) };
+    expect(() => simulateMatch(home, away, mulberry32(1), 1, { homePlan: invalid })).not.toThrow();
+  });
+
+  it("Tagging measurably suppresses the tagged player's disposal output, averaged across many seeds", () => {
+    const target = away.players[0];
+    const tagger = home.players.find((p) => p.archetype === "Inside Mid")!;
+    const plan: TeamPlan = { gameStyle: "Balanced", tactics: new Map([[tagger.PlayerID, { tactic: "Tagging", taggingTargetId: target.PlayerID }]]) };
+
+    let withTag = 0;
+    let without = 0;
+    const N = 25;
+    for (let i = 0; i < N; i++) {
+      const seed = 6000 + i;
+      withTag += simulateMatch(home, away, mulberry32(seed), seed, { homePlan: plan, recordEvents: false }).boxScore[target.PlayerID].disposals;
+      without += simulateMatch(home, away, mulberry32(seed), seed, { recordEvents: false }).boxScore[target.PlayerID].disposals;
+    }
+    expect(withTag).toBeLessThan(without);
+  });
+
+  it("a plan's game style shifts average combined scoring in the documented direction", () => {
+    const N = 20;
+    function avgCombined(homePlan?: TeamPlan): number {
+      let total = 0;
+      for (let i = 0; i < N; i++) {
+        const seed = 7000 + i;
+        const r = simulateMatch(home, away, mulberry32(seed), seed, { homePlan, recordEvents: false });
+        total += r.home.points + r.away.points;
+      }
+      return total / N;
+    }
+    const balanced = avgCombined({ gameStyle: "Balanced", tactics: new Map() });
+    const flood = avgCombined({ gameStyle: "Defensive Flood", tactics: new Map() });
+    const attackMiddle = avgCombined({ gameStyle: "Attack the Middle", tactics: new Map() });
+
+    expect(flood).toBeLessThan(balanced); // Engine.md: "lower-scoring both ways"
+    expect(attackMiddle).toBeGreaterThan(balanced); // Engine.md: "+inside-50 count off clearances"
   });
 });

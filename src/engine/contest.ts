@@ -56,11 +56,25 @@ export function winProbability(attackerRating: number, defenderRating: number, k
  * Resolves one one-on-one contest between two players — Engine.md core loop
  * step 3. Deterministic given the same `rng` state: same seed + same inputs
  * always produces the same winner (see src/engine/rng.ts).
+ *
+ * `opts` multipliers are an optional hook for tactics/game-style effects
+ * (see src/engine/tactics.ts, wired in from match.ts) — applied to the
+ * already-computed base rating before the win-probability roll. Omitting
+ * them (every call site that existed before tactics did) reproduces the
+ * exact original behaviour.
  */
-export function resolveContest(attacker: Player, defender: Player, type: ContestType, rng: Rng): ContestResult {
+export function resolveContest(
+  attacker: Player,
+  defender: Player,
+  type: ContestType,
+  rng: Rng,
+  opts?: { attackerMultiplier?: number; defenderMultiplier?: number },
+): ContestResult {
   const config = CONTEST_CONFIG[type];
-  const attackerRating = computeContestRating(attacker, config.attacker, { heightWeighted: config.heightWeighted });
-  const defenderRating = computeContestRating(defender, config.defender, { heightWeighted: config.heightWeighted });
+  let attackerRating = computeContestRating(attacker, config.attacker, { heightWeighted: config.heightWeighted });
+  let defenderRating = computeContestRating(defender, config.defender, { heightWeighted: config.heightWeighted });
+  if (opts?.attackerMultiplier !== undefined) attackerRating *= opts.attackerMultiplier;
+  if (opts?.defenderMultiplier !== undefined) defenderRating *= opts.defenderMultiplier;
   const pAttackerWins = winProbability(attackerRating, defenderRating);
   const roll = rng();
   const attackerWon = roll < pAttackerWins;

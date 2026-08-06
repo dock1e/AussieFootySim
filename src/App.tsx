@@ -3,10 +3,11 @@ import { Dashboard } from "./components/Dashboard";
 import { SquadList } from "./components/SquadList";
 import { LiveMatch } from "./components/LiveMatch";
 import { SeasonHub } from "./components/SeasonHub";
+import { SelectionCommittee } from "./components/SelectionCommittee";
 import { useGameStore } from "./store/useGameStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
-type Screen = "dashboard" | "squad" | "season" | "match";
+type Screen = "dashboard" | "squad" | "selection" | "season" | "match";
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
@@ -24,6 +25,7 @@ export default function App() {
             [
               ["dashboard", "Dashboard"],
               ["squad", "Squad"],
+              ["selection", "Selection"],
               ["season", "Season"],
               ["match", "Match"],
             ] as const
@@ -45,6 +47,7 @@ export default function App() {
       <main>
         {screen === "dashboard" && <Dashboard />}
         {screen === "squad" && <SquadList players={squad} />}
+        {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
         {screen === "match" && <LiveMatch />}
       </main>

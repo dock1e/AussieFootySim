@@ -1,10 +1,34 @@
 import type { Player } from "../types/player.ts";
+import type { Archetype } from "../types/archetype.ts";
 import type { Rng } from "./rng.ts";
 import { rngChoice } from "./rng.ts";
 import { computeContestRating, resolveContest, resolveThreshold } from "./contest.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating } from "./team.ts";
+import {
+  tacticGroupFor,
+  defaultTacticFor,
+  ruckHitoutMultiplier,
+  taggingClearanceMultiplier,
+  carrierDisposalMultiplier,
+  taggerDisposalMultiplier,
+  resolveTagger,
+  TAGGED_CARRIER_RATING_MULTIPLIER,
+  tackleDefenderRatingMultiplier,
+  runOffManDisposalMultiplier,
+  contestRatingMultiplier,
+  thirdManUpRuckMultiplier,
+  gameStyleDefenderMultiplier,
+  gameStyleDisposalMultiplier,
+  gameStyleClearanceMultiplier,
+  gameStyleContestChanceMultiplier,
+  gameStyleForwardEntryMultiplier,
+  opponentFloodGoalAccuracyMultiplier,
+  sanitizePlan,
+  type TeamPlan,
+  type Tactic,
+} from "./tactics.ts";
 
 /**
  * The full possession-state match loop — Engine.md "Core loop", steps 1-5
@@ -95,6 +119,18 @@ export interface SimulateMatchOptions {
   ticksPerQuarter?: number;
   /** Keep the full event log (costs memory at scale — the balance simulator turns this off for 10,000-game runs). */
   recordEvents?: boolean;
+  /**
+   * Per-team tactics/game-style plan — Engine.md "Tactics system"/"Game
+   * styles", see tactics.ts. Deliberately opt-in per side: omitting a plan
+   * reproduces the exact pre-tactics behaviour byte-for-byte (every caller
+   * written before tactics existed — scripts/simulate.ts, season.ts, ad-hoc
+   * Match-tab games — keeps working unchanged). Only once a plan is
+   * supplied does that team's players resolve to their tactic group's
+   * default (e.g. defenders' "Defensive Shoulder") for any player not
+   * explicitly listed in it.
+   */
+  homePlan?: TeamPlan;
+  awayPlan?: TeamPlan;
 }
 
 const DEFAULT_TICKS_PER_QUARTER = 130;
@@ -127,10 +163,35 @@ interface Ctx {
   tick: number;
   quarter: 1 | 2 | 3 | 4;
   score: { home: TeamResult; away: TeamResult };
+  /** null = no plan supplied for this side, i.e. tactics/game-style are fully inert — see SimulateMatchOptions. */
+  homePlan: TeamPlan | null;
+  awayPlan: TeamPlan | null;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
   return side === "home" ? ctx.home : ctx.away;
+}
+
+function planFor(ctx: Ctx, side: Side): TeamPlan | null {
+  return side === "home" ? ctx.homePlan : ctx.awayPlan;
+}
+
+/** Resolves a player's active tactic: undefined if their team has no plan at all, otherwise their explicit choice or their tactic group's default. */
+function tacticFor(plan: TeamPlan | null, player: Player): Tactic | undefined {
+  if (!plan) return undefined;
+  const explicit = plan.tactics.get(player.PlayerID)?.tactic;
+  if (explicit) return explicit;
+  return defaultTacticFor(tacticGroupFor(player.archetype as Archetype));
+}
+
+function styleFor(plan: TeamPlan | null) {
+  return plan?.gameStyle ?? "Balanced";
+}
+
+function teamHasTactic(plan: TeamPlan | null, tactic: Tactic): boolean {
+  if (!plan) return false;
+  for (const pt of plan.tactics.values()) if (pt.tactic === tactic) return true;
+  return false;
 }
 
 function lineFor(ctx: Ctx, player: Player): BoxScoreLine {
@@ -165,10 +226,17 @@ interface State {
 function runStoppage(ctx: Ctx, state: State): State {
   const home = ctx.home.players;
   const away = ctx.away.players;
+  const homePlan = ctx.homePlan;
+  const awayPlan = ctx.awayPlan;
 
   const homeRuck = bestByRating(home, ruckRating);
   const awayRuck = bestByRating(away, ruckRating);
-  const ruckResult = resolveContest(homeRuck, awayRuck, "ruck", ctx.rng);
+  const homeRuckMult = ruckHitoutMultiplier(tacticFor(homePlan, homeRuck)) * thirdManUpRuckMultiplier(teamHasTactic(homePlan, "Third Man Up"));
+  const awayRuckMult = ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck)) * thirdManUpRuckMultiplier(teamHasTactic(awayPlan, "Third Man Up"));
+  const ruckResult = resolveContest(homeRuck, awayRuck, "ruck", ctx.rng, {
+    attackerMultiplier: homeRuckMult,
+    defenderMultiplier: awayRuckMult,
+  });
   const ruckWinner = ruckResult.winner === "attacker" ? homeRuck : awayRuck;
   lineFor(ctx, ruckWinner).hitouts += 1;
   log(ctx, state.zone, state.possession, "STOPPAGE", `${ruckWinner.lname} wins the hit-out`, [ruckWinner.PlayerID], [
@@ -177,7 +245,12 @@ function runStoppage(ctx: Ctx, state: State): State {
 
   const homeClear = bestByRating(home, clearanceRating);
   const awayClear = bestByRating(away, clearanceRating);
-  const clearResult = resolveContest(homeClear, awayClear, "clearance", ctx.rng);
+  const homeClearMult = taggingClearanceMultiplier(teamHasTactic(homePlan, "Tagging")) * gameStyleClearanceMultiplier(styleFor(homePlan));
+  const awayClearMult = taggingClearanceMultiplier(teamHasTactic(awayPlan, "Tagging")) * gameStyleClearanceMultiplier(styleFor(awayPlan));
+  const clearResult = resolveContest(homeClear, awayClear, "clearance", ctx.rng, {
+    attackerMultiplier: homeClearMult,
+    defenderMultiplier: awayClearMult,
+  });
   const winningSide: Side = clearResult.winner === "attacker" ? "home" : "away";
   const clearWinner = winningSide === "home" ? homeClear : awayClear;
   lineFor(ctx, clearWinner).clearances += 1;
@@ -197,11 +270,29 @@ function runStoppage(ctx: Ctx, state: State): State {
 function runGeneralPlay(ctx: Ctx, state: State): State {
   const carrier = state.carrier!;
   const possessingTeam = teamOf(ctx, state.possession);
-  const defendingTeam = teamOf(ctx, otherSide(state.possession));
+  const defendingSide = otherSide(state.possession);
+  const defendingTeam = teamOf(ctx, defendingSide);
+  const possessingPlan = planFor(ctx, state.possession);
+  const defendingPlan = planFor(ctx, defendingSide);
 
-  const disposalRating = computeContestRating(carrier, ["skill", "positioning"]);
-  const defender = rngChoice(ctx.rng, defendingTeam.players);
-  const defenderRating = computeContestRating(defender, ["tenacity", "strengthManOnMan", "aggression"]);
+  const carrierTactic = tacticFor(possessingPlan, carrier);
+  const tag = defendingPlan ? resolveTagger(defendingPlan, carrier.PlayerID) : null;
+  const tagger = tag ? defendingTeam.players.find((p) => p.PlayerID === tag.taggerId) : undefined;
+  const defender = tagger ?? rngChoice(ctx.rng, defendingTeam.players);
+  const defenderTactic = tacticFor(defendingPlan, defender);
+  const defenderInForwardHalf = isForward50(state.zone, defendingSide);
+
+  const disposalRating =
+    computeContestRating(carrier, ["skill", "positioning"]) *
+    carrierDisposalMultiplier(carrierTactic) *
+    runOffManDisposalMultiplier(carrierTactic) *
+    taggerDisposalMultiplier(carrierTactic === "Tagging") *
+    gameStyleDisposalMultiplier(styleFor(possessingPlan)) *
+    (tagger ? TAGGED_CARRIER_RATING_MULTIPLIER : 1);
+  const defenderRating =
+    computeContestRating(defender, ["tenacity", "strengthManOnMan", "aggression"]) *
+    tackleDefenderRatingMultiplier(defenderTactic, defenderInForwardHalf) *
+    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf);
   const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
 
   if (!result.success) {
@@ -241,10 +332,12 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     ],
   );
 
-  if (isForward50(newZone, state.possession) && ctx.rng() < P_SHOT_WHEN_ENTERING_FORWARD_50) {
+  const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
+  if (isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
     return { phase: "SHOT", zone: newZone, possession: state.possession, carrier };
   }
-  if (ctx.rng() < P_DISPOSAL_BECOMES_CONTEST) {
+  const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
+  if (ctx.rng() < contestChance) {
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   const newCarrier = rngChoice(ctx.rng, possessingTeam.players);
@@ -256,11 +349,21 @@ function runContest(ctx: Ctx, state: State): State {
   const defendingSide = otherSide(attackingSide);
   const attackingTeam = teamOf(ctx, attackingSide);
   const defendingTeam = teamOf(ctx, defendingSide);
+  const attackingPlan = planFor(ctx, attackingSide);
+  const defendingPlan = planFor(ctx, defendingSide);
 
   const contestType = isForward50(state.zone, attackingSide) ? "markContested" : "groundBall";
   const attackerRep = rngChoice(ctx.rng, attackingTeam.players);
   const defenderRep = rngChoice(ctx.rng, defendingTeam.players);
-  const result = resolveContest(attackerRep, defenderRep, contestType, ctx.rng);
+  const defenderInForwardHalf = isForward50(state.zone, defendingSide);
+  const attackerMult = contestRatingMultiplier(tacticFor(attackingPlan, attackerRep), contestType, "attacker");
+  const defenderMult =
+    contestRatingMultiplier(tacticFor(defendingPlan, defenderRep), contestType, "defender") *
+    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf);
+  const result = resolveContest(attackerRep, defenderRep, contestType, ctx.rng, {
+    attackerMultiplier: attackerMult,
+    defenderMultiplier: defenderMult,
+  });
 
   if (result.winner === "attacker") {
     const line = lineFor(ctx, attackerRep);
@@ -307,6 +410,7 @@ function runContest(ctx: Ctx, state: State): State {
 
 function runShot(ctx: Ctx, state: State): State {
   const shooter = state.carrier!;
+  const defendingPlan = planFor(ctx, otherSide(state.possession));
   const isSetShot = ctx.rng() < P_SET_SHOT_VS_SNAP;
   const rating = isSetShot
     ? computeContestRating(shooter, ["skill", "kickMaxDistance", "copeWithPressure", "confidence"])
@@ -316,8 +420,9 @@ function runShot(ctx: Ctx, state: State): State {
 
   const line = lineFor(ctx, shooter);
   const scoreLine = state.possession === "home" ? ctx.score.home : ctx.score.away;
+  const goalChance = P_GOAL_GIVEN_ON_TARGET * opponentFloodGoalAccuracyMultiplier(styleFor(defendingPlan));
 
-  if (onTarget.success && ctx.rng() < P_GOAL_GIVEN_ON_TARGET) {
+  if (onTarget.success && ctx.rng() < goalChance) {
     line.goals += 1;
     scoreLine.goals += 1;
     log(
@@ -372,6 +477,8 @@ export function simulateMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: 
       home: { name: home.name, goals: 0, behinds: 0, points: 0 },
       away: { name: away.name, goals: 0, behinds: 0, points: 0 },
     },
+    homePlan: opts.homePlan ? sanitizePlan(home.players, opts.homePlan) : null,
+    awayPlan: opts.awayPlan ? sanitizePlan(away.players, opts.awayPlan) : null,
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.

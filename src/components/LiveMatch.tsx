@@ -1,89 +1,117 @@
 import { useMemo, useState } from "react";
 import { CLUBS } from "../types/club";
 import { getPlayersByClub } from "../data/loadPlayers";
-import { pickBest22 } from "../engine/team";
+import { pickBest22, type MatchTeam } from "../engine/team";
+import { isLineupComplete, lineupToMatchTeam } from "../engine/selection";
 import { simulateMatch, type MatchResult, type BoxScoreLine } from "../engine/match";
 import { mulberry32 } from "../engine/rng";
+import type { TeamPlan } from "../engine/tactics";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
+import { useGameStore } from "../store/useGameStore";
+import { useSelectionStore } from "../store/useSelectionStore";
 import { MatchCanvas } from "./MatchCanvas";
 import { FullTimeResult } from "./FullTimeResult";
+import { MatchPreparation } from "./MatchPreparation";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8];
 
 const TEAM_STAT_KEYS = ["disposals", "marks", "tackles", "clearances", "hitouts"] as const;
 
+type Stage = "setup" | "prep";
+
 export function LiveMatch() {
   const [homeClub, setHomeClub] = useState(CLUBS[10].name); // Melbourne, arbitrary
   const [awayClub, setAwayClub] = useState(CLUBS[3].name); // Collingwood, arbitrary
+  const [stage, setStage] = useState<Stage>("setup");
   const [result, setResult] = useState<MatchResult | null>(null);
   const [lastSeed, setLastSeed] = useState<number | null>(null);
 
-  const homeTeam = useMemo(() => pickBest22(homeClub, getPlayersByClub(homeClub)), [homeClub]);
-  const awayTeam = useMemo(() => pickBest22(awayClub, getPlayersByClub(awayClub)), [awayClub]);
+  const myClub = useGameStore((s) => s.myClub);
+  const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
+
+  /** Uses the coach's own Selection Committee lineup when it's their club and it's complete; every other club still falls back to the OVR-only auto-pick (see ROADMAP.md gap #16). */
+  function resolveTeam(clubName: string): MatchTeam {
+    const clubPlayers = getPlayersByClub(clubName);
+    if (clubName === myClub && myLineup && isLineupComplete(myLineup)) {
+      return lineupToMatchTeam(clubName, myLineup, clubPlayers);
+    }
+    return pickBest22(clubName, clubPlayers);
+  }
+
+  const homeTeam = useMemo(() => resolveTeam(homeClub), [homeClub, myClub, myLineup]);
+  const awayTeam = useMemo(() => resolveTeam(awayClub), [awayClub, myClub, myLineup]);
   const homeIds = useMemo(() => new Set(homeTeam.players.map((p) => p.PlayerID)), [homeTeam]);
   const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
+  const homeIsCustom = homeClub === myClub && !!myLineup && isLineupComplete(myLineup);
+  const awayIsCustom = awayClub === myClub && !!myLineup && isLineupComplete(myLineup);
 
   const playback = useMatchPlayback(result, homeIds, awayIds);
 
-  function startMatch() {
+  function kickOff(homePlan: TeamPlan, awayPlan: TeamPlan) {
     const seed = Math.floor(Math.random() * 1_000_000_000);
-    const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed);
+    const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan });
     setLastSeed(seed);
     setResult(fresh);
   }
 
+  function newMatchup() {
+    setResult(null);
+    setStage("setup");
+  }
+
   if (playback.isComplete && result) {
-    return (
-      <FullTimeResult
-        result={result}
-        homeTeam={homeTeam}
-        awayTeam={awayTeam}
-        onNewMatch={() => {
-          setResult(null);
-        }}
-      />
-    );
+    return <FullTimeResult result={result} homeTeam={homeTeam} awayTeam={awayTeam} onNewMatch={newMatchup} />;
+  }
+
+  if (stage === "prep" && !result) {
+    return <MatchPreparation homeTeam={homeTeam} awayTeam={awayTeam} onBack={() => setStage("setup")} onKickOff={kickOff} />;
   }
 
   return (
     <div className="space-y-4">
       <div className="card flex flex-wrap items-center gap-4">
-        <select
-          className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
-          value={homeClub}
-          onChange={(e) => setHomeClub(e.target.value)}
-          disabled={!!result}
-        >
-          {CLUBS.map((c) => (
-            <option key={c.ClubID} value={c.name}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-1.5">
+          <select
+            className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
+            value={homeClub}
+            onChange={(e) => setHomeClub(e.target.value)}
+            disabled={!!result}
+          >
+            {CLUBS.map((c) => (
+              <option key={c.ClubID} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          {homeIsCustom && <span className="stat-pill stat-pill-good">your lineup</span>}
+        </div>
         <span className="text-slate-500">vs</span>
-        <select
-          className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
-          value={awayClub}
-          onChange={(e) => setAwayClub(e.target.value)}
-          disabled={!!result}
-        >
-          {CLUBS.map((c) => (
-            <option key={c.ClubID} value={c.name}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-1.5">
+          <select
+            className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
+            value={awayClub}
+            onChange={(e) => setAwayClub(e.target.value)}
+            disabled={!!result}
+          >
+            {CLUBS.map((c) => (
+              <option key={c.ClubID} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          {awayIsCustom && <span className="stat-pill stat-pill-good">your lineup</span>}
+        </div>
         {!result ? (
           <button
-            onClick={startMatch}
+            onClick={() => setStage("prep")}
             disabled={homeClub === awayClub}
             className="ml-auto rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-40"
           >
-            Simulate &amp; Watch
+            Continue to Match Preparation
           </button>
         ) : (
           <button
-            onClick={() => setResult(null)}
+            onClick={newMatchup}
             className="ml-auto rounded-lg bg-base-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-base-600"
           >
             New match-up
@@ -93,9 +121,11 @@ export function LiveMatch() {
 
       {!result && (
         <div className="card text-sm text-slate-400">
-          Pick two clubs and hit Simulate &amp; Watch. Each team fields a best-22 by OVR (no
-          Selection Committee yet — see ROADMAP.md), and the match runs against a fresh random
-          seed every time.
+          Pick two clubs and continue to Match Preparation to set tactics, a tagger, and a game
+          style (or just kick off with the defaults). {myClub} fields whatever's set on the
+          Selection tab once it's a full 22; every other club still fields the auto-picked
+          best-22 by OVR (no AI Selection Committee behaviour yet — see ROADMAP.md). The match
+          runs against a fresh random seed every time.
         </div>
       )}
 

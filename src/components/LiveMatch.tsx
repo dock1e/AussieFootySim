@@ -1,17 +1,28 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CLUBS } from "../types/club";
 import { getPlayersByClub } from "../data/loadPlayers";
 import { pickBest22, type MatchTeam } from "../engine/team";
 import { isLineupComplete, lineupToMatchTeam } from "../engine/selection";
-import { simulateMatch, type MatchResult, type BoxScoreLine } from "../engine/match";
+import {
+  simulateMatch,
+  startMatch,
+  simulateQuarter,
+  setGameStyle,
+  getGameStyle,
+  matchResultSoFar,
+  type MatchResult,
+  type MatchInProgress,
+  type BoxScoreLine,
+} from "../engine/match";
 import { mulberry32 } from "../engine/rng";
-import type { TeamPlan } from "../engine/tactics";
+import type { TeamPlan, GameStyle } from "../engine/tactics";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
 import { MatchCanvas } from "./MatchCanvas";
 import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
+import { CoachsCall } from "./CoachsCall";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8];
 
@@ -25,6 +36,17 @@ export function LiveMatch() {
   const [stage, setStage] = useState<Stage>("setup");
   const [result, setResult] = useState<MatchResult | null>(null);
   const [lastSeed, setLastSeed] = useState<number | null>(null);
+
+  /**
+   * Quarter-time Coach's Call (Engine.md "Match-day flow" step 4) — only
+   * ever populated when the user's own club is playing (see `mySide` and
+   * `kickOff()` below). `matchInProgress` stays null for an AI-vs-AI game,
+   * which still simulates instantly in one `simulateMatch()` call exactly
+   * like every Match-tab game did before this feature existed.
+   */
+  const [matchInProgress, setMatchInProgress] = useState<MatchInProgress | null>(null);
+  const [quartersSimulated, setQuartersSimulated] = useState(0);
+  const [pendingCoachsCall, setPendingCoachsCall] = useState<{ side: "home" | "away"; quarterJustFinished: 1 | 2 | 3 } | null>(null);
 
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
@@ -47,19 +69,85 @@ export function LiveMatch() {
 
   const playback = useMatchPlayback(result, homeIds, awayIds);
 
+  /** Which side (if any) the user is actually coaching this game — a Coach's Call only ever applies to them; the AI opponent has no UI to make its own calls (ROADMAP.md gap #22). */
+  const mySide: "home" | "away" | null = homeTeam.name === myClub ? "home" : awayTeam.name === myClub ? "away" : null;
+
   function kickOff(homePlan: TeamPlan, awayPlan: TeamPlan) {
     const seed = Math.floor(Math.random() * 1_000_000_000);
-    const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan });
     setLastSeed(seed);
-    setResult(fresh);
+
+    if (!mySide) {
+      // Neither side is the user's own club (e.g. watching two AI clubs
+      // play) - no one to offer a Coach's Call to, so simulate the whole
+      // match up front exactly like every Match-tab game did before this
+      // feature existed.
+      const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan });
+      setResult(fresh);
+      setMatchInProgress(null);
+      setQuartersSimulated(4);
+      return;
+    }
+
+    const match = startMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan });
+    simulateQuarter(match, 1);
+    setMatchInProgress(match);
+    setQuartersSimulated(1);
+    setResult(matchResultSoFar(match));
   }
 
   function newMatchup() {
     setResult(null);
     setStage("setup");
+    setMatchInProgress(null);
+    setQuartersSimulated(0);
+    setPendingCoachsCall(null);
   }
 
-  if (playback.isComplete && result) {
+  function chooseCoachsCall(style: GameStyle) {
+    if (!matchInProgress || !pendingCoachsCall) return;
+    setGameStyle(matchInProgress, pendingCoachsCall.side, style);
+    const nextQuarter = (quartersSimulated + 1) as 1 | 2 | 3 | 4;
+    simulateQuarter(matchInProgress, nextQuarter);
+    setQuartersSimulated(nextQuarter);
+    setResult(matchResultSoFar(matchInProgress));
+    setPendingCoachsCall(null);
+    playback.play(); // auto-resume - "click play and let it run," the Coach's Call is the only interruption
+  }
+
+  /** "Skip to Full Time" during an interactive match auto-simulates every remaining quarter with no further Coach's Call prompts (current game style holds), then jumps playback straight to the end - same "stop asking me things, just finish it" behaviour as skipping any other screen. A no-op simulation-wise for a non-interactive (AI-vs-AI) match, which already has the full result. */
+  function skipRestOfMatch() {
+    if (matchInProgress) {
+      let q = quartersSimulated;
+      while (q < 4) {
+        q += 1;
+        simulateQuarter(matchInProgress, q as 1 | 2 | 3 | 4);
+      }
+      setQuartersSimulated(4);
+      setResult(matchResultSoFar(matchInProgress));
+      setPendingCoachsCall(null);
+    }
+    playback.skipToFullTime();
+  }
+
+  // Detects "playback has caught up to a just-simulated quarter's end" and
+  // surfaces the Coach's Call for the user's side. Falls back to
+  // auto-continuing with no prompt if somehow neither side is the user's
+  // club (shouldn't happen - kickOff() only ever starts an interactive,
+  // matchInProgress-tracked match when mySide is set) rather than getting
+  // stuck.
+  useEffect(() => {
+    if (!matchInProgress || !playback.isComplete || quartersSimulated >= 4 || pendingCoachsCall) return;
+    if (mySide) {
+      setPendingCoachsCall({ side: mySide, quarterJustFinished: quartersSimulated as 1 | 2 | 3 });
+    } else {
+      const nextQuarter = (quartersSimulated + 1) as 1 | 2 | 3 | 4;
+      simulateQuarter(matchInProgress, nextQuarter);
+      setQuartersSimulated(nextQuarter);
+      setResult(matchResultSoFar(matchInProgress));
+    }
+  }, [playback.isComplete, matchInProgress, quartersSimulated, pendingCoachsCall, mySide]);
+
+  if (playback.isComplete && result && quartersSimulated >= 4 && !pendingCoachsCall) {
     return <FullTimeResult result={result} homeTeam={homeTeam} awayTeam={awayTeam} onNewMatch={newMatchup} />;
   }
 
@@ -148,36 +236,44 @@ export function LiveMatch() {
 
           <MatchCanvas home={homeTeam} away={awayTeam} event={playback.currentEvent} liveBoxScore={playback.liveBoxScore} />
 
-          <div className="card flex flex-wrap items-center gap-2">
-            {playback.isPlaying ? (
-              <button onClick={playback.pause} className="rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
-                Pause
-              </button>
-            ) : (
-              <button onClick={playback.play} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
-                {playback.currentIndex < 0 ? "Play" : "Resume"}
-              </button>
-            )}
-            <div className="flex items-center gap-1">
-              {SPEEDS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => playback.setSpeed(s)}
-                  className={`rounded-lg px-3 py-2 text-xs font-medium ${
-                    playback.speed === s ? "bg-accent text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
-                  }`}
-                >
-                  {s}x
+          {pendingCoachsCall ? (
+            <CoachsCall
+              quarterJustFinished={pendingCoachsCall.quarterJustFinished}
+              currentStyle={matchInProgress ? getGameStyle(matchInProgress, pendingCoachsCall.side) : "Balanced"}
+              onChoose={chooseCoachsCall}
+            />
+          ) : (
+            <div className="card flex flex-wrap items-center gap-2">
+              {playback.isPlaying ? (
+                <button onClick={playback.pause} className="rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
+                  Pause
                 </button>
-              ))}
+              ) : (
+                <button onClick={playback.play} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+                  {playback.currentIndex < 0 ? "Play" : "Resume"}
+                </button>
+              )}
+              <div className="flex items-center gap-1">
+                {SPEEDS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => playback.setSpeed(s)}
+                    className={`rounded-lg px-3 py-2 text-xs font-medium ${
+                      playback.speed === s ? "bg-accent text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
+                    }`}
+                  >
+                    {s}x
+                  </button>
+                ))}
+              </div>
+              <button onClick={skipRestOfMatch} className="ml-auto rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
+                Skip to Full Time
+              </button>
+              <button onClick={playback.restart} className="rounded-lg bg-base-800 px-4 py-2 text-sm text-slate-400 hover:bg-base-700">
+                Restart
+              </button>
             </div>
-            <button onClick={playback.skipToFullTime} className="ml-auto rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
-              Skip to Full Time
-            </button>
-            <button onClick={playback.restart} className="rounded-lg bg-base-800 px-4 py-2 text-sm text-slate-400 hover:bg-base-700">
-              Restart
-            </button>
-          </div>
+          )}
 
           <div className="grid gap-4 md:grid-cols-2">
             <TeamStatBars label={homeTeam.name} otherLabel={awayTeam.name} own={teamTotals(playback.liveBoxScore, homeIds)} other={teamTotals(playback.liveBoxScore, awayIds)} />

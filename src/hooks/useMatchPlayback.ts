@@ -2,16 +2,26 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { MatchResult, MatchEvent, BoxScoreLine } from "../engine/match";
 
 /**
- * Turns a fully-simulated (deterministic, already-computed) MatchResult into
- * a controllable playback — User Interface.md "Live match screen": Pause,
- * Sim Quarter/Sim Game (approximated here as speed steps), Skip to Full
- * Time, speed multiplier 0.5x/1x/2x/4x/8x.
+ * Turns a fully- or partially-simulated MatchResult into a controllable
+ * playback — User Interface.md "Live match screen": Pause, Sim Quarter/Sim
+ * Game (approximated here as speed steps), Skip to Full Time, speed
+ * multiplier 0.5x/1x/2x/4x/8x.
  *
- * Deliberate architecture: src/engine/match.ts always simulates the *entire*
- * match instantly (it's a pure function of a seed) — this hook doesn't
- * re-simulate anything, it just reveals the pre-computed event log at a
- * controllable pace. That's what makes "Skip to Full Time" trivial (jump the
- * index to the end) and keeps the engine itself simple and synchronous.
+ * Deliberate architecture: this hook doesn't re-simulate anything itself, it
+ * just reveals whatever's in `result.events` at a controllable pace — that's
+ * what makes "Skip to Full Time" trivial (jump the index to the end) and
+ * keeps the engine itself simple and synchronous. Historically `result` was
+ * always the *entire* match, computed instantly up front. Since the
+ * quarter-time Coach's Call (src/engine/match.ts's `simulateQuarter`), a
+ * caller may instead grow `result.events` one quarter at a time across
+ * several `MatchResult` objects that share the same `seed` — the
+ * reset-on-new-match effect below keys off `result?.seed`, not `result`
+ * itself, specifically so a same-seed object with a longer `events` array
+ * (another quarter just simulated) *doesn't* reset `currentIndex` back to
+ * -1 and replay from the start; it just naturally keeps revealing forward
+ * from wherever playback had already reached. A genuinely new match-up
+ * always has a different seed (or is `null`), so that case still resets
+ * exactly as before.
  */
 export type PlaybackSpeed = 0.5 | 1 | 2 | 4 | 8;
 const BASE_TICK_MS = 450; // ms between events at 1x — tune freely, purely a UX feel constant
@@ -64,11 +74,14 @@ export function useMatchPlayback(result: MatchResult | null, homeIds: Set<number
   const [speed, setSpeedState] = useState<PlaybackSpeed>(1);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reset playback whenever a new match result comes in.
+  // Reset playback whenever a genuinely new match comes in (different seed,
+  // or null) — see this hook's own doc comment for why the dependency is
+  // `result?.seed` and not `result` itself.
   useEffect(() => {
     setCurrentIndex(-1);
     setIsPlaying(false);
-  }, [result]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on seed, not the result object itself
+  }, [result?.seed]);
 
   useEffect(() => {
     if (!isPlaying || !result) return;

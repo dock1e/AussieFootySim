@@ -78,7 +78,15 @@ export interface Player extends ImprovementRates, DeclineRates {
   age_month: number;
   age_year: number;
 
-  /** Snapshot fitness/form; dynamic once the Engine's in-season condition/fatigue loop exists. */
+  /**
+   * Static generated snapshot, kept for players/screens outside an active
+   * season (e.g. no season in progress yet). Once a season exists, the real
+   * in-season condition loop tracks its own live value per player instead —
+   * see `Season.condition` in engine/season.ts and engine/progression.ts's
+   * `updateConditionAfterRound`/`conditionRatingMultiplier`. SquadList.tsx's
+   * `liveCondition` prop is the one place both are reconciled: it prefers
+   * the live season value and falls back to this static field.
+   */
   condition: number;
 
   // --- Rated attributes (1-99, see Configuration.md "Rating scale") ---

@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import { pickBest22, type MatchTeam } from "./team";
 import { generateFixture, matchesInRound, SEASON_ROUNDS } from "./fixture";
 import { initSeason, simulateRound, runFinals, isRoundPlayed, isHomeAndAwayComplete, nextUnplayedRound } from "./season";
+import { simulateMatch } from "./match";
+import { mulberry32 } from "./rng";
+import { MIN_CONDITION } from "./progression";
 import { makePlayer } from "../testUtils/makePlayer";
 import type { Player } from "../types/player";
 import type { Archetype } from "../types/archetype";
@@ -186,5 +189,105 @@ describe("season with per-club tactics/game-style plans", () => {
     expect(season.finals).not.toBeNull();
     expect(season.finals!.matches).toHaveLength(9);
     expect(season.premierClubId).not.toBeNull();
+  });
+});
+
+describe("season with in-season condition/fatigue tracking", () => {
+  it("initSeason starts with an empty condition map (everyone fully fresh)", () => {
+    const season = initSeason(100, CLUB_IDS);
+    expect(season.condition.size).toBe(0);
+  });
+
+  it("every selected player across every club lands at condition 96 after round 1 (100 - MATCH_CONDITION_COST(12) + ROUND_RECOVERY(8))", () => {
+    const teams = buildTestTeams();
+    let season = initSeason(101, CLUB_IDS);
+    season = simulateRound(season, 1, teams);
+    for (const team of teams.values()) {
+      for (const p of team.players) {
+        expect(season.condition.get(p.PlayerID)).toBe(96);
+      }
+    }
+  });
+
+  it("condition declines by exactly 4 per round (max(100 - 4*n, MIN_CONDITION)) since teams are frozen and this fixture has no byes", () => {
+    const teams = buildTestTeams();
+    let season = initSeason(102, CLUB_IDS);
+    const N = 10;
+    for (let r = 1; r <= N; r++) season = simulateRound(season, r, teams);
+    const somePlayer = teams.get(CLUB_IDS[0])!.players[0];
+    expect(season.condition.get(somePlayer.PlayerID)).toBe(Math.max(100 - 4 * N, MIN_CONDITION));
+  });
+
+  it("bottoms out at MIN_CONDITION partway through the season and stays pinned there, never going lower", () => {
+    const teams = buildTestTeams();
+    let season = initSeason(103, CLUB_IDS);
+    for (let r = 1; r <= SEASON_ROUNDS; r++) season = simulateRound(season, r, teams);
+    for (const team of teams.values()) {
+      for (const p of team.players) {
+        expect(season.condition.get(p.PlayerID)).toBe(MIN_CONDITION);
+      }
+    }
+  });
+
+  it("runFinals does not further change season.condition (no between-finals-weeks recovery modelled)", () => {
+    const teams = buildTestTeams();
+    let season = initSeason(104, CLUB_IDS);
+    let round = nextUnplayedRound(season);
+    while (round !== null) {
+      season = simulateRound(season, round, teams);
+      round = nextUnplayedRound(season);
+    }
+    const before = new Map(season.condition);
+    season = runFinals(season, teams);
+    expect(season.condition).toEqual(before);
+  });
+
+  it("simulateRound really threads season.condition into every match — reproduces manually-condition-wired simulateMatch calls exactly", () => {
+    const teams = buildTestTeams();
+    let season = initSeason(105, CLUB_IDS);
+    for (let r = 1; r <= 10; r++) season = simulateRound(season, r, teams); // real accumulated fatigue by now
+
+    const nextRound = 11;
+    const roundMatches = matchesInRound(season.fixture, nextRound);
+    const seasonAfterRound11 = simulateRound(season, nextRound, teams);
+
+    for (let i = 0; i < roundMatches.length; i++) {
+      const m = roundMatches[i];
+      const home = teams.get(m.homeClubId)!;
+      const away = teams.get(m.awayClubId)!;
+      const seed = season.seed + nextRound * 1000 + i; // mirrors season.ts's private matchSeed()
+      const expected = simulateMatch(home, away, mulberry32(seed), seed, {
+        homeCondition: season.condition,
+        awayCondition: season.condition,
+      });
+      const actual = seasonAfterRound11.played.find((p) => p.round === nextRound && p.homeClubId === m.homeClubId)!.result;
+      expect(actual).toEqual(expected);
+    }
+  });
+
+  it("accumulated fatigue measurably changes aggregate scoring across a round vs simulating the same matches fresh", () => {
+    // A single match is too noisy for a small per-instance effect to reliably flip an exact
+    // score (that's proven, averaged over many seeds, in match.test.ts's condition-wiring
+    // coverage) — aggregated across a whole round's worth of independent matches, the
+    // difference shows up reliably and deterministically for these fixed seeds.
+    const teams = buildTestTeams();
+    let season = initSeason(106, CLUB_IDS);
+    for (let r = 1; r <= 10; r++) season = simulateRound(season, r, teams);
+
+    const nextRound = 11;
+    const roundMatches = matchesInRound(season.fixture, nextRound);
+    let totalReal = 0;
+    let totalFresh = 0;
+    for (let i = 0; i < roundMatches.length; i++) {
+      const m = roundMatches[i];
+      const home = teams.get(m.homeClubId)!;
+      const away = teams.get(m.awayClubId)!;
+      const seed = season.seed + nextRound * 1000 + i;
+      const withRealCondition = simulateMatch(home, away, mulberry32(seed), seed, { homeCondition: season.condition, awayCondition: season.condition });
+      const withFreshCondition = simulateMatch(home, away, mulberry32(seed), seed, {});
+      totalReal += withRealCondition.home.points + withRealCondition.away.points;
+      totalFresh += withFreshCondition.home.points + withFreshCondition.away.points;
+    }
+    expect(totalReal).not.toBe(totalFresh);
   });
 });

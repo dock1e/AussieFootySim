@@ -28,7 +28,9 @@ import {
   sanitizePlan,
   type TeamPlan,
   type Tactic,
+  type GameStyle,
 } from "./tactics.ts";
+import { conditionRatingMultiplier } from "./progression.ts";
 
 /**
  * The full possession-state match loop — Engine.md "Core loop", steps 1-5
@@ -131,6 +133,17 @@ export interface SimulateMatchOptions {
    */
   homePlan?: TeamPlan;
   awayPlan?: TeamPlan;
+  /**
+   * Per-player condition/fatigue — Engine.md "In-season condition": "low
+   * condition suppresses effective ratings for a match without touching the
+   * underlying long-term attributes," see progression.ts's
+   * `conditionRatingMultiplier`. Deliberately opt-in, same backward-compat
+   * pattern as `homePlan`/`awayPlan`: a player missing from the map (or the
+   * map itself omitted) plays at full effective condition, byte-identical
+   * to every caller written before this existed.
+   */
+  homeCondition?: Map<number, number>;
+  awayCondition?: Map<number, number>;
 }
 
 const DEFAULT_TICKS_PER_QUARTER = 130;
@@ -153,7 +166,7 @@ function clearanceRating(p: Player): number {
   return computeContestRating(p, ["readPlay", "strengthGroundLevel", "courage"]);
 }
 
-interface Ctx {
+export interface Ctx {
   home: MatchTeam;
   away: MatchTeam;
   rng: Rng;
@@ -166,6 +179,9 @@ interface Ctx {
   /** null = no plan supplied for this side, i.e. tactics/game-style are fully inert — see SimulateMatchOptions. */
   homePlan: TeamPlan | null;
   awayPlan: TeamPlan | null;
+  /** null = no condition map supplied for this side, i.e. every player plays at full condition — see SimulateMatchOptions. */
+  homeCondition: Map<number, number> | null;
+  awayCondition: Map<number, number> | null;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
@@ -194,6 +210,13 @@ function teamHasTactic(plan: TeamPlan | null, tactic: Tactic): boolean {
   return false;
 }
 
+/** A player's condition-based rating multiplier for this match — 1 (no penalty) if their side has no condition map at all, or if they're simply not in it (missing = full condition, same convention as an unlisted tactic falling back to a group default). */
+function conditionMultiplierFor(ctx: Ctx, side: Side, player: Player): number {
+  const map = side === "home" ? ctx.homeCondition : ctx.awayCondition;
+  const condition = map?.get(player.PlayerID) ?? 100;
+  return conditionRatingMultiplier(condition);
+}
+
 function lineFor(ctx: Ctx, player: Player): BoxScoreLine {
   let line = ctx.box[player.PlayerID];
   if (!line) {
@@ -216,7 +239,7 @@ function log(
   ctx.events.push({ tick: ctx.tick, quarter: ctx.quarter, zone, possession, phase, description, playerIds, statDeltas });
 }
 
-interface State {
+export interface State {
   phase: Phase;
   zone: Zone;
   possession: Side;
@@ -231,8 +254,14 @@ function runStoppage(ctx: Ctx, state: State): State {
 
   const homeRuck = bestByRating(home, ruckRating);
   const awayRuck = bestByRating(away, ruckRating);
-  const homeRuckMult = ruckHitoutMultiplier(tacticFor(homePlan, homeRuck)) * thirdManUpRuckMultiplier(teamHasTactic(homePlan, "Third Man Up"));
-  const awayRuckMult = ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck)) * thirdManUpRuckMultiplier(teamHasTactic(awayPlan, "Third Man Up"));
+  const homeRuckMult =
+    ruckHitoutMultiplier(tacticFor(homePlan, homeRuck)) *
+    thirdManUpRuckMultiplier(teamHasTactic(homePlan, "Third Man Up")) *
+    conditionMultiplierFor(ctx, "home", homeRuck);
+  const awayRuckMult =
+    ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck)) *
+    thirdManUpRuckMultiplier(teamHasTactic(awayPlan, "Third Man Up")) *
+    conditionMultiplierFor(ctx, "away", awayRuck);
   const ruckResult = resolveContest(homeRuck, awayRuck, "ruck", ctx.rng, {
     attackerMultiplier: homeRuckMult,
     defenderMultiplier: awayRuckMult,
@@ -245,8 +274,14 @@ function runStoppage(ctx: Ctx, state: State): State {
 
   const homeClear = bestByRating(home, clearanceRating);
   const awayClear = bestByRating(away, clearanceRating);
-  const homeClearMult = taggingClearanceMultiplier(teamHasTactic(homePlan, "Tagging")) * gameStyleClearanceMultiplier(styleFor(homePlan));
-  const awayClearMult = taggingClearanceMultiplier(teamHasTactic(awayPlan, "Tagging")) * gameStyleClearanceMultiplier(styleFor(awayPlan));
+  const homeClearMult =
+    taggingClearanceMultiplier(teamHasTactic(homePlan, "Tagging")) *
+    gameStyleClearanceMultiplier(styleFor(homePlan)) *
+    conditionMultiplierFor(ctx, "home", homeClear);
+  const awayClearMult =
+    taggingClearanceMultiplier(teamHasTactic(awayPlan, "Tagging")) *
+    gameStyleClearanceMultiplier(styleFor(awayPlan)) *
+    conditionMultiplierFor(ctx, "away", awayClear);
   const clearResult = resolveContest(homeClear, awayClear, "clearance", ctx.rng, {
     attackerMultiplier: homeClearMult,
     defenderMultiplier: awayClearMult,
@@ -288,11 +323,13 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     runOffManDisposalMultiplier(carrierTactic) *
     taggerDisposalMultiplier(carrierTactic === "Tagging") *
     gameStyleDisposalMultiplier(styleFor(possessingPlan)) *
+    conditionMultiplierFor(ctx, state.possession, carrier) *
     (tagger ? TAGGED_CARRIER_RATING_MULTIPLIER : 1);
   const defenderRating =
     computeContestRating(defender, ["tenacity", "strengthManOnMan", "aggression"]) *
     tackleDefenderRatingMultiplier(defenderTactic, defenderInForwardHalf) *
-    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf);
+    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
+    conditionMultiplierFor(ctx, defendingSide, defender);
   const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
 
   if (!result.success) {
@@ -356,10 +393,13 @@ function runContest(ctx: Ctx, state: State): State {
   const attackerRep = rngChoice(ctx.rng, attackingTeam.players);
   const defenderRep = rngChoice(ctx.rng, defendingTeam.players);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
-  const attackerMult = contestRatingMultiplier(tacticFor(attackingPlan, attackerRep), contestType, "attacker");
+  const attackerMult =
+    contestRatingMultiplier(tacticFor(attackingPlan, attackerRep), contestType, "attacker") *
+    conditionMultiplierFor(ctx, attackingSide, attackerRep);
   const defenderMult =
     contestRatingMultiplier(tacticFor(defendingPlan, defenderRep), contestType, "defender") *
-    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf);
+    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
+    conditionMultiplierFor(ctx, defendingSide, defenderRep);
   const result = resolveContest(attackerRep, defenderRep, contestType, ctx.rng, {
     attackerMultiplier: attackerMult,
     defenderMultiplier: defenderMult,
@@ -412,9 +452,11 @@ function runShot(ctx: Ctx, state: State): State {
   const shooter = state.carrier!;
   const defendingPlan = planFor(ctx, otherSide(state.possession));
   const isSetShot = ctx.rng() < P_SET_SHOT_VS_SNAP;
-  const rating = isSetShot
-    ? computeContestRating(shooter, ["skill", "kickMaxDistance", "copeWithPressure", "confidence"])
-    : computeContestRating(shooter, ["xFactor", "agility", "copeWithPressure"]);
+  const rating =
+    (isSetShot
+      ? computeContestRating(shooter, ["skill", "kickMaxDistance", "copeWithPressure", "confidence"])
+      : computeContestRating(shooter, ["xFactor", "agility", "copeWithPressure"])) *
+    conditionMultiplierFor(ctx, state.possession, shooter);
   const difficulty = SHOT_DIFFICULTY_MIN + ctx.rng() * SHOT_DIFFICULTY_RANGE;
   const onTarget = resolveThreshold(rating, difficulty, ctx.rng);
 
@@ -460,7 +502,25 @@ function runShot(ctx: Ctx, state: State): State {
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: kickInTaker };
 }
 
-export function simulateMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: number, opts: SimulateMatchOptions = {}): MatchResult {
+/**
+ * A match that's been started but not necessarily fully simulated —
+ * `simulateQuarter()` advances it one quarter at a time, so a caller (see
+ * LiveMatch.tsx) can pause between quarters for a genuine quarter-time
+ * Coach's Call (Engine.md "Match-day flow" step 4: "the only point the
+ * team-wide game style can be changed") and have that choice actually alter
+ * the *next* quarter's simulation — not just be a cosmetic pause. Treat
+ * `ctx`/`state` as opaque outside this file; every other module should only
+ * ever call `startMatch`/`simulateQuarter`/`setGameStyle`/`matchResultSoFar`.
+ */
+export interface MatchInProgress {
+  ctx: Ctx;
+  state: State;
+  seed: number;
+  ticksPerQuarter: number;
+}
+
+/** Sets up a match ready for `simulateQuarter()`, identical initial state to what `simulateMatch()` itself used to build inline. */
+export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: number, opts: SimulateMatchOptions = {}): MatchInProgress {
   const ticksPerQuarter = opts.ticksPerQuarter ?? DEFAULT_TICKS_PER_QUARTER;
   const recordEvents = opts.recordEvents ?? true;
 
@@ -479,45 +539,73 @@ export function simulateMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: 
     },
     homePlan: opts.homePlan ? sanitizePlan(home.players, opts.homePlan) : null,
     awayPlan: opts.awayPlan ? sanitizePlan(away.players, opts.awayPlan) : null,
+    homeCondition: opts.homeCondition ?? null,
+    awayCondition: opts.awayCondition ?? null,
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.
   for (const p of [...home.players, ...away.players]) lineFor(ctx, p);
 
-  let state: State = { phase: "STOPPAGE", zone: MIDFIELD, possession: "home", carrier: null };
+  const state: State = { phase: "STOPPAGE", zone: MIDFIELD, possession: "home", carrier: null };
+  return { ctx, state, seed, ticksPerQuarter };
+}
 
-  for (let q = 1 as 1 | 2 | 3 | 4; q <= 4; q = (q + 1) as 1 | 2 | 3 | 4) {
-    ctx.quarter = q;
-    for (let t = 0; t < ticksPerQuarter; t++) {
-      ctx.tick += 1;
-      switch (state.phase) {
-        case "STOPPAGE":
-          state = runStoppage(ctx, state);
-          break;
-        case "GENERAL_PLAY":
-          state = runGeneralPlay(ctx, state);
-          break;
-        case "CONTEST":
-          state = runContest(ctx, state);
-          break;
-        case "SHOT":
-          state = runShot(ctx, state);
-          break;
-      }
+/** Runs exactly one quarter's worth of ticks, then resets to a centre stoppage — the exact same per-quarter body `simulateMatch()`'s own loop used to run inline, just callable one quarter at a time. Mutates `match` in place (and returns it, for chaining/assignment convenience). */
+export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4): MatchInProgress {
+  match.ctx.quarter = quarter;
+  for (let t = 0; t < match.ticksPerQuarter; t++) {
+    match.ctx.tick += 1;
+    switch (match.state.phase) {
+      case "STOPPAGE":
+        match.state = runStoppage(match.ctx, match.state);
+        break;
+      case "GENERAL_PLAY":
+        match.state = runGeneralPlay(match.ctx, match.state);
+        break;
+      case "CONTEST":
+        match.state = runContest(match.ctx, match.state);
+        break;
+      case "SHOT":
+        match.state = runShot(match.ctx, match.state);
+        break;
     }
-    // Quarter-time: reset to a centre stoppage regardless of where play was up to.
-    state = { phase: "STOPPAGE", zone: MIDFIELD, possession: q % 2 === 1 ? "away" : "home", carrier: null };
   }
+  // Quarter-time: reset to a centre stoppage regardless of where play was up to.
+  match.state = { phase: "STOPPAGE", zone: MIDFIELD, possession: quarter % 2 === 1 ? "away" : "home", carrier: null };
+  return match;
+}
 
-  ctx.score.home.points = ctx.score.home.goals * 6 + ctx.score.home.behinds;
-  ctx.score.away.points = ctx.score.away.goals * 6 + ctx.score.away.behinds;
+/** Changes a side's active game style mid-match — Engine.md: quarter-time Coach's Call is "the only point the team-wide game style can be changed." A no-op if that side has no plan at all (nothing to change tactics relative to — see SimulateMatchOptions). */
+export function setGameStyle(match: MatchInProgress, side: Side, style: GameStyle): void {
+  const plan = side === "home" ? match.ctx.homePlan : match.ctx.awayPlan;
+  if (plan) plan.gameStyle = style;
+}
 
+/** Reads a side's current game style mid-match (e.g. to highlight it as "(current)" in a Coach's Call prompt) — "Balanced" if that side has no plan at all, same default `styleFor()` uses internally. */
+export function getGameStyle(match: MatchInProgress, side: Side): GameStyle {
+  const plan = side === "home" ? match.ctx.homePlan : match.ctx.awayPlan;
+  return plan?.gameStyle ?? "Balanced";
+}
+
+/** A MatchResult snapshot of however much of `match` has been simulated so far — safe to call mid-match (e.g. after just one quarter, for live display during a Coach's Call pause) or after all 4 quarters (the true final result). Doesn't mutate `match`, so it's safe to call more than once. */
+export function matchResultSoFar(match: MatchInProgress): MatchResult {
+  const home: TeamResult = { ...match.ctx.score.home, points: match.ctx.score.home.goals * 6 + match.ctx.score.home.behinds };
+  const away: TeamResult = { ...match.ctx.score.away, points: match.ctx.score.away.goals * 6 + match.ctx.score.away.behinds };
   return {
-    seed,
-    ticksPerQuarter,
-    home: ctx.score.home,
-    away: ctx.score.away,
-    events: ctx.events,
-    boxScore: ctx.box,
+    seed: match.seed,
+    ticksPerQuarter: match.ticksPerQuarter,
+    home,
+    away,
+    events: match.ctx.events,
+    boxScore: match.ctx.box,
   };
+}
+
+/** Simulates a complete match in one call — a thin wrapper around startMatch/simulateQuarter/matchResultSoFar, kept as its own function since every pre-tactics caller (scripts/simulate.ts, season.ts, an unconfigured Match-tab game) still just wants "the whole result, now." Byte-identical to before this was split apart — same construction, same per-quarter loop body, same final points formula, just factored into reusable pieces so LiveMatch.tsx can call the pieces individually for a genuine quarter-time Coach's Call. */
+export function simulateMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: number, opts: SimulateMatchOptions = {}): MatchResult {
+  const match = startMatch(home, away, rng, seed, opts);
+  for (let q = 1 as 1 | 2 | 3 | 4; q <= 4; q = (q + 1) as 1 | 2 | 3 | 4) {
+    simulateQuarter(match, q);
+  }
+  return matchResultSoFar(match);
 }

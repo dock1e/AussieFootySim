@@ -5,6 +5,7 @@ import { LiveMatch } from "./components/LiveMatch";
 import { SeasonHub } from "./components/SeasonHub";
 import { SelectionCommittee } from "./components/SelectionCommittee";
 import { useGameStore } from "./store/useGameStore";
+import { useSeasonStore } from "./store/useSeasonStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
 type Screen = "dashboard" | "squad" | "selection" | "season" | "match";
@@ -13,6 +14,10 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
   const myClub = useGameStore((s) => s.myClub);
   const squad = getPlayersByClub(myClub);
+  // Live, round-by-round condition from the active season (see season.ts's
+  // doc comment) — undefined with no season in progress, in which case
+  // SquadList quietly falls back to each player's static condition snapshot.
+  const liveCondition = useSeasonStore((s) => s.season?.condition);
 
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-4 py-6">
@@ -46,7 +51,7 @@ export default function App() {
 
       <main>
         {screen === "dashboard" && <Dashboard />}
-        {screen === "squad" && <SquadList players={squad} />}
+        {screen === "squad" && <SquadList players={squad} liveCondition={liveCondition} />}
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
         {screen === "match" && <LiveMatch />}

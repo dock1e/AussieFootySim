@@ -13,6 +13,13 @@ import { CURRENT_SEASON_YEAR } from "../config";
  * (see Engine.md season/career progression) — nothing honest to show yet.
  * Everything else shown is either real (`OVR`/`POT`/`Age`) or a clearly
  * documented seed (`MOR`, see engine/morale.ts).
+ *
+ * `FIT` prefers `liveCondition` (the active season's real, round-by-round
+ * `Season.condition` map from engine/season.ts) over the static generated
+ * `Player.condition` snapshot field whenever a season is in progress and has
+ * an entry for that player — i.e. once at least one round has been
+ * simulated. Before that (no season, or this player hasn't played yet this
+ * season) it falls back to the static snapshot, same as always.
  */
 function contractStatus(p: Player): { label: string; tone: "good" | "warn" | "bad" } {
   if (p.expired_year < CURRENT_SEASON_YEAR) return { label: "OOC", tone: "bad" };
@@ -40,7 +47,7 @@ const COLUMNS: { key: SquadSortKey | null; label: string; className?: string }[]
   { key: null, label: "Status" },
 ];
 
-export function SquadList({ players }: { players: Player[] }) {
+export function SquadList({ players, liveCondition }: { players: Player[]; liveCondition?: Map<number, number> }) {
   const { squadSortKey, squadSortDir, setSquadSort } = useGameStore();
 
   const sorted = useMemo(() => {
@@ -74,7 +81,8 @@ export function SquadList({ players }: { players: Player[] }) {
         </thead>
         <tbody>
           {sorted.map((p) => {
-            const fit = fitnessBand(p.condition);
+            const condition = liveCondition?.get(p.PlayerID) ?? p.condition;
+            const fit = fitnessBand(condition);
             const mor = moraleBand(seedMorale(p));
             const status = contractStatus(p);
             return (
@@ -88,7 +96,7 @@ export function SquadList({ players }: { players: Player[] }) {
                 <td className="px-3 py-2 tabular-nums font-semibold">{p.OVR}</td>
                 <td className="px-3 py-2 tabular-nums text-accent-light">{p.POT}</td>
                 <td className="px-3 py-2">
-                  <NumberWithPill value={p.condition} label={fit.label} tone={fit.tone} />
+                  <NumberWithPill value={condition} label={fit.label} tone={fit.tone} />
                 </td>
                 <td className="px-3 py-2">
                   <NumberWithPill value={seedMorale(p)} label={mor.label} tone={mor.tone} />

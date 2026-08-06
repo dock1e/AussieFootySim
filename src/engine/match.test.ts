@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mulberry32 } from "./rng";
-import { simulateMatch } from "./match";
+import { simulateMatch, startMatch, simulateQuarter, setGameStyle, getGameStyle, matchResultSoFar } from "./match";
 import { pickBest22 } from "./team";
 import { sanitizePlan } from "./tactics";
 import type { TeamPlan } from "./tactics";
@@ -179,5 +179,67 @@ describe("simulateMatch with tactics/game-style plans", () => {
 
     expect(flood).toBeLessThan(balanced); // Engine.md: "lower-scoring both ways"
     expect(attackMiddle).toBeGreaterThan(balanced); // Engine.md: "+inside-50 count off clearances"
+  });
+});
+
+describe("quarter-by-quarter simulation (quarter-time Coach's Call support)", () => {
+  const home = pickBest22("Home", makeClubPool("Home"));
+  const away = pickBest22("Away", makeClubPool("Away"));
+  const plans = { homePlan: { gameStyle: "Balanced" as const, tactics: new Map() }, awayPlan: { gameStyle: "Balanced" as const, tactics: new Map() } };
+
+  it("running all 4 quarters one at a time is byte-identical to simulateMatch() run all at once", () => {
+    const seed = 9001;
+    const allAtOnce = simulateMatch(home, away, mulberry32(seed), seed, plans);
+    const match = startMatch(home, away, mulberry32(seed), seed, plans);
+    simulateQuarter(match, 1);
+    simulateQuarter(match, 2);
+    simulateQuarter(match, 3);
+    simulateQuarter(match, 4);
+    expect(matchResultSoFar(match)).toEqual(allAtOnce);
+  });
+
+  it("events accumulate as a strict, unchanged prefix across quarters", () => {
+    const seed = 9002;
+    const match = startMatch(home, away, mulberry32(seed), seed, plans);
+    simulateQuarter(match, 1);
+    const q1Events = [...matchResultSoFar(match).events];
+    simulateQuarter(match, 2);
+    const q2Events = matchResultSoFar(match).events;
+    expect(q2Events.length).toBeGreaterThan(q1Events.length);
+    expect(q2Events.slice(0, q1Events.length)).toEqual(q1Events);
+  });
+
+  it("setGameStyle changes a side's active style, reflected by getGameStyle, and actually alters the next quarter's simulation", () => {
+    const seed = 9003;
+    const withChange = startMatch(home, away, mulberry32(seed), seed, plans);
+    simulateQuarter(withChange, 1);
+    expect(getGameStyle(withChange, "home")).toBe("Balanced");
+    setGameStyle(withChange, "home", "Attack the Middle");
+    expect(getGameStyle(withChange, "home")).toBe("Attack the Middle");
+    simulateQuarter(withChange, 2);
+    simulateQuarter(withChange, 3);
+    simulateQuarter(withChange, 4);
+
+    const withoutChange = startMatch(home, away, mulberry32(seed), seed, plans);
+    simulateQuarter(withoutChange, 1);
+    simulateQuarter(withoutChange, 2);
+    simulateQuarter(withoutChange, 3);
+    simulateQuarter(withoutChange, 4);
+
+    expect(matchResultSoFar(withChange)).not.toEqual(matchResultSoFar(withoutChange));
+  });
+
+  it("setGameStyle on a side with no plan at all is a safe no-op", () => {
+    const seed = 9004;
+    const match = startMatch(home, away, mulberry32(seed), seed, {}); // no plans supplied
+    simulateQuarter(match, 1);
+    expect(getGameStyle(match, "home")).toBe("Balanced"); // the documented default with no plan
+    expect(() => setGameStyle(match, "home", "Forward Press")).not.toThrow();
+    simulateQuarter(match, 2);
+    simulateQuarter(match, 3);
+    simulateQuarter(match, 4);
+
+    const baseline = simulateMatch(home, away, mulberry32(seed), seed, {});
+    expect(matchResultSoFar(match)).toEqual(baseline);
   });
 });

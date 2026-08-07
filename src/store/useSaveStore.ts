@@ -1,10 +1,12 @@
 import { create } from "zustand";
 import { ALL_PLAYERS, loadPool, resetPoolToGenerated } from "../data/loadPlayers";
-import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData } from "../engine/saveGame";
+import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData, type DraftWindow } from "../engine/saveGame";
 import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
-import { computeLeagueStrategies, buildLeaguePlayersByClub } from "../engine/listNeeds";
-import { playerFullName, type Player } from "../types/player";
+import { generateProspectPool, buildDraftOrder, draftPlayer, autoResolvePick, SCOUT_BUDGET_PER_DRAFT } from "../engine/draft";
+import { computeLeagueStrategies, buildLeaguePlayersByClub, type ClubStrategy } from "../engine/listNeeds";
+import { playerFullName, type Player, type RatedAttribute } from "../types/player";
+import { CLUBS } from "../types/club";
 import { CURRENT_SEASON_YEAR } from "../config";
 import { useGameStore } from "./useGameStore";
 import { useSeasonStore } from "./useSeasonStore";
@@ -12,6 +14,7 @@ import { useSelectionStore } from "./useSelectionStore";
 import { useTeamPlanStore } from "./useTeamPlanStore";
 import { useContractStore } from "./useContractStore";
 import { useTradeStore } from "./useTradeStore";
+import { useDraftStore } from "./useDraftStore";
 import { readSaveFromDB, writeSaveToDB, clearSaveInDB } from "./db";
 
 /**
@@ -88,6 +91,69 @@ interface SaveStoreState {
   rejectInboundOffer: (offerId: string) => void;
   /** The "Simulate a Day" bulk action — runs one more day of AI-vs-AI background trading (engine/trade.ts's `simulateLeagueTrades`) followed by that day's fresh AI-initiated offers into `myClub`'s Inbox (`generateInboundOffers`, evaluated against the post-AI-trades roster), deterministic per (year, day). */
   simulateTradeDay: () => void;
+
+  // --- National Draft (Phase 4 Slice 5) ------------------------------------
+  // Same centralisation rule as Contracts/Trade above — every action that
+  // mutates the live player pool lives here, never on useDraftStore directly.
+
+  /** Generates this year's prospect pool + pick order and opens the draft window — the one explicit "start" this Off-Season Hub step needs that Contracts/Trade don't (see DraftWindow's own doc comment). No-op if a draft is already open. */
+  startDraft: () => void;
+  /** The coach's own pick, when `myClub` is on the clock — drafts `prospectId` from the pool, splices the resulting rookie into the live pool, and logs the pick. No-op if it isn't `myClub`'s turn or `prospectId` isn't a still-undrafted prospect in this window's pool. */
+  confirmDraftPick: (prospectId: number) => void;
+  /** "Next Pick" — resolves exactly one pick via the needs-aware assistant heuristic (engine/draft.ts's `autoResolvePick`) for whoever is currently on the clock. No-op once the draft is complete. */
+  autoResolveNextPick: () => void;
+  /** "Skip to My Pick" — auto-resolves picks the same way until `myClub` comes up on the clock (or the draft ends, whichever's first). */
+  skipToMyPick: () => void;
+  /** "Finish Draft" — auto-resolves every remaining pick, including `myClub`'s own, letting the assistant finish the whole board. */
+  finishDraft: () => void;
+  /** Spends one unit of the shared scouting budget to reveal one headline attribute on a prospect. */
+  scoutAttribute: (prospectId: number, attribute: RatedAttribute) => void;
+}
+
+/**
+ * Shared pure loop behind `autoResolveNextPick`/`skipToMyPick`/`finishDraft`
+ * — resolves picks one at a time via engine/draft.ts's `autoResolvePick`,
+ * threading a locally-mutated `playersByClub`/`strategies` through so each
+ * subsequent pick's need-scoring reflects everything already drafted earlier
+ * in the *same* call (a club that just filled its Ruck hole in round 1
+ * shouldn't still read as desperate for a Ruck in round 2). Computed
+ * entirely in plain local variables and only returned once, rather than
+ * dispatching a `set()`/`loadPool()` per pick — same reasoning
+ * useSeasonStore.ts's `simulateAllRemaining` already loops locally before
+ * one final `set`. `opts.stopWhenClub`/`opts.maxPicks` are independent,
+ * optional stop conditions — `autoResolveNextPick` uses `maxPicks: 1`,
+ * `skipToMyPick` uses `stopWhenClub: myClub`, `finishDraft` uses neither
+ * (runs to the end of `order`).
+ */
+function autoResolveDraftPicks(window: DraftWindow, year: number, opts: { stopWhenClub?: string; maxPicks?: number }): { window: DraftWindow; draftedPlayers: Player[] } {
+  const playersByClub = buildLeaguePlayersByClub();
+  let strategies: Map<string, ClubStrategy> = computeLeagueStrategies(playersByClub);
+  const picks = [...window.picks];
+  const pickedIds = new Set(picks.map((p) => p.playerId));
+  let currentPickIndex = window.currentPickIndex;
+  const draftedPlayers: Player[] = [];
+  let made = 0;
+
+  while (currentPickIndex < window.order.length) {
+    const clubOnClock = window.order[currentPickIndex];
+    if (opts.stopWhenClub && clubOnClock === opts.stopWhenClub) break;
+    if (opts.maxPicks !== undefined && made >= opts.maxPicks) break;
+
+    const remaining = window.pool.filter((p) => !pickedIds.has(p.PlayerID));
+    const result = autoResolvePick(remaining, clubOnClock, currentPickIndex + 1, year, strategies.get(clubOnClock) ?? "Balanced", playersByClub);
+    if (!result) break; // pool exhausted — shouldn't happen given DRAFT_POOL_SIZE > TOTAL_DRAFT_PICKS, guarded anyway
+
+    picks.push(result.record);
+    pickedIds.add(result.record.playerId);
+    draftedPlayers.push(result.player);
+    const roster = playersByClub.get(clubOnClock) ?? [];
+    playersByClub.set(clubOnClock, [...roster, result.player]);
+    currentPickIndex++;
+    made++;
+    if (currentPickIndex % CLUBS.length === 0) strategies = computeLeagueStrategies(playersByClub);
+  }
+
+  return { window: { ...window, picks, currentPickIndex }, draftedPlayers };
 }
 
 function snapshotSave(year: number): SaveGameData {
@@ -102,6 +168,7 @@ function snapshotSave(year: number): SaveGameData {
     teamPlans: useTeamPlanStore.getState().plans,
     contractWindow: useContractStore.getState().window,
     tradeWindow: useTradeStore.getState().window,
+    draftWindow: useDraftStore.getState().window,
   };
 }
 
@@ -112,6 +179,7 @@ function hydrateStoresFrom(save: SaveGameData): void {
   useTeamPlanStore.getState().restorePlans(save.teamPlans);
   useContractStore.getState().restoreWindow(save.contractWindow);
   useTradeStore.getState().restoreWindow(save.tradeWindow);
+  useDraftStore.getState().restoreWindow(save.draftWindow);
   if (save.season) {
     useSeasonStore.getState().restoreSeason(save.season);
   } else {
@@ -166,6 +234,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       useGameStore.subscribe(scheduleAutoSave);
       useContractStore.subscribe(scheduleAutoSave);
       useTradeStore.subscribe(scheduleAutoSave);
+      useDraftStore.subscribe(scheduleAutoSave);
     }
   },
 
@@ -191,6 +260,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     useSeasonStore.getState().clearSeason();
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
+    useDraftStore.getState().clearWindow();
     set({ year: next.year, poolVersion: get().poolVersion + 1 });
     await get().saveNow();
   },
@@ -404,6 +474,85 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const offers = generateInboundOffers(players, myClub, year, day, seed, strategies);
     useTradeStore.getState().logDay(activity, offers);
     set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  startDraft: () => {
+    if (useDraftStore.getState().window) return; // already in progress this off-season
+    const year = get().year;
+    // Deterministic per year, distinct seed space from Contracts/Trade's
+    // year*1000+day scheme (which is keyed per-day, not per-year) — the
+    // whole pool is generated once per draft night, not once per step.
+    const seed = year * 7919 + 13;
+    const pool = generateProspectPool(ALL_PLAYERS, year, seed);
+    const order = buildDraftOrder(useSeasonStore.getState().season?.ladder);
+    const window: DraftWindow = {
+      year,
+      pool,
+      order,
+      currentPickIndex: 0,
+      picks: [],
+      scoutingBudgetRemaining: SCOUT_BUDGET_PER_DRAFT,
+      revealed: {},
+    };
+    useDraftStore.getState().openWindow(window);
+    void get().saveNow();
+  },
+
+  confirmDraftPick: (prospectId) => {
+    const myClub = useGameStore.getState().myClub;
+    const year = get().year;
+    const window = useDraftStore.getState().window;
+    if (!window || window.currentPickIndex >= window.order.length) return;
+    const clubOnClock = window.order[window.currentPickIndex];
+    if (clubOnClock !== myClub) return; // not my turn
+
+    const pickedIds = new Set(window.picks.map((p) => p.playerId));
+    const prospect = window.pool.find((p) => p.PlayerID === prospectId && !pickedIds.has(p.PlayerID));
+    if (!prospect) return;
+
+    const pickNumber = window.currentPickIndex + 1;
+    const round = Math.floor(window.currentPickIndex / CLUBS.length) + 1;
+    const drafted = draftPlayer(prospect, myClub, pickNumber, year);
+    loadPool([...ALL_PLAYERS, drafted]);
+    useDraftStore.getState().logPick({ pickNumber, round, clubName: myClub, playerId: drafted.PlayerID, playerName: playerFullName(drafted) });
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  autoResolveNextPick: () => {
+    const window = useDraftStore.getState().window;
+    if (!window) return;
+    const { window: next, draftedPlayers } = autoResolveDraftPicks(window, get().year, { maxPicks: 1 });
+    if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
+    useDraftStore.getState().openWindow(next);
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  skipToMyPick: () => {
+    const window = useDraftStore.getState().window;
+    if (!window) return;
+    const myClub = useGameStore.getState().myClub;
+    const { window: next, draftedPlayers } = autoResolveDraftPicks(window, get().year, { stopWhenClub: myClub });
+    if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
+    useDraftStore.getState().openWindow(next);
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  finishDraft: () => {
+    const window = useDraftStore.getState().window;
+    if (!window) return;
+    const { window: next, draftedPlayers } = autoResolveDraftPicks(window, get().year, {});
+    if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
+    useDraftStore.getState().openWindow(next);
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  scoutAttribute: (prospectId, attribute) => {
+    useDraftStore.getState().revealAttribute(prospectId, attribute);
     void get().saveNow();
   },
 }));

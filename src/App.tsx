@@ -7,12 +7,13 @@ import { SelectionCommittee } from "./components/SelectionCommittee";
 import { ListNeeds } from "./components/ListNeeds";
 import { Contracts } from "./components/Contracts";
 import { TradePeriod } from "./components/TradePeriod";
+import { Draft } from "./components/Draft";
 import { useGameStore } from "./store/useGameStore";
 import { useSeasonStore } from "./store/useSeasonStore";
 import { useSaveStore } from "./store/useSaveStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
-type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "contracts" | "trade";
+type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "contracts" | "trade" | "draft";
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
@@ -64,6 +65,7 @@ export default function App() {
               ["listNeeds", "List Needs"],
               ["contracts", "Contracts"],
               ["trade", "Trade"],
+              ["draft", "Draft"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -86,9 +88,10 @@ export default function App() {
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
         {screen === "match" && <LiveMatch />}
-        {screen === "listNeeds" && <ListNeeds onGoToContracts={() => setScreen("contracts")} onGoToTrade={() => setScreen("trade")} />}
+        {screen === "listNeeds" && <ListNeeds onGoToContracts={() => setScreen("contracts")} onGoToTrade={() => setScreen("trade")} onGoToDraft={() => setScreen("draft")} />}
         {screen === "contracts" && <Contracts />}
         {screen === "trade" && <TradePeriod />}
+        {screen === "draft" && <Draft />}
       </main>
     </div>
   );

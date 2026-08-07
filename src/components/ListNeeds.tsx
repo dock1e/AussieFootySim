@@ -16,10 +16,10 @@ import { gapBand, type PillTone } from "./StatusPill";
  * started" gate to be useful; it's a read-only diagnosis of the current
  * list, meaningful to check any time.
  *
- * Footer shortcuts into Contracts and Trade are real now that both exist
- * (Phase 4 Slices 3 and 4) — the National Draft still doesn't, so that one
- * stays a disclosed note rather than a dead button, same reasoning as
- * before.
+ * Footer shortcuts into Contracts, Trade, and the Draft are all real now
+ * that all three exist (Phase 4 Slices 3, 4, and 5) — every step of the
+ * Off-Season Hub sequence up to the Draft itself now has a real screen
+ * behind it; only Pre-Season Draft/Pre-Season Investment remain open.
  */
 
 const STRATEGY_TONE: Record<ClubStrategy, PillTone> = {
@@ -33,7 +33,7 @@ const PRIORITY_TONE: Record<RecommendedAction["priority"], PillTone> = {
   PRIORITY: "warn",
 };
 
-export function ListNeeds({ onGoToContracts, onGoToTrade }: { onGoToContracts?: () => void; onGoToTrade?: () => void }) {
+export function ListNeeds({ onGoToContracts, onGoToTrade, onGoToDraft }: { onGoToContracts?: () => void; onGoToTrade?: () => void; onGoToDraft?: () => void }) {
   const myClub = useGameStore((s) => s.myClub);
   const league = useMemo(() => buildLeaguePlayersByClub(), []);
   const report = useMemo(() => computeListNeeds(myClub, league), [myClub, league]);
@@ -149,10 +149,8 @@ export function ListNeeds({ onGoToContracts, onGoToTrade }: { onGoToContracts?: 
         )}
       </div>
 
-      {/* User Interface.md specs footer shortcuts into Contracts/Trade/Draft — Contracts
-          and Trade are both real now (Phase 4 Slices 3 and 4), so they get real buttons;
-          the National Draft still doesn't exist, so it stays a disclosed note rather than
-          a dead button. */}
+      {/* User Interface.md specs footer shortcuts into Contracts/Trade/Draft — all
+          three are real now (Phase 4 Slices 3, 4, and 5), so they all get real buttons. */}
       <div className="flex flex-col items-center gap-2 text-center text-xs text-slate-500">
         <div className="flex flex-wrap justify-center gap-2">
           {onGoToContracts && (
@@ -165,8 +163,13 @@ export function ListNeeds({ onGoToContracts, onGoToTrade }: { onGoToContracts?: 
               Go to Trade Period
             </button>
           )}
+          {onGoToDraft && (
+            <button onClick={onGoToDraft} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+              Go to the Draft
+            </button>
+          )}
         </div>
-        <span>The National Draft isn&rsquo;t built yet.</span>
+        <span>Pre-Season Draft and Pre-Season Investment aren&rsquo;t built yet.</span>
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ import type { TeamPlan, GameStyle, PlayerTactic } from "./tactics.ts";
 import type { Lineup } from "./selection.ts";
 import type { LeagueActivityEntry } from "./contracts.ts";
 import type { TradeOffer } from "./trade.ts";
+import type { DraftPickRecord } from "./draft.ts";
 import { runOffSeason } from "./progression.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 
@@ -74,6 +75,33 @@ export interface TradeWindow {
   inbox: TradeOffer[];
 }
 
+/**
+ * The current National Draft's state — mirrors useDraftStore's `window`,
+ * same "added without bumping SAVE_SCHEMA_VERSION" treatment as
+ * ContractWindow/TradeWindow above (a save from before the Draft existed
+ * just has no window in progress). Unlike Contracts/Trade, this window is
+ * NOT lazily created on first activity — generating `pool` is a real,
+ * seeded, one-time-per-night event (`useDraftStore.ts`'s `startDraft`), so
+ * `null` specifically means "the coach hasn't started this year's Draft yet"
+ * rather than merely "no activity logged yet."
+ */
+export interface DraftWindow {
+  /** The in-fiction draft year — matches SaveGameData.year at the moment the draft was started. */
+  year: number;
+  /** All `DRAFT_POOL_SIZE` generated prospects, fixed for the whole draft night (engine/draft.ts's `generateProspectPool`) — mock-outlet ranks and "remaining pool" (picks filtered out) are both derived from this same fixed list, never regenerated mid-draft. */
+  pool: Player[];
+  /** `TOTAL_DRAFT_PICKS` club names in pick order (engine/draft.ts's `buildDraftOrder` — reverse ladder x5 rounds). */
+  order: string[];
+  /** Index into `order` of whoever is currently on the clock — `order.length` once every pick has been made. */
+  currentPickIndex: number;
+  /** Every completed pick so far, in order — "Recent Picks" / "Your Draft Picks Tonight" (User Interface.md). */
+  picks: DraftPickRecord[];
+  /** Engine.md's shared 4-reveal-per-night scouting budget — starts at SCOUT_BUDGET_PER_DRAFT, spent across however many prospects the coach chooses to scout. */
+  scoutingBudgetRemaining: number;
+  /** Keyed by PlayerID — which of `SCOUT_HEADLINE_ATTRIBUTES` have been revealed on that prospect so far. Attribute names stored as plain strings (not `RatedAttribute`) purely so this stays trivially JSON-safe through the same serialize/deserialize pass as everything else here; useDraftStore.ts casts back on read. */
+  revealed: Record<number, string[]>;
+}
+
 export interface SaveGameData {
   schemaVersion: number;
   /** The club the user is coaching this save — mirrors useGameStore's `myClub`. */
@@ -94,6 +122,8 @@ export interface SaveGameData {
   contractWindow: ContractWindow | null;
   /** Null if no Trade Period window has been opened yet this off-season — mirrors useTradeStore's `window`. See TradeWindow's own doc comment. */
   tradeWindow: TradeWindow | null;
+  /** Null if the coach hasn't started this year's National Draft yet — mirrors useDraftStore's `window`. See DraftWindow's own doc comment. */
+  draftWindow: DraftWindow | null;
 }
 
 /** A fresh save for a brand-new game — the exact "nothing played yet" state the app already defaults to today, just made explicit and persistable. */
@@ -109,6 +139,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     teamPlans: {},
     contractWindow: null,
     tradeWindow: null,
+    draftWindow: null,
   };
 }
 
@@ -129,9 +160,11 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
  * already only points at players still actually on that club's list; no
  * separate reconciliation pass is needed here.
  *
- * `contractWindow`/`tradeWindow` reset to null — a new off-season year
- * starts fresh Contracts and Trade Period windows, same as `season`
- * resetting.
+ * `contractWindow`/`tradeWindow`/`draftWindow` reset to null — a new
+ * off-season year starts fresh Contracts, Trade Period, and Draft windows,
+ * same as `season` resetting. Any prospects the coach chose *not* to draft
+ * are not carried over — see engine/draft.ts's own doc comment on why
+ * undrafted prospects are deliberately not persisted past their own night.
  */
 export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   return {
@@ -141,6 +174,7 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     season: null,
     contractWindow: null,
     tradeWindow: null,
+    draftWindow: null,
     savedAt: new Date().toISOString(),
   };
 }
@@ -179,6 +213,8 @@ export interface SerializedSaveGame {
   contractWindow: ContractWindow | null;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `contractWindow`. */
   tradeWindow: TradeWindow | null;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `tradeWindow`. */
+  draftWindow: DraftWindow | null;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -202,6 +238,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
     contractWindow: save.contractWindow,
     tradeWindow: save.tradeWindow,
+    draftWindow: save.draftWindow,
   };
 }
 
@@ -238,5 +275,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
     contractWindow: s.contractWindow ?? null,
     tradeWindow: s.tradeWindow ?? null,
+    draftWindow: s.draftWindow ?? null,
   };
 }

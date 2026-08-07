@@ -112,6 +112,12 @@ describe("runOffSeasonOnSave", () => {
     const next = runOffSeasonOnSave(save);
     expect(next.tradeWindow).toBeNull();
   });
+
+  it("resets draftWindow to null, same as contractWindow/tradeWindow", () => {
+    const save: SaveGameData = { ...makeSave(), draftWindow: { year: 2026, pool: [], order: ["Adelaide"], currentPickIndex: 1, picks: [], scoutingBudgetRemaining: 4, revealed: {} } };
+    const next = runOffSeasonOnSave(save);
+    expect(next.draftWindow).toBeNull();
+  });
 });
 
 describe("serializeSave / deserializeSave", () => {
@@ -135,6 +141,15 @@ describe("serializeSave / deserializeSave", () => {
         daysElapsed: 1,
         activity: [{ id: "t-d1", day: 1, kind: "traded", playerId: 2, playerName: "Trade Target", clubName: "Adelaide", fromClubName: "Carlton", detail: "Adelaide trade Test Player to Carlton for Trade Target." }],
         inbox: [{ id: "offer-1", day: 1, fromClub: "Carlton", toClub: "Adelaide", theyGivePlayerIds: [3], theyWantPlayerIds: [4], flavourLine: "Trade Target would slot straight into our best 23." }],
+      },
+      draftWindow: {
+        year: 2027,
+        pool: makePool(2).map((p) => ({ ...p, PlayerID: p.PlayerID + 9000, Team: "Draft Pool", OriginClub: "Draft Pool", ClubID: 0 })),
+        order: ["Adelaide", "Carlton"],
+        currentPickIndex: 1,
+        picks: [{ pickNumber: 1, round: 1, clubName: "Adelaide", playerId: 9001, playerName: "Test Player" }],
+        scoutingBudgetRemaining: 3,
+        revealed: { 9002: ["skill", "speed"] },
       },
     };
   }
@@ -197,6 +212,20 @@ describe("serializeSave / deserializeSave", () => {
     delete wire.tradeWindow;
     const restored = deserializeSave(wire);
     expect(restored.tradeWindow).toBeNull();
+  });
+
+  it("draftWindow survives a real JSON round trip untouched (plain data, no Map inside)", () => {
+    const save = richSave();
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored.draftWindow).toEqual(save.draftWindow);
+  });
+
+  it("defaults draftWindow to null for a save written before Phase 4 Slice 5 existed", () => {
+    const wire = JSON.parse(JSON.stringify(serializeSave(richSave())));
+    delete wire.draftWindow;
+    const restored = deserializeSave(wire);
+    expect(restored.draftWindow).toBeNull();
   });
 
   it("naive JSON.stringify on the raw (unserialized) save would have silently lost the Map data -- proving serializeSave is load-bearing, not redundant", () => {

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { CLUBS, clubByName } from "../types/club";
 import { useGameStore } from "../store/useGameStore";
-import { getPlayersByClub, LEAGUE_AVERAGE_OVR, averageOvr } from "../data/loadPlayers";
+import { getPlayersByClub, leagueAverageOvr, averageOvr } from "../data/loadPlayers";
 import { summariseLines } from "../data/lines";
 import { gapBand } from "./StatusPill";
 
@@ -19,7 +19,7 @@ export function Dashboard() {
   const { myClub, setMyClub } = useGameStore();
   const club = clubByName(myClub);
   const players = useMemo(() => getPlayersByClub(myClub), [myClub]);
-  const lines = useMemo(() => summariseLines(players, LEAGUE_AVERAGE_OVR), [players]);
+  const lines = useMemo(() => summariseLines(players, leagueAverageOvr()), [players]);
   const clubAvgOvr = useMemo(() => averageOvr(players), [players]);
 
   return (
@@ -58,7 +58,7 @@ export function Dashboard() {
         </div>
         <div className="card">
           <div className="text-xs uppercase tracking-wide text-slate-400">League avg OVR</div>
-          <div className="text-2xl font-semibold tabular-nums">{LEAGUE_AVERAGE_OVR.toFixed(1)}</div>
+          <div className="text-2xl font-semibold tabular-nums">{leagueAverageOvr().toFixed(1)}</div>
         </div>
         <div className="card">
           <div className="text-xs uppercase tracking-wide text-slate-400">Elite (84+)</div>

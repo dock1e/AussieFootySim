@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import type { Player } from "../types/player";
 import { useGameStore, type SquadSortKey } from "../store/useGameStore";
+import { useSaveStore } from "../store/useSaveStore";
 import { NumberWithPill, fitnessBand, moraleBand } from "./StatusPill";
 import { seedMorale } from "../engine/morale";
-import { CURRENT_SEASON_YEAR } from "../config";
 
 /**
  * Squad list — see User Interface.md "Squad list": "A dense, sortable
@@ -20,11 +20,17 @@ import { CURRENT_SEASON_YEAR } from "../config";
  * an entry for that player — i.e. once at least one round has been
  * simulated. Before that (no season, or this player hasn't played yet this
  * season) it falls back to the static snapshot, same as always.
+ *
+ * `Status`'s contract read is against the live save year (useSaveStore.ts),
+ * not a fixed constant — matters once a real off-season has advanced the
+ * franchise past its starting year, otherwise every player's contract would
+ * keep reading against year one forever. See ROADMAP.md's persistence
+ * writeup.
  */
-function contractStatus(p: Player): { label: string; tone: "good" | "warn" | "bad" } {
-  if (p.expired_year < CURRENT_SEASON_YEAR) return { label: "OOC", tone: "bad" };
-  if (p.expired_year === CURRENT_SEASON_YEAR) return { label: "FINAL YR", tone: "warn" };
-  return { label: `Signed · ${p.expired_year - CURRENT_SEASON_YEAR}yr`, tone: "good" };
+function contractStatus(p: Player, currentYear: number): { label: string; tone: "good" | "warn" | "bad" } {
+  if (p.expired_year < currentYear) return { label: "OOC", tone: "bad" };
+  if (p.expired_year === currentYear) return { label: "FINAL YR", tone: "warn" };
+  return { label: `Signed · ${p.expired_year - currentYear}yr`, tone: "good" };
 }
 
 const SORT_ACCESSORS: Record<SquadSortKey, (p: Player) => number | string> = {
@@ -49,6 +55,7 @@ const COLUMNS: { key: SquadSortKey | null; label: string; className?: string }[]
 
 export function SquadList({ players, liveCondition }: { players: Player[]; liveCondition?: Map<number, number> }) {
   const { squadSortKey, squadSortDir, setSquadSort } = useGameStore();
+  const currentYear = useSaveStore((s) => s.year);
 
   const sorted = useMemo(() => {
     const accessor = SORT_ACCESSORS[squadSortKey];
@@ -84,7 +91,7 @@ export function SquadList({ players, liveCondition }: { players: Player[]; liveC
             const condition = liveCondition?.get(p.PlayerID) ?? p.condition;
             const fit = fitnessBand(condition);
             const mor = moraleBand(seedMorale(p));
-            const status = contractStatus(p);
+            const status = contractStatus(p, currentYear);
             return (
               <tr key={p.PlayerID} className="border-b border-base-700/60 last:border-0 hover:bg-base-700/40">
                 <td className="px-3 py-2 tabular-nums text-slate-400">{p.jumperNumber}</td>

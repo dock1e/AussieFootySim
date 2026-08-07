@@ -25,6 +25,23 @@ interface SeasonStoreState {
   simulateNextRound: () => void;
   simulateAllRemaining: () => void;
   playFinals: () => void;
+  /** Hydrates a Season loaded from a save — see useSaveStore.ts. Rebuilds `teams` the same way startNewSeason does (my-club override from the current Selection Committee lineup, everyone else pickBest22) rather than persisting `teams` itself, since it's always cheaply re-derivable and persisting it too would just be redundant, staler-prone state. */
+  restoreSeason: (season: Season) => void;
+  /** Back to "no season in progress" — used after a real off-season step (see useSaveStore.ts's runOffSeason) so SeasonHub's existing empty-state flow runs again fresh. */
+  clearSeason: () => void;
+}
+
+/** Shared by startNewSeason/restoreSeason — see useSeasonStore's own doc comment for why teams are always rebuilt rather than persisted. */
+function buildTeamsForMyClub(): Map<number, MatchTeam> {
+  const clubIds = CLUBS.map((c) => c.ClubID);
+  const overrides = new Map<number, MatchTeam>();
+  const myClub = useGameStore.getState().myClub;
+  const myClubId = clubByName(myClub)?.ClubID;
+  const myLineup = useSelectionStore.getState().lineupFor(myClub);
+  if (myClubId !== undefined && myLineup && isLineupComplete(myLineup)) {
+    overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, getPlayersByClub(myClub)));
+  }
+  return buildTeams(clubIds, overrides);
 }
 
 /**
@@ -53,30 +70,22 @@ function currentPlans(): Map<number, TeamPlan> {
  * doc comment) since this genuinely is save-game state now that the season
  * engine exists to produce it.
  *
- * Single season in memory, no persistence yet (see ROADMAP.md "Persistence")
- * — starting a new season replaces whatever was there.
+ * Single season in memory at a time — starting a new season replaces
+ * whatever was there. Persisted across reloads by useSaveStore.ts, which
+ * auto-saves on every change here (see its own doc comment) and calls
+ * `restoreSeason`/`clearSeason` to hydrate this store from a loaded save.
  */
 export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
   season: null,
   teams: null,
 
   startNewSeason: (seed = Math.floor(Math.random() * 1_000_000_000)) => {
-    const clubIds = CLUBS.map((c) => c.ClubID);
-
     // The user's own club fields its completed Selection Committee lineup
     // instead of the pickBest22 fallback — same resolution LiveMatch.tsx's
     // resolveTeam() already does for the Match tab. Everyone else still
     // always auto-picks (gap #22).
-    const overrides = new Map<number, MatchTeam>();
-    const myClub = useGameStore.getState().myClub;
-    const myClubId = clubByName(myClub)?.ClubID;
-    const myLineup = useSelectionStore.getState().lineupFor(myClub);
-    if (myClubId !== undefined && myLineup && isLineupComplete(myLineup)) {
-      overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, getPlayersByClub(myClub)));
-    }
-
-    const teams = buildTeams(clubIds, overrides);
-    set({ season: initSeason(seed, clubIds), teams });
+    const clubIds = CLUBS.map((c) => c.ClubID);
+    set({ season: initSeason(seed, clubIds), teams: buildTeamsForMyClub() });
   },
 
   simulateNextRound: () => {
@@ -105,4 +114,8 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     if (!season || !teams || !isHomeAndAwayComplete(season)) return;
     set({ season: runFinals(season, teams, currentPlans()) });
   },
+
+  restoreSeason: (season) => set({ season, teams: buildTeamsForMyClub() }),
+
+  clearSeason: () => set({ season: null, teams: null }),
 }));

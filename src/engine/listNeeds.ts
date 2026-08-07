@@ -34,13 +34,14 @@ import type { Archetype } from "../types/archetype.ts";
  * 2. **The "best-23 quality" bar.** A player counts as best-23-standard if
  *    their `OVR` is at or above the *current* league-wide average OVR —
  *    computed fresh from the `playersByClub` map passed in (the same shape
- *    `data/loadPlayers.ts`'s own `LEAGUE_AVERAGE_OVR` constant is built
- *    from, but recomputed here rather than importing that fixed constant
- *    directly, so this module stays correct if it's ever handed a league
- *    that isn't literally the current real 18 clubs — e.g. a test's
- *    synthetic pool, or a future post-trade/post-draft mutated pool once
- *    Phase 4's persistence layer exists). Deliberately *not* capped at the
- *    line's on-field quota (`LINE_TARGETS`):
+ *    `data/loadPlayers.ts`'s own `leagueAverageOvr()` computes from the live
+ *    pool, but recomputed here directly rather than calling that, so this
+ *    module stays correct if it's ever handed a league that isn't literally
+ *    the current real 18 clubs — e.g. a test's synthetic pool. Now that the
+ *    persistence layer exists — see ROADMAP.md — `leagueAverageOvr()` itself
+ *    is also always live/correct against a post-off-season mutated pool, not
+ *    just this module's own independent recomputation). Deliberately *not*
+ *    capped at the line's on-field quota (`LINE_TARGETS`):
  *    Engine.md's own framing is "how many of [the listed players] are
  *    actually best-23 standard," i.e. an individual quality bar per player,
  *    not "how many could literally fit in today's run-on 22" — a club with
@@ -140,7 +141,7 @@ function top10Ovr(players: Player[]): number {
   return top.length ? top.reduce((s, p) => s + p.OVR, 0) / top.length : 0;
 }
 
-/** Average OVR across every player in every club passed in — see doc comment point 2 for why this is recomputed from `playersByClub` rather than importing `data/loadPlayers.ts`'s fixed `LEAGUE_AVERAGE_OVR` constant. */
+/** Average OVR across every player in every club passed in — see doc comment point 2 for why this is recomputed from `playersByClub` rather than calling `data/loadPlayers.ts`'s `leagueAverageOvr()` directly. */
 function leagueAverageOvr(playersByClub: ReadonlyMap<string, Player[]>): number {
   const all = [...playersByClub.values()].flat();
   return all.length ? all.reduce((s, p) => s + p.OVR, 0) / all.length : 0;

@@ -1,0 +1,170 @@
+import { describe, it, expect } from "vitest";
+import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData } from "./saveGame";
+import { runOffSeason } from "./progression";
+import { defaultTeamPlan } from "./tactics";
+import { makePlayer } from "../testUtils/makePlayer";
+import { CURRENT_SEASON_YEAR } from "../config";
+import type { Season } from "./season";
+
+/**
+ * Deliberately synthetic throughout, same isolation match.test.ts/
+ * season.test.ts/ratings.test.ts use — hand-built fixtures rather than a
+ * real simulated season, since what this file actually needs to prove is
+ * the save/serialization *mechanics* (does a Map survive a real JSON round
+ * trip, does the off-season step wire through correctly), not season logic
+ * itself (already covered by season.test.ts) or progression math (already
+ * covered by progression.test.ts). A real end-to-end pass — an actual
+ * simulated season's Season object, with real MatchResult events/box
+ * scores, through the full save/load/JSON-export path — is scratch-verified
+ * separately against real generated data (scratch/verify_saveGame_real.ts),
+ * same reason ratings.test.ts's real-club sanity check isn't shipped here
+ * either: it depends on `npm run build:data`'s gitignored output.
+ */
+
+function makePool(n: number): ReturnType<typeof makePlayer>[] {
+  return Array.from({ length: n }, (_, i) => makePlayer({ PlayerID: i + 1, Age: 20 + i, archetype: "Inside Mid" }));
+}
+
+function minimalSeason(condition: [number, number][]): Season {
+  return {
+    seed: 42,
+    clubIds: [1, 2],
+    fixture: [],
+    played: [],
+    ladder: [],
+    finals: null,
+    premierClubId: null,
+    condition: new Map(condition),
+  };
+}
+
+describe("newSaveGame", () => {
+  it("starts at CURRENT_SEASON_YEAR with no season and empty lineups/plans", () => {
+    const pool = makePool(3);
+    const save = newSaveGame("Adelaide", pool);
+    expect(save.schemaVersion).toBe(SAVE_SCHEMA_VERSION);
+    expect(save.myClub).toBe("Adelaide");
+    expect(save.year).toBe(CURRENT_SEASON_YEAR);
+    expect(save.season).toBeNull();
+    expect(save.lineups).toEqual({});
+    expect(save.teamPlans).toEqual({});
+    expect(save.players).toHaveLength(3);
+  });
+
+  it("copies the players array rather than aliasing the input", () => {
+    const pool = makePool(2);
+    const save = newSaveGame("Adelaide", pool);
+    expect(save.players).not.toBe(pool);
+    expect(save.players).toEqual(pool);
+  });
+});
+
+describe("runOffSeasonOnSave", () => {
+  function makeSave(): SaveGameData {
+    return newSaveGame("Adelaide", makePool(10));
+  }
+
+  it("advances the year by exactly 1", () => {
+    const save = makeSave();
+    const next = runOffSeasonOnSave(save);
+    expect(next.year).toBe(save.year + 1);
+  });
+
+  it("clears season back to null", () => {
+    const save = { ...makeSave(), season: minimalSeason([[1, 80]]) };
+    const next = runOffSeasonOnSave(save);
+    expect(next.season).toBeNull();
+  });
+
+  it("ages players exactly the same way calling runOffSeason directly would", () => {
+    const save = makeSave();
+    const expected = runOffSeason(save.players);
+    const next = runOffSeasonOnSave(save);
+    expect(next.players).toEqual(expected);
+  });
+
+  it("does not mutate the input save", () => {
+    const save = makeSave();
+    const before = JSON.stringify(save.players);
+    runOffSeasonOnSave(save);
+    expect(JSON.stringify(save.players)).toBe(before);
+    expect(save.year).toBe(CURRENT_SEASON_YEAR);
+  });
+
+  it("carries lineups/teamPlans forward unchanged", () => {
+    const plan = { ...defaultTeamPlan(), tactics: new Map([[1, { tactic: "Tagging" as const, taggingTargetId: 99 }]]) };
+    const save: SaveGameData = { ...makeSave(), lineups: { Adelaide: [1, 2, null] }, teamPlans: { Adelaide: plan } };
+    const next = runOffSeasonOnSave(save);
+    expect(next.lineups).toEqual(save.lineups);
+    expect(next.teamPlans.Adelaide.gameStyle).toBe(plan.gameStyle);
+    expect(next.teamPlans.Adelaide.tactics).toEqual(plan.tactics);
+  });
+});
+
+describe("serializeSave / deserializeSave", () => {
+  function richSave(): SaveGameData {
+    const plan1 = { gameStyle: "Forward Press" as const, tactics: new Map([[1, { tactic: "Tagging" as const, taggingTargetId: 55 }], [2, { tactic: "Run Two Ways" as const }]]) };
+    const plan2 = defaultTeamPlan();
+    return {
+      schemaVersion: SAVE_SCHEMA_VERSION,
+      myClub: "Adelaide",
+      year: 2027,
+      savedAt: "2027-03-01T00:00:00.000Z",
+      players: makePool(4),
+      season: minimalSeason([[1, 76], [2, 100], [3, 40]]),
+      lineups: { Adelaide: [1, 2, 3, null] },
+      teamPlans: { Adelaide: plan1, Carlton: plan2 },
+    };
+  }
+
+  it("round-trips through a real JSON.stringify/JSON.parse pass with no data loss", () => {
+    const save = richSave();
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored).toEqual(save);
+  });
+
+  it("Season.condition survives as a real Map with the same entries, not an empty object", () => {
+    const save = richSave();
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored.season?.condition).toBeInstanceOf(Map);
+    expect(restored.season?.condition.get(2)).toBe(100);
+    expect(restored.season?.condition.size).toBe(3);
+  });
+
+  it("TeamPlan.tactics survives as a real Map with the same entries, not an empty object", () => {
+    const save = richSave();
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored.teamPlans.Adelaide.tactics).toBeInstanceOf(Map);
+    expect(restored.teamPlans.Adelaide.tactics.get(1)).toEqual({ tactic: "Tagging", taggingTargetId: 55 });
+    expect(restored.teamPlans.Adelaide.tactics.size).toBe(2);
+  });
+
+  it("handles a null season correctly through the round trip", () => {
+    const save = { ...richSave(), season: null };
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored.season).toBeNull();
+  });
+
+  it("naive JSON.stringify on the raw (unserialized) save would have silently lost the Map data -- proving serializeSave is load-bearing, not redundant", () => {
+    const save = richSave();
+    const naiveWire = JSON.parse(JSON.stringify(save));
+    // A Map serializes to "{}" via plain JSON.stringify -- the bug this file's own serialize step exists to prevent.
+    expect(naiveWire.season.condition).toEqual({});
+  });
+
+  it("rejects a save with the wrong schema version instead of silently misreading it", () => {
+    const wire = JSON.parse(JSON.stringify(serializeSave(richSave())));
+    wire.schemaVersion = 999;
+    expect(() => deserializeSave(wire)).toThrow();
+  });
+
+  it("rejects malformed input rather than crashing with an unhelpful error", () => {
+    expect(() => deserializeSave(null)).toThrow();
+    expect(() => deserializeSave({})).toThrow();
+    expect(() => deserializeSave({ schemaVersion: SAVE_SCHEMA_VERSION })).toThrow();
+  });
+});

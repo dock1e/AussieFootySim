@@ -10,6 +10,8 @@ interface SelectionState {
   setSlot: (clubName: string, slotIndex: number, playerId: number | null) => void;
   autoFill: (clubName: string, players: Player[]) => void;
   clear: (clubName: string) => void;
+  /** Bulk-replaces every club's lineups at once — used to hydrate from a loaded save, see useSaveStore.ts. */
+  restoreLineups: (lineups: Record<string, Lineup>) => void;
 }
 
 /**
@@ -38,4 +40,6 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     set((state) => ({ lineups: { ...state.lineups, [clubName]: autoFillLineup(players) } })),
 
   clear: (clubName) => set((state) => ({ lineups: { ...state.lineups, [clubName]: emptyLineup() } })),
+
+  restoreLineups: (lineups) => set({ lineups }),
 }));

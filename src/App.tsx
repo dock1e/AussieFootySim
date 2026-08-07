@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dashboard } from "./components/Dashboard";
 import { SquadList } from "./components/SquadList";
 import { LiveMatch } from "./components/LiveMatch";
@@ -7,6 +7,7 @@ import { SelectionCommittee } from "./components/SelectionCommittee";
 import { ListNeeds } from "./components/ListNeeds";
 import { useGameStore } from "./store/useGameStore";
 import { useSeasonStore } from "./store/useSeasonStore";
+import { useSaveStore } from "./store/useSaveStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
 type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds";
@@ -14,19 +15,43 @@ type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNe
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
   const myClub = useGameStore((s) => s.myClub);
+  const status = useSaveStore((s) => s.status);
+  const initialize = useSaveStore((s) => s.initialize);
+  // Re-reading getPlayersByClub whenever the live pool is swapped wholesale
+  // (a load, a new game, an off-season step) — see useSaveStore.ts's
+  // `poolVersion` doc comment. Not memoized: this is the one call site that
+  // has to stay correct with zero risk of a stale dependency array, and
+  // getPlayersByClub is a cheap filter over <1000 players.
+  const poolVersion = useSaveStore((s) => s.poolVersion);
   const squad = getPlayersByClub(myClub);
   // Live, round-by-round condition from the active season (see season.ts's
   // doc comment) — undefined with no season in progress, in which case
   // SquadList quietly falls back to each player's static condition snapshot.
   const liveCondition = useSeasonStore((s) => s.season?.condition);
 
+  useEffect(() => {
+    void initialize();
+    // Runs once on mount, deliberately — see useSaveStore.ts's own
+    // idempotency guard for why calling this twice (e.g. React 18
+    // StrictMode's dev-only double-invoke) is harmless regardless.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (status === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
+        Loading save…
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-4 py-6">
-      <header className="mb-6 flex items-center justify-between">
+      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="font-display text-3xl italic tracking-tight">
           Sim<span className="text-accent">AFL</span>
         </div>
-        <nav className="flex gap-2">
+        <nav className="flex flex-wrap gap-2">
           {(
             [
               ["dashboard", "Dashboard"],
@@ -48,10 +73,10 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="text-xs text-slate-500 tabular-nums">{ALL_PLAYERS.length} players loaded</div>
+        <SaveMenu />
       </header>
 
-      <main>
+      <main key={poolVersion}>
         {screen === "dashboard" && <Dashboard />}
         {screen === "squad" && <SquadList players={squad} liveCondition={liveCondition} />}
         {screen === "selection" && <SelectionCommittee />}
@@ -59,6 +84,85 @@ export default function App() {
         {screen === "match" && <LiveMatch />}
         {screen === "listNeeds" && <ListNeeds />}
       </main>
+    </div>
+  );
+}
+
+/**
+ * Compact save affordances — Engine.md's persistence spec explicitly wants
+ * "JSON export/import for backup/sharing" as a real feature, not just an
+ * internal implementation detail, alongside the automatic IndexedDB
+ * auto-save every other action already triggers (see useSaveStore.ts).
+ * Deliberately three plain buttons rather than a dropdown menu — nothing
+ * else in this codebase has a dropdown component yet, and three buttons is
+ * simple enough not to need one.
+ */
+function SaveMenu() {
+  const year = useSaveStore((s) => s.year);
+  const newGame = useSaveStore((s) => s.newGame);
+  const exportJSON = useSaveStore((s) => s.exportJSON);
+  const importJSON = useSaveStore((s) => s.importJSON);
+  const myClub = useGameStore((s) => s.myClub);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  function handleExport() {
+    const json = exportJSON();
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `simafl-save-${year}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleImportFile(file: File) {
+    setImportError(null);
+    try {
+      await importJSON(await file.text());
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Could not import that file.");
+    }
+  }
+
+  function handleNewGame() {
+    if (!window.confirm(`Start a fresh ${myClub} save? This discards your current progress (aged players, season, lineups, plans).`)) {
+      return;
+    }
+    void newGame(myClub);
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-slate-500">
+      <span className="tabular-nums">
+        {year} &middot; {ALL_PLAYERS.length} players
+      </span>
+      <button onClick={handleExport} className="rounded-lg bg-base-800 px-3 py-1.5 text-slate-400 hover:bg-base-700" title="Download your save as a JSON file">
+        Export
+      </button>
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        className="rounded-lg bg-base-800 px-3 py-1.5 text-slate-400 hover:bg-base-700"
+        title="Load a previously-exported JSON save"
+      >
+        Import
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void handleImportFile(file);
+          e.target.value = "";
+        }}
+      />
+      <button onClick={handleNewGame} className="rounded-lg bg-base-800 px-3 py-1.5 text-slate-400 hover:bg-base-700" title="Wipe progress and start over">
+        New Game
+      </button>
+      {importError && <span className="text-red-400">{importError}</span>}
     </div>
   );
 }

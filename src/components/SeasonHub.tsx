@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { useGameStore } from "../store/useGameStore";
+import { useSaveStore } from "../store/useSaveStore";
 import { CLUBS, clubById, clubByName } from "../types/club";
 import { SEASON_ROUNDS, matchesInRound, type FixtureMatch } from "../engine/fixture";
 import { nextUnplayedRound, isHomeAndAwayComplete, type PlayedMatch } from "../engine/season";
@@ -9,7 +10,6 @@ import type { MatchTeam } from "../engine/team";
 import type { FinalsMatch, FinalsSeriesResult } from "../engine/finals";
 import { LadderTable } from "./LadderTable";
 import { FullTimeResult } from "./FullTimeResult";
-import { CURRENT_SEASON_YEAR } from "../config";
 
 /**
  * Season hub — Engine.md "Season lifecycle": `Pre-season -> [Round 1 ...
@@ -34,9 +34,33 @@ export function SeasonHub() {
   const { season, teams, startNewSeason, simulateNextRound, simulateAllRemaining, playFinals } = useSeasonStore();
   const myClub = useGameStore((s) => s.myClub);
   const myClubId = useMemo(() => clubByName(myClub)?.ClubID ?? CLUBS[0].ClubID, [myClub]);
+  const year = useSaveStore((s) => s.year);
+  const runOffSeason = useSaveStore((s) => s.runOffSeason);
+  const [runningOffSeason, setRunningOffSeason] = useState(false);
 
   const [round, setRound] = useState(1);
   const [viewing, setViewing] = useState<Viewing | null>(null);
+
+  // A successful off-season bumps useSaveStore's poolVersion, and App.tsx
+  // keys <main> off it specifically so this whole screen remounts fresh
+  // (round back to 1, viewing closed) — which very likely happens *before*
+  // the awaited runOffSeason() call below resolves back into this closure.
+  // This ref guards the finally block's setRunningOffSeason(false) against
+  // firing on that now-unmounted instance (harmless if it did — just a dev
+  // console warning — but cheap to avoid outright).
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  async function handleOffSeason() {
+    setRunningOffSeason(true);
+    try {
+      await runOffSeason();
+    } finally {
+      if (mountedRef.current) setRunningOffSeason(false);
+    }
+  }
 
   if (viewing) {
     return (
@@ -64,7 +88,7 @@ export function SeasonHub() {
           onClick={() => startNewSeason()}
           className="rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark"
         >
-          Start {CURRENT_SEASON_YEAR} Season
+          Start {year} Season
         </button>
       </div>
     );
@@ -84,7 +108,7 @@ export function SeasonHub() {
     <div className="space-y-4">
       <div className="card flex flex-wrap items-center gap-3">
         <div>
-          <div className="font-display text-xl italic">{CURRENT_SEASON_YEAR} Season</div>
+          <div className="font-display text-xl italic">{year} Season</div>
           <div className="text-xs text-slate-400">
             {complete
               ? season.finals
@@ -116,6 +140,16 @@ export function SeasonHub() {
               className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
             >
               Run Finals Series
+            </button>
+          )}
+          {complete && season.finals && (
+            <button
+              onClick={handleOffSeason}
+              disabled={runningOffSeason}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-50"
+              title="Ages every player a year (see ROADMAP.md's persistence writeup), then opens up a fresh pre-season."
+            >
+              {runningOffSeason ? "Running Off-Season…" : `Start ${year + 1} Off-Season`}
             </button>
           )}
           <button

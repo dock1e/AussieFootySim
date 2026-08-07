@@ -14,6 +14,8 @@ interface TeamPlanState {
   setGameStyle: (clubName: string, style: GameStyle) => void;
   setTactic: (clubName: string, playerId: number, pt: PlayerTactic) => void;
   reset: (clubName: string) => void;
+  /** Bulk-replaces every club's plans at once — used to hydrate from a loaded save, see useSaveStore.ts. */
+  restorePlans: (plans: Record<string, TeamPlan>) => void;
 }
 
 /**
@@ -55,4 +57,6 @@ export const useTeamPlanStore = create<TeamPlanState>((set, get) => ({
       delete next[clubName];
       return { plans: next };
     }),
+
+  restorePlans: (plans) => set({ plans }),
 }));

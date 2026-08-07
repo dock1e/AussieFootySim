@@ -106,6 +106,12 @@ describe("runOffSeasonOnSave", () => {
     const next = runOffSeasonOnSave(save);
     expect(next.contractWindow).toBeNull();
   });
+
+  it("resets tradeWindow to null, same as contractWindow", () => {
+    const save: SaveGameData = { ...makeSave(), tradeWindow: { daysElapsed: 4, activity: [], inbox: [] } };
+    const next = runOffSeasonOnSave(save);
+    expect(next.tradeWindow).toBeNull();
+  });
 });
 
 describe("serializeSave / deserializeSave", () => {
@@ -124,6 +130,11 @@ describe("serializeSave / deserializeSave", () => {
       contractWindow: {
         daysElapsed: 2,
         activity: [{ id: "1-d1", day: 1, kind: "resigned", playerId: 1, playerName: "Test Player", clubName: "Carlton", detail: "Test Player (RFA) re-signs with Carlton for 3 years." }],
+      },
+      tradeWindow: {
+        daysElapsed: 1,
+        activity: [{ id: "t-d1", day: 1, kind: "traded", playerId: 2, playerName: "Trade Target", clubName: "Adelaide", fromClubName: "Carlton", detail: "Adelaide trade Test Player to Carlton for Trade Target." }],
+        inbox: [{ id: "offer-1", day: 1, fromClub: "Carlton", toClub: "Adelaide", theyGivePlayerIds: [3], theyWantPlayerIds: [4], flavourLine: "Trade Target would slot straight into our best 23." }],
       },
     };
   }
@@ -172,6 +183,20 @@ describe("serializeSave / deserializeSave", () => {
     delete wire.contractWindow;
     const restored = deserializeSave(wire);
     expect(restored.contractWindow).toBeNull();
+  });
+
+  it("tradeWindow survives a real JSON round trip untouched (plain data, no Map inside)", () => {
+    const save = richSave();
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored.tradeWindow).toEqual(save.tradeWindow);
+  });
+
+  it("defaults tradeWindow to null for a save written before Phase 4 Slice 4 existed", () => {
+    const wire = JSON.parse(JSON.stringify(serializeSave(richSave())));
+    delete wire.tradeWindow;
+    const restored = deserializeSave(wire);
+    expect(restored.tradeWindow).toBeNull();
   });
 
   it("naive JSON.stringify on the raw (unserialized) save would have silently lost the Map data -- proving serializeSave is load-bearing, not redundant", () => {

@@ -2,13 +2,16 @@ import { create } from "zustand";
 import { ALL_PLAYERS, loadPool, resetPoolToGenerated } from "../data/loadPlayers";
 import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData } from "../engine/saveGame";
 import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
-import { playerFullName } from "../types/player";
+import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
+import { computeLeagueStrategies, buildLeaguePlayersByClub } from "../engine/listNeeds";
+import { playerFullName, type Player } from "../types/player";
 import { CURRENT_SEASON_YEAR } from "../config";
 import { useGameStore } from "./useGameStore";
 import { useSeasonStore } from "./useSeasonStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useTeamPlanStore } from "./useTeamPlanStore";
 import { useContractStore } from "./useContractStore";
+import { useTradeStore } from "./useTradeStore";
 import { readSaveFromDB, writeSaveToDB, clearSaveInDB } from "./db";
 
 /**
@@ -72,6 +75,19 @@ interface SaveStoreState {
   signPlayerAsFreeAgent: (playerId: number, terms: ReSignTerms) => void;
   /** The "Let Assistant Manage" bulk action — simulates one more day of every rival club's contract activity (engine/contracts.ts's `simulateLeagueContracts`), deterministic per (year, day). */
   letAssistantManage: () => void;
+
+  // --- Trade Period (Phase 4 Slice 4) --------------------------------------
+  // Same centralisation rule as Contracts above — every action that mutates
+  // the live player pool lives here, never on useTradeStore directly.
+
+  /** Submits a player-for-player offer from `myClub` to `partnerClub` (Build an Offer's Confirm action) and lets `partnerClub` decide via engine/trade.ts's `evaluateTrade`/`resolveTradeOutcome`. Only actually moves anyone and logs an activity entry if the result is "accepted" — a "countered"/"rejected" result is returned as-is for the UI to display, with no pool mutation. */
+  confirmTrade: (myGivePlayerIds: number[], myGetPlayerIds: number[], partnerClub: string) => TradeOutcome;
+  /** Accepts one of the AI-initiated offers sitting in the Inbox — executes it outright (the AI already proposed it; no further negotiation) and removes it from the Inbox. No-op if the offer's players are no longer where the offer expected (e.g. moved by an unrelated trade since). */
+  acceptInboundOffer: (offerId: string) => void;
+  /** Declines an Inbox offer — just removes it, no pool mutation, no activity log entry (nothing was actually completed). */
+  rejectInboundOffer: (offerId: string) => void;
+  /** The "Simulate a Day" bulk action — runs one more day of AI-vs-AI background trading (engine/trade.ts's `simulateLeagueTrades`) followed by that day's fresh AI-initiated offers into `myClub`'s Inbox (`generateInboundOffers`, evaluated against the post-AI-trades roster), deterministic per (year, day). */
+  simulateTradeDay: () => void;
 }
 
 function snapshotSave(year: number): SaveGameData {
@@ -85,6 +101,7 @@ function snapshotSave(year: number): SaveGameData {
     lineups: useSelectionStore.getState().lineups,
     teamPlans: useTeamPlanStore.getState().plans,
     contractWindow: useContractStore.getState().window,
+    tradeWindow: useTradeStore.getState().window,
   };
 }
 
@@ -94,6 +111,7 @@ function hydrateStoresFrom(save: SaveGameData): void {
   useSelectionStore.getState().restoreLineups(save.lineups);
   useTeamPlanStore.getState().restorePlans(save.teamPlans);
   useContractStore.getState().restoreWindow(save.contractWindow);
+  useTradeStore.getState().restoreWindow(save.tradeWindow);
   if (save.season) {
     useSeasonStore.getState().restoreSeason(save.season);
   } else {
@@ -147,6 +165,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       useTeamPlanStore.subscribe(scheduleAutoSave);
       useGameStore.subscribe(scheduleAutoSave);
       useContractStore.subscribe(scheduleAutoSave);
+      useTradeStore.subscribe(scheduleAutoSave);
     }
   },
 
@@ -171,6 +190,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
     useContractStore.getState().clearWindow();
+    useTradeStore.getState().clearWindow();
     set({ year: next.year, poolVersion: get().poolVersion + 1 });
     await get().saveNow();
   },
@@ -256,6 +276,133 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const { players, activity } = simulateLeagueContracts(ALL_PLAYERS, myClub, year, day, seed);
     loadPool(players);
     useContractStore.getState().logDay(activity);
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  confirmTrade: (myGivePlayerIds, myGetPlayerIds, partnerClub) => {
+    const myClub = useGameStore.getState().myClub;
+    const year = get().year;
+    const giveBefore = myGivePlayerIds.map((id) => ALL_PLAYERS.find((p) => p.PlayerID === id)).filter((p): p is Player => !!p);
+    const getBefore = myGetPlayerIds.map((id) => ALL_PLAYERS.find((p) => p.PlayerID === id)).filter((p): p is Player => !!p);
+    if (giveBefore.length === 0 || getBefore.length === 0) {
+      return { result: "rejected", reason: "Nothing to trade." };
+    }
+
+    const strategies = computeLeagueStrategies(buildLeaguePlayersByClub());
+    const ctx = buildTradeContext(ALL_PLAYERS, year, strategies);
+    const evaluation = evaluateTrade(myClub, partnerClub, giveBefore, getBefore, ctx);
+    const outcome = resolveTradeOutcome(evaluation, myClub, partnerClub, new Set(myGivePlayerIds), getBefore, ctx);
+    if (outcome.result !== "accepted") return outcome;
+
+    let players = executeTrade(ALL_PLAYERS, myClub, partnerClub, new Set(myGivePlayerIds), new Set(myGetPlayerIds));
+    for (const p of giveBefore) useSelectionStore.getState().removePlayer(myClub, p.PlayerID);
+    for (const p of getBefore) useSelectionStore.getState().removePlayer(partnerClub, p.PlayerID);
+
+    // Trade-volume fatigue counts only trades *my* club has actually made
+    // this window (AI-vs-AI background trades never touch myClub, so no
+    // extra filtering is needed beyond "involves myClub").
+    const tradesThisWindow = (useTradeStore.getState().window?.activity ?? []).filter((a) => a.kind === "traded" && (a.clubName === myClub || a.fromClubName === myClub)).length;
+    const penalty = tradeVolumePenalty(tradesThisWindow);
+    if (penalty.moraleImpact !== 0) {
+      players = applyMoraleImpact(players, myClub, penalty.moraleImpact, year);
+    }
+    loadPool(players);
+
+    // Headline the single most valuable player across either side — reads
+    // more like a real trade-day news line than always leading with "my"
+    // outgoing player regardless of who's actually the bigger name.
+    const allMoves = [
+      ...giveBefore.map((p) => ({ player: p, clubName: partnerClub, fromClubName: myClub })),
+      ...getBefore.map((p) => ({ player: p, clubName: myClub, fromClubName: partnerClub })),
+    ];
+    const headline = [...allMoves].sort((a, b) => b.player.totalValue - a.player.totalValue)[0];
+    const giveNames = giveBefore.map(playerFullName).join(", ");
+    const getNames = getBefore.map(playerFullName).join(", ");
+    useTradeStore.getState().logEntry({
+      id: `trade-user-${Date.now()}`,
+      day: useTradeStore.getState().window?.daysElapsed ?? 0,
+      kind: "traded",
+      playerId: headline.player.PlayerID,
+      playerName: playerFullName(headline.player),
+      clubName: headline.clubName,
+      fromClubName: headline.fromClubName,
+      detail: `${myClub} trade ${giveNames} to ${partnerClub} for ${getNames}.${penalty.cultureImpact !== 0 ? ` ${penalty.message}` : ""}`,
+    });
+
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+    return outcome;
+  },
+
+  acceptInboundOffer: (offerId) => {
+    const myClub = useGameStore.getState().myClub;
+    const year = get().year;
+    const offer = useTradeStore.getState().window?.inbox.find((o) => o.id === offerId);
+    if (!offer) return;
+
+    const theyGive = offer.theyGivePlayerIds.map((id) => ALL_PLAYERS.find((p) => p.PlayerID === id)).filter((p): p is Player => !!p);
+    const theyWant = offer.theyWantPlayerIds.map((id) => ALL_PLAYERS.find((p) => p.PlayerID === id)).filter((p): p is Player => !!p);
+    // Defensive: the offer was generated against a past snapshot of the
+    // pool — if any named player has since left their expected club (an
+    // unrelated trade, a delisting), the offer no longer makes sense to
+    // honour literally, so decline rather than execute something else.
+    const stillValid = theyGive.length === offer.theyGivePlayerIds.length && theyWant.length === offer.theyWantPlayerIds.length && theyGive.every((p) => p.Team === offer.fromClub) && theyWant.every((p) => p.Team === myClub);
+    if (!stillValid) {
+      useTradeStore.getState().removeOffer(offerId);
+      return;
+    }
+
+    let players = executeTrade(ALL_PLAYERS, myClub, offer.fromClub, new Set(offer.theyWantPlayerIds), new Set(offer.theyGivePlayerIds));
+    for (const p of theyWant) useSelectionStore.getState().removePlayer(myClub, p.PlayerID);
+    for (const p of theyGive) useSelectionStore.getState().removePlayer(offer.fromClub, p.PlayerID);
+
+    const tradesThisWindow = (useTradeStore.getState().window?.activity ?? []).filter((a) => a.kind === "traded" && (a.clubName === myClub || a.fromClubName === myClub)).length;
+    const penalty = tradeVolumePenalty(tradesThisWindow);
+    if (penalty.moraleImpact !== 0) {
+      players = applyMoraleImpact(players, myClub, penalty.moraleImpact, year);
+    }
+    loadPool(players);
+
+    const allMoves = [
+      ...theyGive.map((p) => ({ player: p, clubName: myClub, fromClubName: offer.fromClub })),
+      ...theyWant.map((p) => ({ player: p, clubName: offer.fromClub, fromClubName: myClub })),
+    ];
+    const headline = [...allMoves].sort((a, b) => b.player.totalValue - a.player.totalValue)[0];
+    useTradeStore.getState().logEntry({
+      id: `trade-inbound-${offerId}`,
+      day: useTradeStore.getState().window?.daysElapsed ?? 0,
+      kind: "traded",
+      playerId: headline.player.PlayerID,
+      playerName: playerFullName(headline.player),
+      clubName: headline.clubName,
+      fromClubName: headline.fromClubName,
+      detail: `${myClub} trade ${theyWant.map(playerFullName).join(", ")} to ${offer.fromClub} for ${theyGive.map(playerFullName).join(", ")}.${penalty.cultureImpact !== 0 ? ` ${penalty.message}` : ""}`,
+    });
+    useTradeStore.getState().removeOffer(offerId);
+
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  rejectInboundOffer: (offerId) => {
+    useTradeStore.getState().removeOffer(offerId);
+    void get().saveNow();
+  },
+
+  simulateTradeDay: () => {
+    const myClub = useGameStore.getState().myClub;
+    const year = get().year;
+    const day = (useTradeStore.getState().window?.daysElapsed ?? 0) + 1;
+    // Deterministic per (year, day) — same rule letAssistantManage follows.
+    const seed = year * 1000 + day;
+    const strategies = computeLeagueStrategies(buildLeaguePlayersByClub());
+    const { players, activity } = simulateLeagueTrades(ALL_PLAYERS, myClub, year, day, seed, strategies);
+    loadPool(players);
+    // Evaluated against the post-AI-trades roster — a fresh day's Inbox
+    // offers should reflect what actually happened earlier that same day.
+    const offers = generateInboundOffers(players, myClub, year, day, seed, strategies);
+    useTradeStore.getState().logDay(activity, offers);
     set({ poolVersion: get().poolVersion + 1 });
     void get().saveNow();
   },

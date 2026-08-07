@@ -16,9 +16,10 @@ import { gapBand, type PillTone } from "./StatusPill";
  * started" gate to be useful; it's a read-only diagnosis of the current
  * list, meaningful to check any time.
  *
- * Footer shortcut into Contracts is real now that it exists (Phase 4 Slice
- * 3) — Trade/Draft still don't, so those two stay omitted rather than
- * rendered as dead buttons, same reasoning as before.
+ * Footer shortcuts into Contracts and Trade are real now that both exist
+ * (Phase 4 Slices 3 and 4) — the National Draft still doesn't, so that one
+ * stays a disclosed note rather than a dead button, same reasoning as
+ * before.
  */
 
 const STRATEGY_TONE: Record<ClubStrategy, PillTone> = {
@@ -32,7 +33,7 @@ const PRIORITY_TONE: Record<RecommendedAction["priority"], PillTone> = {
   PRIORITY: "warn",
 };
 
-export function ListNeeds({ onGoToContracts }: { onGoToContracts?: () => void }) {
+export function ListNeeds({ onGoToContracts, onGoToTrade }: { onGoToContracts?: () => void; onGoToTrade?: () => void }) {
   const myClub = useGameStore((s) => s.myClub);
   const league = useMemo(() => buildLeaguePlayersByClub(), []);
   const report = useMemo(() => computeListNeeds(myClub, league), [myClub, league]);
@@ -149,15 +150,23 @@ export function ListNeeds({ onGoToContracts }: { onGoToContracts?: () => void })
       </div>
 
       {/* User Interface.md specs footer shortcuts into Contracts/Trade/Draft — Contracts
-          is real now (Phase 4 Slice 3), so it gets a real button; Trade/Draft still don't
-          exist, so those stay a disclosed note rather than dead buttons. */}
+          and Trade are both real now (Phase 4 Slices 3 and 4), so they get real buttons;
+          the National Draft still doesn't exist, so it stays a disclosed note rather than
+          a dead button. */}
       <div className="flex flex-col items-center gap-2 text-center text-xs text-slate-500">
-        {onGoToContracts && (
-          <button onClick={onGoToContracts} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
-            Go to Contracts
-          </button>
-        )}
-        <span>Trade Period and the National Draft aren&rsquo;t built yet.</span>
+        <div className="flex flex-wrap justify-center gap-2">
+          {onGoToContracts && (
+            <button onClick={onGoToContracts} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+              Go to Contracts
+            </button>
+          )}
+          {onGoToTrade && (
+            <button onClick={onGoToTrade} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+              Go to Trade Period
+            </button>
+          )}
+        </div>
+        <span>The National Draft isn&rsquo;t built yet.</span>
       </div>
     </div>
   );

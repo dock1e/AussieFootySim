@@ -3,6 +3,7 @@ import type { Season } from "./season.ts";
 import type { TeamPlan, GameStyle, PlayerTactic } from "./tactics.ts";
 import type { Lineup } from "./selection.ts";
 import type { LeagueActivityEntry } from "./contracts.ts";
+import type { TradeOffer } from "./trade.ts";
 import { runOffSeason } from "./progression.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 
@@ -57,6 +58,22 @@ export interface ContractWindow {
   activity: LeagueActivityEntry[];
 }
 
+/**
+ * The current trade period's state — mirrors useTradeStore's `window`, same
+ * "added without bumping SAVE_SCHEMA_VERSION" treatment as ContractWindow
+ * above (a save from before Trade Period existed just has no window in
+ * progress, which is exactly what `deserializeSave` defaults a missing
+ * field to).
+ */
+export interface TradeWindow {
+  /** How many "Simulate a Day" rounds have run this window — User Interface.md "Trade Day X/10". */
+  daysElapsed: number;
+  /** Every League Activity entry logged so far this window — both the user's own completed trades and AI-vs-AI background trades, newest last. Same shared `LeagueActivityEntry` type Contracts uses (Engine.md's own suggestion), so a "traded" entry reads consistently everywhere it's shown. The user's own trade-volume-fatigue count (see engine/trade.ts's `tradeVolumePenalty`) is deliberately NOT a separate stored counter — it's derived by filtering this log for entries that actually involve `myClub`, so it can never drift out of sync with what the Completed Trades log itself displays. */
+  activity: LeagueActivityEntry[];
+  /** AI-initiated offers awaiting the user's Accept/Reject in the Inbox, oldest first. */
+  inbox: TradeOffer[];
+}
+
 export interface SaveGameData {
   schemaVersion: number;
   /** The club the user is coaching this save — mirrors useGameStore's `myClub`. */
@@ -75,6 +92,8 @@ export interface SaveGameData {
   teamPlans: Record<string, TeamPlan>;
   /** Null if no Contracts window has been opened yet this off-season — mirrors useContractStore's `window`. See ContractWindow's own doc comment. */
   contractWindow: ContractWindow | null;
+  /** Null if no Trade Period window has been opened yet this off-season — mirrors useTradeStore's `window`. See TradeWindow's own doc comment. */
+  tradeWindow: TradeWindow | null;
 }
 
 /** A fresh save for a brand-new game — the exact "nothing played yet" state the app already defaults to today, just made explicit and persistable. */
@@ -89,6 +108,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     lineups: {},
     teamPlans: {},
     contractWindow: null,
+    tradeWindow: null,
   };
 }
 
@@ -109,8 +129,9 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
  * already only points at players still actually on that club's list; no
  * separate reconciliation pass is needed here.
  *
- * `contractWindow` resets to null — a new off-season year starts a fresh
- * Contracts window, same as `season` resetting.
+ * `contractWindow`/`tradeWindow` reset to null — a new off-season year
+ * starts fresh Contracts and Trade Period windows, same as `season`
+ * resetting.
  */
 export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   return {
@@ -119,6 +140,7 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     year: save.year + 1,
     season: null,
     contractWindow: null,
+    tradeWindow: null,
     savedAt: new Date().toISOString(),
   };
 }
@@ -155,6 +177,8 @@ export interface SerializedSaveGame {
   teamPlans: Record<string, SerializedTeamPlan>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`/`players`. */
   contractWindow: ContractWindow | null;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `contractWindow`. */
+  tradeWindow: TradeWindow | null;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -177,6 +201,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     lineups: save.lineups,
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
     contractWindow: save.contractWindow,
+    tradeWindow: save.tradeWindow,
   };
 }
 
@@ -212,5 +237,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     lineups: s.lineups ?? {},
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
     contractWindow: s.contractWindow ?? null,
+    tradeWindow: s.tradeWindow ?? null,
   };
 }

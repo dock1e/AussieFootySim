@@ -371,7 +371,7 @@ export function signFreeAgent(player: Player, signingClubName: string, terms: Re
 // League Activity + rival-club AI simulation
 // ---------------------------------------------------------------------------
 
-export type LeagueActivityKind = "resigned" | "delisted" | "signed";
+export type LeagueActivityKind = "resigned" | "delisted" | "signed" | "traded";
 
 export interface LeagueActivityEntry {
   id: string;
@@ -379,9 +379,9 @@ export interface LeagueActivityEntry {
   kind: LeagueActivityKind;
   playerId: number;
   playerName: string;
-  /** The player's club after this event (their new club for a "signed" entry). */
+  /** The player's club after this event (their new club for a "signed"/"traded" entry). */
   clubName: string;
-  /** Only set for "signed" — the club they left, so a free-agency poach can show "ClubB signs Player from ClubA" rather than just "Player joins ClubB". */
+  /** Set for "signed"/"traded" — the club they left, so a poach or a trade can show "ClubB signs/trades for Player from ClubA" rather than just "Player joins ClubB". */
   fromClubName?: string;
   detail: string;
 }

@@ -3,9 +3,8 @@ import type { MatchResult, MatchEvent, BoxScoreLine } from "../engine/match";
 
 /**
  * Turns a fully- or partially-simulated MatchResult into a controllable
- * playback — User Interface.md "Live match screen": Pause, Sim Quarter/Sim
- * Game (approximated here as speed steps), Skip to Full Time, speed
- * multiplier 0.5x/1x/2x/4x/8x.
+ * playback — User Interface.md "Live match screen": Pause, Sim Quarter, Sim
+ * Game, Skip to Full Time, speed multiplier 0.5x/1x/2x/4x/8x/16x.
  *
  * Deliberate architecture: this hook doesn't re-simulate anything itself, it
  * just reveals whatever's in `result.events` at a controllable pace — that's
@@ -22,8 +21,15 @@ import type { MatchResult, MatchEvent, BoxScoreLine } from "../engine/match";
  * from wherever playback had already reached. A genuinely new match-up
  * always has a different seed (or is `null`), so that case still resets
  * exactly as before.
+ *
+ * `skipQuarter` (Phase 7 Slice A, ROADMAP.md) makes "Sim Quarter" real
+ * rather than "approximated here as speed steps" as this comment used to
+ * say — every quarter's events already exist in `result.events` in full the
+ * moment `simulateQuarter` runs (playback just reveals them at a pace), so
+ * jumping straight to the last event of the *current* quarter is a free,
+ * instant index jump, exactly like `skipToFullTime` already was.
  */
-export type PlaybackSpeed = 0.5 | 1 | 2 | 4 | 8;
+export type PlaybackSpeed = 0.5 | 1 | 2 | 4 | 8 | 16;
 const BASE_TICK_MS = 450; // ms between events at 1x — tune freely, purely a UX feel constant
 
 function emptyLine(): BoxScoreLine {
@@ -65,6 +71,8 @@ export interface MatchPlayback {
   pause: () => void;
   setSpeed: (s: PlaybackSpeed) => void;
   skipToFullTime: () => void;
+  /** Jumps straight to the last already-simulated event of the *current* quarter (see this file's own doc comment) — a smaller, quarter-scoped sibling of `skipToFullTime`. */
+  skipQuarter: () => void;
   restart: () => void;
 }
 
@@ -153,6 +161,16 @@ export function useMatchPlayback(result: MatchResult | null, homeIds: Set<number
     skipToFullTime: () => {
       setIsPlaying(false);
       if (result) setCurrentIndex(result.events.length - 1);
+    },
+    skipQuarter: () => {
+      if (!result) return;
+      const q = currentEvent?.quarter ?? 1;
+      let lastIdxForQuarter = currentIndex;
+      for (let i = 0; i < result.events.length; i++) {
+        if (result.events[i].quarter === q) lastIdxForQuarter = i;
+      }
+      setIsPlaying(false);
+      setCurrentIndex((i) => Math.max(i, lastIdxForQuarter));
     },
     restart: () => {
       setIsPlaying(false);

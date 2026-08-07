@@ -14,10 +14,14 @@ import type { Side, Zone } from "./zones.ts";
  * IMPORTANT SIMPLIFICATION, stated up front: the engine (src/engine/match.ts)
  * only tracks a 1-D ball *zone* (0-4, distance from goal), not real 2-D
  * player positions for all 22+22 players. So only the ball and whichever
- * players are named in the *current* event move meaningfully tick to tick —
- * everyone else sits at a static "formation" slot based on their archetype's
- * line. This is honest, deliberate scope: full 2-D positional play is a much
- * bigger engine feature (see ROADMAP.md), not something this renderer fakes.
+ * players are named in the *current* event move *meaningfully* tick to tick
+ * — everyone else sits at a static "formation" slot based on their
+ * archetype's line, plus (since Phase 7 Slice A) a small continuous wander
+ * around that slot so they don't read as frozen. This is honest, deliberate
+ * scope: full 2-D positional play, where formation slots reflect real
+ * assigned positions rather than a coarse 4-line grouping, is a bigger
+ * engine/selection feature (see ROADMAP.md item #7 and Phase 7 Slice B),
+ * not something this renderer fakes.
  */
 export const GROUND_WIDTH = 1000;
 export const GROUND_HEIGHT = 600;
@@ -102,12 +106,44 @@ function formationFor(team: MatchTeam, side: Side): Map<number, DotPosition> {
 }
 
 /**
- * All 44 dot positions for a given moment: static formation, except the
- * player(s) named in `event` (if any) are pulled toward the ball's actual
- * zone and flagged `involved` — that's what actually visibly moves tick to
- * tick, per the "dot positions update per possession-state tick" spec.
+ * Small, deterministic "off-ball wander" so the other 42 players don't sit
+ * frozen at a static formation slot for the whole match — Phase 7 Slice A
+ * (ROADMAP.md), the rendering-only fix for "very lagged, few interim steps."
+ * Deliberately NOT random (`Math.random` would make every consumer of this
+ * function non-reproducible, including anything that ever wants to
+ * screenshot/replay a specific moment) — each player gets a fixed phase
+ * derived from their own PlayerID, so the same player always wanders the
+ * same way relative to their own clock, and different players land out of
+ * phase with each other so the group doesn't visibly move in unison.
  */
-export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: MatchEvent | null): DotPosition[] {
+const DRIFT_RADIUS_X = 9;
+const DRIFT_RADIUS_Y = 13;
+
+function driftOffset(playerId: number, driftTime: number): { dx: number; dy: number } {
+  const phase = (playerId % 997) * 0.0171;
+  return {
+    dx: Math.sin(driftTime * 0.9 + phase) * DRIFT_RADIUS_X,
+    dy: Math.cos(driftTime * 0.7 + phase * 1.33) * DRIFT_RADIUS_Y,
+  };
+}
+
+/**
+ * All 44 dot positions for a given moment: static formation (plus a small
+ * continuous wander for whoever isn't currently named in `event` — see
+ * `driftOffset` above), except the player(s) named in `event` (if any) are
+ * pulled toward the ball's actual zone and flagged `involved`.
+ *
+ * `driftTime` is an optional, continuously-increasing clock (seconds is the
+ * natural unit here since `driftOffset`'s constants were tuned against it,
+ * but nothing here enforces that) — omit it (or pass 0) to reproduce the
+ * exact pre-Phase-7 behaviour byte-for-byte, which every existing caller
+ * (the balance simulator, every scratch/Vitest determinism check) still
+ * does untouched. Only `MatchCanvas.tsx`'s live animation loop passes a real
+ * driftTime, and only to *this* function — the underlying event log and
+ * match simulation in `src/engine/match.ts` are completely unaffected by
+ * this parameter; it only changes what a UI *renders*, never what happened.
+ */
+export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: MatchEvent | null, driftTime = 0): DotPosition[] {
   const homeForm = formationFor(home, "home");
   const awayForm = formationFor(away, "away");
   const all = new Map<number, DotPosition>([...homeForm, ...awayForm]);
@@ -120,6 +156,17 @@ export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: Mat
       const spread = event.playerIds.length > 1 ? (i === 0 ? -16 : 16) : 0;
       all.set(id, { ...existing, x: ballX, y: CENTER_Y + spread, involved: true });
     });
+  }
+
+  if (driftTime !== 0) {
+    for (const [id, dot] of all) {
+      if (dot.involved) continue; // involved players are already headed somewhere specific - don't also wobble them
+      const { dx, dy } = driftOffset(id, driftTime);
+      const halfHeight = maxHalfHeightAt(dot.x) * 0.85; // same taper bound formationFor itself uses
+      const x = Math.min(GROUND_WIDTH - MARGIN, Math.max(MARGIN, dot.x + dx));
+      const y = Math.min(CENTER_Y + halfHeight, Math.max(CENTER_Y - halfHeight, dot.y + dy));
+      all.set(id, { ...dot, x, y });
+    }
   }
 
   return [...all.values()];

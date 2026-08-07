@@ -24,7 +24,7 @@ import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
 import { CoachsCall } from "./CoachsCall";
 
-const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8];
+const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8, 16];
 
 const TEAM_STAT_KEYS = ["disposals", "marks", "tackles", "clearances", "hitouts"] as const;
 
@@ -234,7 +234,7 @@ export function LiveMatch() {
             </div>
           </div>
 
-          <MatchCanvas home={homeTeam} away={awayTeam} event={playback.currentEvent} liveBoxScore={playback.liveBoxScore} />
+          <MatchCanvas home={homeTeam} away={awayTeam} event={playback.currentEvent} liveBoxScore={playback.liveBoxScore} isPlaying={playback.isPlaying} />
 
           {pendingCoachsCall ? (
             <CoachsCall
@@ -266,7 +266,15 @@ export function LiveMatch() {
                   </button>
                 ))}
               </div>
-              <button onClick={skipRestOfMatch} className="ml-auto rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
+              <button
+                onClick={playback.skipQuarter}
+                disabled={playback.isComplete}
+                className="ml-auto rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600 disabled:opacity-40"
+                title="Instantly reveal the rest of this quarter's already-simulated events"
+              >
+                Sim Quarter
+              </button>
+              <button onClick={skipRestOfMatch} className="rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
                 Skip to Full Time
               </button>
               <button onClick={playback.restart} className="rounded-lg bg-base-800 px-4 py-2 text-sm text-slate-400 hover:bg-base-700">

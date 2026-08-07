@@ -70,16 +70,33 @@ export const RE_SIGN_PROBABILITY: Record<Exclude<FreeAgencyStatus, "Signed">, nu
 // ---------------------------------------------------------------------------
 
 /**
- * Engine.md's confirmed reference-site cap figures, adopted directly since
- * Configuration.md leaves the actual dollar figure "optional... totalValue
- * is tracked per player regardless of whether a cap is enforced".
- * `SALARY_FLOOR_PCT` isn't given an exact figure anywhere in the vault
- * beyond "a Floor pass/fail flag exists" — 92.5% is a reasonable, disclosed
- * value in line with real-world soft-floor conventions, not a confirmed
- * reference-site number.
+ * Recalibrated Aug 2026, Tyler's direct call, superseding the original
+ * Engine.md reference-site figure. That original $18.50m figure (still the
+ * confirmed number the *reference site* uses) left every real club reading
+ * over cap out of the box, since `totalValue` was calibrated against real
+ * per-player value percentiles with no total-list constraint in mind (see
+ * ROADMAP.md gap #44) — not a mismatch a single dollar figure from a
+ * different game's own economy was ever going to paper over cleanly.
+ * Rather than recalibrate `totalValue` itself (a bigger, riskier change
+ * touching the already-validated valuation model), Tyler asked for the cap
+ * raised instead, specifically so the richest real club still has "a small
+ * amount of wiggle room... to grow at the top": checked against the real
+ * 751-player pool, the richest club (West Coast) currently commits
+ * $26.333m — $28m clears that with headroom (~94% of cap, ~$1.67m spare),
+ * comfortably above every other real club too, without the number being
+ * arbitrarily huge.
+ *
+ * `SALARY_FLOOR_PCT` moved as a necessary companion, not a second
+ * independent request: at the old 92.5%, the *new*, higher cap's floor
+ * dollar figure would sit above every real club's current wage bill,
+ * flipping the previous "everyone reads OVER CAP" problem into an equally
+ * unhelpful "everyone reads BELOW FLOOR" one. 60% keeps the floor
+ * comfortably under today's real minimum (Collingwood, $18.358m) while
+ * staying a meaningful, non-trivial bar — still not a confirmed
+ * reference-site number, same disclosed-estimate status as before.
  */
-export const SALARY_CAP = 18_500_000;
-export const SALARY_FLOOR_PCT = 0.925;
+export const SALARY_CAP = 28_000_000;
+export const SALARY_FLOOR_PCT = 0.6;
 /** Engine.md's confirmed reference-site football department spending ceiling. */
 export const FOOTBALL_DEPT_CEILING = 1_600_000;
 

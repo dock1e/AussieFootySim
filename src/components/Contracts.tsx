@@ -36,18 +36,17 @@ import { StatusPill, type PillTone } from "./StatusPill";
  * Hub — same reasoning ListNeeds.tsx already gave (see its own doc
  * comment): only some of the 8 Off-Season Hub steps exist so far.
  *
- * **A real, load-bearing finding worth surfacing up front**: every one of
- * the 18 real generated clubs already reads well over the $18.5m reference
- * cap purely from summing existing `totalValue` across a realistic ~40-46
- * player list (Configuration.md's valuation model was calibrated against
- * real per-player value percentiles, never cross-checked against a
- * total-list cap constraint). Rather than hide this or invent an
- * unrequested compression fudge-factor, cap status is shown prominently
- * (an OVER CAP pill) but does NOT block re-signing/free-agency actions —
- * matching how real leagues actually handle a cap breach (penalties/
- * scrutiny after the fact, not a hard transactional block) and avoiding a
- * feature that would be unusable out of the box. See ROADMAP.md's Phase 4
- * Slice 3 gaps for the full writeup.
+ * **Cap resolved, Aug 2026, Tyler's direct call**: the original $18.5m
+ * reference-site figure left every real club reading over cap out of the
+ * box (`totalValue` was never calibrated against a total-list constraint —
+ * see ROADMAP.md gap #44). Rather than recalibrate the valuation model,
+ * `engine/contracts.ts`'s `SALARY_CAP` was raised to $28m instead — enough
+ * that even the richest real club (West Coast, $26.333m committed) has a
+ * small amount of genuine headroom, not just the least-over-cap club. Cap
+ * status still shows prominently (an OVER CAP pill if any club ever does
+ * exceed it) and still doesn't block actions even if one does — matching
+ * how real leagues actually handle a breach (penalties/scrutiny after the
+ * fact, not a hard transactional block).
  */
 
 const STATUS_TONE: Record<FreeAgencyStatus, PillTone> = {

@@ -10,6 +10,17 @@ interface SelectionState {
   setSlot: (clubName: string, slotIndex: number, playerId: number | null) => void;
   autoFill: (clubName: string, players: Player[]) => void;
   clear: (clubName: string) => void;
+  /**
+   * Clears a single player out of `clubName`'s lineup, wherever they
+   * currently sit (on-field or interchange) — a no-op if they're not in it.
+   * Added Phase 4 Slice 3 (Contracts): closes the exact reconciliation gap
+   * ROADMAP.md gap #38 flagged ahead of time ("needs real reconciliation
+   * the moment any system can actually remove a player from a club's
+   * list") — engine/contracts.ts's delist/signFreeAgent are the first such
+   * systems, and useContractStore.ts calls this alongside them so a
+   * delisted or poached player can never linger as a ghost in a lineup.
+   */
+  removePlayer: (clubName: string, playerId: number) => void;
   /** Bulk-replaces every club's lineups at once — used to hydrate from a loaded save, see useSaveStore.ts. */
   restoreLineups: (lineups: Record<string, Lineup>) => void;
 }
@@ -40,6 +51,15 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     set((state) => ({ lineups: { ...state.lineups, [clubName]: autoFillLineup(players) } })),
 
   clear: (clubName) => set((state) => ({ lineups: { ...state.lineups, [clubName]: emptyLineup() } })),
+
+  removePlayer: (clubName, playerId) =>
+    set((state) => {
+      const current = state.lineups[clubName];
+      if (!current) return state;
+      if (!current.includes(playerId)) return state;
+      const next = current.map((id) => (id === playerId ? null : id));
+      return { lineups: { ...state.lineups, [clubName]: next } };
+    }),
 
   restoreLineups: (lineups) => set({ lineups }),
 }));

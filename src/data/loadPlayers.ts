@@ -45,8 +45,21 @@ export function resetPoolToGenerated(): void {
   loadPool(GENERATED_PLAYERS);
 }
 
+/**
+ * Excludes `delisted` players (Phase 4 Slice 3, engine/contracts.ts) —
+ * every existing caller (Squad List, Selection Committee, List Needs,
+ * season simulation, ...) means "who's really on this club's list right
+ * now" when it asks this, and a delisted player, by definition, isn't.
+ * `ALL_PLAYERS` itself still holds their record (see Player.delisted's own
+ * doc comment for why) — this is the one filter point that keeps every
+ * downstream screen honest about it without needing its own repeated
+ * `!p.delisted` check. Contracts.tsx deliberately reads `ALL_PLAYERS`
+ * directly instead of through here, since it's the one screen that
+ * legitimately needs to reason about delisted players (if only to exclude
+ * them from its own lists too, explicitly).
+ */
 export function getPlayersByClub(team: string): Player[] {
-  return ALL_PLAYERS.filter((p) => p.Team === team);
+  return ALL_PLAYERS.filter((p) => p.Team === team && !p.delisted);
 }
 
 export function getPlayerById(id: number): Player | undefined {

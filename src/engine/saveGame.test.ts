@@ -48,6 +48,7 @@ describe("newSaveGame", () => {
     expect(save.season).toBeNull();
     expect(save.lineups).toEqual({});
     expect(save.teamPlans).toEqual({});
+    expect(save.contractWindow).toBeNull();
     expect(save.players).toHaveLength(3);
   });
 
@@ -99,6 +100,12 @@ describe("runOffSeasonOnSave", () => {
     expect(next.teamPlans.Adelaide.gameStyle).toBe(plan.gameStyle);
     expect(next.teamPlans.Adelaide.tactics).toEqual(plan.tactics);
   });
+
+  it("resets contractWindow to null, same as season", () => {
+    const save: SaveGameData = { ...makeSave(), contractWindow: { daysElapsed: 3, activity: [] } };
+    const next = runOffSeasonOnSave(save);
+    expect(next.contractWindow).toBeNull();
+  });
 });
 
 describe("serializeSave / deserializeSave", () => {
@@ -114,6 +121,10 @@ describe("serializeSave / deserializeSave", () => {
       season: minimalSeason([[1, 76], [2, 100], [3, 40]]),
       lineups: { Adelaide: [1, 2, 3, null] },
       teamPlans: { Adelaide: plan1, Carlton: plan2 },
+      contractWindow: {
+        daysElapsed: 2,
+        activity: [{ id: "1-d1", day: 1, kind: "resigned", playerId: 1, playerName: "Test Player", clubName: "Carlton", detail: "Test Player (RFA) re-signs with Carlton for 3 years." }],
+      },
     };
   }
 
@@ -147,6 +158,20 @@ describe("serializeSave / deserializeSave", () => {
     const wire = JSON.parse(JSON.stringify(serializeSave(save)));
     const restored = deserializeSave(wire);
     expect(restored.season).toBeNull();
+  });
+
+  it("contractWindow survives a real JSON round trip untouched (plain data, no Map inside)", () => {
+    const save = richSave();
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored.contractWindow).toEqual(save.contractWindow);
+  });
+
+  it("defaults contractWindow to null for a save written before Phase 4 Slice 3 existed", () => {
+    const wire = JSON.parse(JSON.stringify(serializeSave(richSave())));
+    delete wire.contractWindow;
+    const restored = deserializeSave(wire);
+    expect(restored.contractWindow).toBeNull();
   });
 
   it("naive JSON.stringify on the raw (unserialized) save would have silently lost the Map data -- proving serializeSave is load-bearing, not redundant", () => {

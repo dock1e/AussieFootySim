@@ -4,6 +4,7 @@ import { useGameStore, type SquadSortKey } from "../store/useGameStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { NumberWithPill, fitnessBand, moraleBand } from "./StatusPill";
 import { seedMorale } from "../engine/morale";
+import { freeAgencyStatus } from "../engine/contracts";
 
 /**
  * Squad list — see User Interface.md "Squad list": "A dense, sortable
@@ -26,11 +27,16 @@ import { seedMorale } from "../engine/morale";
  * franchise past its starting year, otherwise every player's contract would
  * keep reading against year one forever. See ROADMAP.md's persistence
  * writeup.
+ *
+ * Once out of contract, the badge now shows the real RFA/UFA/OOC split
+ * (engine/contracts.ts's `freeAgencyStatus`, added Phase 4 Slice 3) instead
+ * of a flat "OOC" — the Contracts tab is where a coach actually acts on it.
  */
 function contractStatus(p: Player, currentYear: number): { label: string; tone: "good" | "warn" | "bad" } {
-  if (p.expired_year < currentYear) return { label: "OOC", tone: "bad" };
   if (p.expired_year === currentYear) return { label: "FINAL YR", tone: "warn" };
-  return { label: `Signed · ${p.expired_year - currentYear}yr`, tone: "good" };
+  if (p.expired_year > currentYear) return { label: `Signed · ${p.expired_year - currentYear}yr`, tone: "good" };
+  const status = freeAgencyStatus(p, currentYear);
+  return { label: status, tone: status === "UFA" ? "bad" : "warn" };
 }
 
 const SORT_ACCESSORS: Record<SquadSortKey, (p: Player) => number | string> = {

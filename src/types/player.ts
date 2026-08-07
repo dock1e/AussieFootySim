@@ -181,6 +181,20 @@ export interface Player extends ImprovementRates, DeclineRates {
   morale?: number;
 
   /**
+   * Optional, added Phase 4 Slice 3 (Contracts) — true once a coach has
+   * delisted this player from `Team`/`ClubID`'s active list via
+   * engine/contracts.ts's `delist()`. `getPlayersByClub` does NOT filter
+   * this out itself (see loadPlayers.ts) — callers that mean "who's
+   * actually on this list right now" (Contracts, Selection, List Needs)
+   * should exclude `delisted` players themselves. Deliberately left in
+   * `ALL_PLAYERS` rather than removed outright: there's no redraft/rookie
+   * mechanic yet for a delisted player to re-enter the competition through,
+   * so removing the record would just destroy data with nowhere for it to
+   * go. A disclosed simplification — see ROADMAP.md's Phase 4 Slice 3 gaps.
+   */
+  delisted?: boolean;
+
+  /**
    * Optional — only populated if a caller merges in the per-player markdown
    * frontmatter tags. The `npm run build:data` pipeline reads only
    * `players_master.csv`, which does not carry this field.

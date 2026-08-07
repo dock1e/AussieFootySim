@@ -2,6 +2,7 @@ import type { Player } from "../types/player.ts";
 import type { Season } from "./season.ts";
 import type { TeamPlan, GameStyle, PlayerTactic } from "./tactics.ts";
 import type { Lineup } from "./selection.ts";
+import type { LeagueActivityEntry } from "./contracts.ts";
 import { runOffSeason } from "./progression.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 
@@ -40,6 +41,22 @@ import { CURRENT_SEASON_YEAR } from "../config.ts";
  */
 export const SAVE_SCHEMA_VERSION = 1;
 
+/**
+ * The current off-season's Contracts state — mirrors useContractStore's
+ * `window`. Added Phase 4 Slice 3 without bumping `SAVE_SCHEMA_VERSION`:
+ * per this constant's own doc comment, a bump is only warranted when old
+ * saved data *can't* just be read as-is, and a save from before Contracts
+ * existed can — it simply has no window in progress, which is exactly what
+ * `deserializeSave` below defaults a missing field to. Same treatment
+ * `lineups`/`teamPlans` already get.
+ */
+export interface ContractWindow {
+  /** How many "Simulate a Day"/"Let Assistant Manage" rounds have run this window — display-capped at 5 (User Interface.md "Contract Day X/5"), but not hard-stopped there; nothing currently forces the window closed. */
+  daysElapsed: number;
+  /** Every League Activity entry logged so far this window, newest last. */
+  activity: LeagueActivityEntry[];
+}
+
 export interface SaveGameData {
   schemaVersion: number;
   /** The club the user is coaching this save — mirrors useGameStore's `myClub`. */
@@ -56,6 +73,8 @@ export interface SaveGameData {
   lineups: Record<string, Lineup>;
   /** Keyed by club name — mirrors useTeamPlanStore's `plans`. */
   teamPlans: Record<string, TeamPlan>;
+  /** Null if no Contracts window has been opened yet this off-season — mirrors useContractStore's `window`. See ContractWindow's own doc comment. */
+  contractWindow: ContractWindow | null;
 }
 
 /** A fresh save for a brand-new game — the exact "nothing played yet" state the app already defaults to today, just made explicit and persistable. */
@@ -69,6 +88,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     season: null,
     lineups: {},
     teamPlans: {},
+    contractWindow: null,
   };
 }
 
@@ -82,11 +102,15 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
  *
  * `lineups`/`teamPlans` deliberately carry over unchanged into the new
  * season — a coach's Selection Committee picks and Standing Game Plan are a
- * reasonable starting point next season too, and every player who existed
- * this season still exists next season (no delisting, retirement, or draft
- * yet — see ROADMAP.md's gap list), so no lineup slot can ever point at a
- * player who's no longer in the pool. Revisit this the moment any of those
- * systems exist for real.
+ * reasonable starting point next season too. Players can now genuinely
+ * leave a club mid-window (Phase 4 Slice 3's delist/free-agency signings),
+ * but `useSelectionStore.removePlayer` already reconciles that live, the
+ * moment it happens — so by the time an off-season step runs, every lineup
+ * already only points at players still actually on that club's list; no
+ * separate reconciliation pass is needed here.
+ *
+ * `contractWindow` resets to null — a new off-season year starts a fresh
+ * Contracts window, same as `season` resetting.
  */
 export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   return {
@@ -94,6 +118,7 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     players: runOffSeason(save.players),
     year: save.year + 1,
     season: null,
+    contractWindow: null,
     savedAt: new Date().toISOString(),
   };
 }
@@ -128,6 +153,8 @@ export interface SerializedSaveGame {
   season: SerializedSeason | null;
   lineups: Record<string, Lineup>;
   teamPlans: Record<string, SerializedTeamPlan>;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`/`players`. */
+  contractWindow: ContractWindow | null;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -149,6 +176,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     season: save.season ? { ...save.season, condition: [...save.season.condition.entries()] } : null,
     lineups: save.lineups,
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
+    contractWindow: save.contractWindow,
   };
 }
 
@@ -183,5 +211,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     season: s.season ? { ...s.season, condition: new Map(s.season.condition) } : null,
     lineups: s.lineups ?? {},
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
+    contractWindow: s.contractWindow ?? null,
   };
 }

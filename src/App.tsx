@@ -5,12 +5,13 @@ import { LiveMatch } from "./components/LiveMatch";
 import { SeasonHub } from "./components/SeasonHub";
 import { SelectionCommittee } from "./components/SelectionCommittee";
 import { ListNeeds } from "./components/ListNeeds";
+import { Contracts } from "./components/Contracts";
 import { useGameStore } from "./store/useGameStore";
 import { useSeasonStore } from "./store/useSeasonStore";
 import { useSaveStore } from "./store/useSaveStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
-type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds";
+type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "contracts";
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
@@ -60,6 +61,7 @@ export default function App() {
               ["season", "Season"],
               ["match", "Match"],
               ["listNeeds", "List Needs"],
+              ["contracts", "Contracts"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -82,7 +84,8 @@ export default function App() {
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
         {screen === "match" && <LiveMatch />}
-        {screen === "listNeeds" && <ListNeeds />}
+        {screen === "listNeeds" && <ListNeeds onGoToContracts={() => setScreen("contracts")} />}
+        {screen === "contracts" && <Contracts />}
       </main>
     </div>
   );

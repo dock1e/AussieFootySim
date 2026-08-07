@@ -1,11 +1,14 @@
 import { create } from "zustand";
 import { ALL_PLAYERS, loadPool, resetPoolToGenerated } from "../data/loadPlayers";
 import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData } from "../engine/saveGame";
+import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
+import { playerFullName } from "../types/player";
 import { CURRENT_SEASON_YEAR } from "../config";
 import { useGameStore } from "./useGameStore";
 import { useSeasonStore } from "./useSeasonStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useTeamPlanStore } from "./useTeamPlanStore";
+import { useContractStore } from "./useContractStore";
 import { readSaveFromDB, writeSaveToDB, clearSaveInDB } from "./db";
 
 /**
@@ -54,6 +57,21 @@ interface SaveStoreState {
   exportJSON: () => string;
   /** Parses and hydrates every store from a previously-exported JSON string, then saves. Throws (caller should catch) if the text isn't a valid, same-schema-version save. */
   importJSON: (text: string) => Promise<void>;
+
+  // --- Contracts, salary cap & free agency (Phase 4 Slice 3) ---------------
+  // Centralised here rather than on useContractStore, matching this file's
+  // own established rule: every action that mutates the live player pool
+  // lives in useSaveStore alongside runOffSeason, the one other step that
+  // already does this — see useContractStore.ts's own doc comment.
+
+  /** Re-signs one of `myClub`'s own out-of-contract players to new terms. No-op if `playerId` isn't found. */
+  reSignPlayer: (playerId: number, terms: ReSignTerms) => void;
+  /** Delists a player from their current club — flags them `delisted` and clears them out of that club's lineup. No-op if `playerId` isn't found. */
+  delistPlayer: (playerId: number) => void;
+  /** Signs a rival club's free agent to `myClub` under new terms — updates their contract AND their club, and clears them out of their old club's lineup. No-op if `playerId` isn't found. */
+  signPlayerAsFreeAgent: (playerId: number, terms: ReSignTerms) => void;
+  /** The "Let Assistant Manage" bulk action — simulates one more day of every rival club's contract activity (engine/contracts.ts's `simulateLeagueContracts`), deterministic per (year, day). */
+  letAssistantManage: () => void;
 }
 
 function snapshotSave(year: number): SaveGameData {
@@ -66,6 +84,7 @@ function snapshotSave(year: number): SaveGameData {
     season: useSeasonStore.getState().season,
     lineups: useSelectionStore.getState().lineups,
     teamPlans: useTeamPlanStore.getState().plans,
+    contractWindow: useContractStore.getState().window,
   };
 }
 
@@ -74,6 +93,7 @@ function hydrateStoresFrom(save: SaveGameData): void {
   useGameStore.getState().setMyClub(save.myClub);
   useSelectionStore.getState().restoreLineups(save.lineups);
   useTeamPlanStore.getState().restorePlans(save.teamPlans);
+  useContractStore.getState().restoreWindow(save.contractWindow);
   if (save.season) {
     useSeasonStore.getState().restoreSeason(save.season);
   } else {
@@ -126,6 +146,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       useSelectionStore.subscribe(scheduleAutoSave);
       useTeamPlanStore.subscribe(scheduleAutoSave);
       useGameStore.subscribe(scheduleAutoSave);
+      useContractStore.subscribe(scheduleAutoSave);
     }
   },
 
@@ -149,6 +170,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
+    useContractStore.getState().clearWindow();
     set({ year: next.year, poolVersion: get().poolVersion + 1 });
     await get().saveNow();
   },
@@ -160,5 +182,81 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     hydrateStoresFrom(save);
     set({ year: save.year, poolVersion: get().poolVersion + 1 });
     await get().saveNow();
+  },
+
+  reSignPlayer: (playerId, terms) => {
+    const year = get().year;
+    const before = ALL_PLAYERS.find((p) => p.PlayerID === playerId);
+    if (!before) return;
+    const after = reSign(before, terms, year);
+    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? after : p)));
+    useContractStore.getState().logEntry({
+      id: `${playerId}-user-${Date.now()}`,
+      day: useContractStore.getState().window?.daysElapsed ?? 0,
+      kind: "resigned",
+      playerId,
+      playerName: playerFullName(after),
+      clubName: after.Team,
+      detail: `${playerFullName(after)} re-signs with ${after.Team} for ${terms.years} year${terms.years === 1 ? "" : "s"}.`,
+    });
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  delistPlayer: (playerId) => {
+    const before = ALL_PLAYERS.find((p) => p.PlayerID === playerId);
+    if (!before) return;
+    const after = delist(before);
+    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? after : p)));
+    useSelectionStore.getState().removePlayer(before.Team, playerId);
+    useContractStore.getState().logEntry({
+      id: `${playerId}-user-${Date.now()}`,
+      day: useContractStore.getState().window?.daysElapsed ?? 0,
+      kind: "delisted",
+      playerId,
+      playerName: playerFullName(after),
+      clubName: before.Team,
+      detail: `${playerFullName(after)} is delisted by ${before.Team}.`,
+    });
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  signPlayerAsFreeAgent: (playerId, terms) => {
+    const myClub = useGameStore.getState().myClub;
+    const year = get().year;
+    const before = ALL_PLAYERS.find((p) => p.PlayerID === playerId);
+    if (!before) return;
+    const fromClub = before.Team;
+    const after = signFreeAgent(before, myClub, terms, year);
+    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? after : p)));
+    useSelectionStore.getState().removePlayer(fromClub, playerId);
+    useContractStore.getState().logEntry({
+      id: `${playerId}-user-${Date.now()}`,
+      day: useContractStore.getState().window?.daysElapsed ?? 0,
+      kind: "signed",
+      playerId,
+      playerName: playerFullName(after),
+      clubName: myClub,
+      fromClubName: fromClub,
+      detail: `${myClub} signs ${playerFullName(after)} from ${fromClub} as a free agent.`,
+    });
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
+  },
+
+  letAssistantManage: () => {
+    const myClub = useGameStore.getState().myClub;
+    const year = get().year;
+    const day = (useContractStore.getState().window?.daysElapsed ?? 0) + 1;
+    // Deterministic per (year, day) — same "explicit, reproducible seed"
+    // rule every other stochastic engine step follows (Engine.md "Tech
+    // stack"), not Date.now()/Math.random().
+    const seed = year * 1000 + day;
+    const { players, activity } = simulateLeagueContracts(ALL_PLAYERS, myClub, year, day, seed);
+    loadPool(players);
+    useContractStore.getState().logDay(activity);
+    set({ poolVersion: get().poolVersion + 1 });
+    void get().saveNow();
   },
 }));

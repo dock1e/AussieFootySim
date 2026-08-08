@@ -2,11 +2,14 @@ import { describe, it, expect } from "vitest";
 import { mulberry32 } from "./rng";
 import { simulateMatch, startMatch, simulateQuarter, setGameStyle, getGameStyle, matchResultSoFar } from "./match";
 import { pickBest22 } from "./team";
+import type { MatchTeam } from "./team";
 import { sanitizePlan } from "./tactics";
 import type { TeamPlan } from "./tactics";
+import { autoFillLineup, lineupToMatchTeam } from "./selection";
 import { makePlayer } from "../testUtils/makePlayer";
 import type { Player } from "../types/player";
 import type { Archetype } from "../types/archetype";
+import type { Position } from "../types/archetype";
 
 /** Builds a full, valid 40-player club pool spread realistically across the four lines, so pickBest22 has enough of each to fill its targets. */
 function makeClubPool(clubName: string): Player[] {
@@ -241,5 +244,66 @@ describe("quarter-by-quarter simulation (quarter-time Coach's Call support)", ()
 
     const baseline = simulateMatch(home, away, mulberry32(seed), seed, {});
     expect(matchResultSoFar(match)).toEqual(baseline);
+  });
+});
+
+/** Finds the PlayerID assigned to a given real position in a MatchTeam built via autoFillLineup/lineupToMatchTeam — throws if that slot somehow wasn't filled, since every test below depends on it existing. */
+function findByPosition(team: MatchTeam, position: Position): number {
+  for (const [id, pos] of team.positions ?? []) {
+    if (pos === position) return id;
+  }
+  throw new Error(`findByPosition: no player assigned to ${position} in ${team.name}`);
+}
+
+describe("Phase 8: position-weighted involvement (engine/involvement.ts wired into match.ts)", () => {
+  // A real, suitability-aware lineup (not pickBest22) so `positions` is
+  // actually populated — see engine/selection.ts's lineupToMatchTeam and
+  // Tactics and Positional Play.md "Phase 8".
+  const homePool = makeClubPool("Home");
+  const awayPool = makeClubPool("Away");
+  const home = lineupToMatchTeam("Home", autoFillLineup(homePool), homePool);
+  const away = lineupToMatchTeam("Away", autoFillLineup(awayPool), awayPool);
+
+  it("lineupToMatchTeam actually populates real position data for a full 22", () => {
+    expect(home.positions?.size).toBe(22);
+    expect(findByPosition(home, "FB")).toBeDefined();
+    expect(findByPosition(home, "FF")).toBeDefined();
+  });
+
+  it("the real FB is measurably more involved in defensive-50 events than the real FF, and vice versa in forward-50, aggregated across many seeds", () => {
+    const homeFbId = findByPosition(home, "FB");
+    const homeFfId = findByPosition(home, "FF");
+
+    let fbInDef50 = 0;
+    let ffInDef50 = 0;
+    let fbInFwd50 = 0;
+    let ffInFwd50 = 0;
+
+    const N = 30;
+    for (let i = 0; i < N; i++) {
+      const seed = 20000 + i;
+      const result = simulateMatch(home, away, mulberry32(seed), seed, { recordEvents: true });
+      for (const ev of result.events) {
+        if (ev.zone === 0) {
+          if (ev.playerIds.includes(homeFbId)) fbInDef50++;
+          if (ev.playerIds.includes(homeFfId)) ffInDef50++;
+        }
+        if (ev.zone === 4) {
+          if (ev.playerIds.includes(homeFbId)) fbInFwd50++;
+          if (ev.playerIds.includes(homeFfId)) ffInFwd50++;
+        }
+      }
+    }
+
+    // Both should show up sometimes (the fallback floor keeps this from
+    // being a hard lock) but the real position should dominate its own zone.
+    expect(fbInDef50).toBeGreaterThan(ffInDef50);
+    expect(ffInFwd50).toBeGreaterThan(fbInFwd50);
+  });
+
+  it("a team built without real position data (pickBest22) still simulates fine, falling back to archetype-only weighting", () => {
+    const bestBest = pickBest22("BestOnly", makeClubPool("BestOnly"));
+    expect(bestBest.positions).toBeUndefined();
+    expect(() => simulateMatch(bestBest, away, mulberry32(1), 1)).not.toThrow();
   });
 });

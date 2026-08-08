@@ -29,7 +29,8 @@ export function emptyLineup(): Lineup {
   return POSITIONS.map(() => null);
 }
 
-const SUITABILITY_RANK: Record<Suitability, number> = {
+/** Exported for reuse by `engine/involvement.ts` — the same Very/Somewhat/Barely/Not tiering doubles as the numeric weight a position-suitable player gets favoured with when match.ts picks who's actually involved in a live event (see ROADMAP.md "Phase 8"), not just how good an auto-fill placement is. */
+export const SUITABILITY_RANK: Record<Suitability, number> = {
   "Very suitable": 3,
   "Somewhat suitable": 2,
   "Barely suitable": 1,
@@ -78,19 +79,29 @@ export function lineupPlayerIds(lineup: Lineup): number[] {
   return lineup.filter((id): id is number => id !== null);
 }
 
-/** Turns a completed lineup into the MatchTeam shape match.ts consumes. Falls back to best-available top-up for any still-empty slots so a match can always kick off with 22, same top-up spirit as pickBest22. */
+/**
+ * Turns a completed lineup into the MatchTeam shape match.ts consumes.
+ * Falls back to best-available top-up for any still-empty slots so a match
+ * can always kick off with 22, same top-up spirit as pickBest22 — a topped-up
+ * player has no real assigned slot, so (like an INT-slotted player) they
+ * simply have no entry in `positions`, and `engine/involvement.ts` falls
+ * back to their archetype's own implied zone for them, same as it always did
+ * before `positions` existed.
+ */
 export function lineupToMatchTeam(clubName: string, lineup: Lineup, allClubPlayers: readonly Player[]): MatchTeam {
   const byId = new Map(allClubPlayers.map((p) => [p.PlayerID, p]));
   const picked: Player[] = [];
   const pickedIds = new Set<number>();
-  for (const id of lineup) {
-    if (id === null) continue;
+  const positions = new Map<number, Position>();
+  lineup.forEach((id, i) => {
+    if (id === null) return;
     const p = byId.get(id);
     if (p && !pickedIds.has(id)) {
       picked.push(p);
       pickedIds.add(id);
+      positions.set(id, POSITIONS[i]);
     }
-  }
+  });
   if (picked.length < 22) {
     const remaining = [...allClubPlayers].filter((p) => !pickedIds.has(p.PlayerID)).sort((a, b) => b.OVR - a.OVR);
     for (const p of remaining) {
@@ -99,7 +110,7 @@ export function lineupToMatchTeam(clubName: string, lineup: Lineup, allClubPlaye
       pickedIds.add(p.PlayerID);
     }
   }
-  return { name: clubName, players: picked.slice(0, 22) };
+  return { name: clubName, players: picked.slice(0, 22), positions };
 }
 
 /** Convenience: the existing pickBest22 stand-in, exposed here too so callers can offer "reset to auto-pick" without importing team.ts directly. */

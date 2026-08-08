@@ -1,11 +1,11 @@
 import type { Player } from "../types/player.ts";
 import type { Archetype } from "../types/archetype.ts";
 import type { Rng } from "./rng.ts";
-import { rngChoice } from "./rng.ts";
 import { computeContestRating, resolveContest, resolveThreshold } from "./contest.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating } from "./team.ts";
+import { weightedPlayerChoice } from "./involvement.ts";
 import {
   tacticGroupFor,
   defaultTacticFor,
@@ -313,7 +313,12 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const carrierTactic = tacticFor(possessingPlan, carrier);
   const tag = defendingPlan ? resolveTagger(defendingPlan, carrier.PlayerID) : null;
   const tagger = tag ? defendingTeam.players.find((p) => p.PlayerID === tag.taggerId) : undefined;
-  const defender = tagger ?? rngChoice(ctx.rng, defendingTeam.players);
+  // Phase 8 Slice B: absent a tagger, the defender rep is no longer a
+  // uniform pick across all 22 — weighted by real involvement plausibility
+  // for the ball's *current* zone (see engine/involvement.ts), so a Key
+  // Defender is actually the likely defender deep in defensive 50, not
+  // exactly as likely as a Small Forward the way a uniform pick made them.
+  const defender = tagger ?? weightedPlayerChoice(ctx.rng, defendingTeam, state.zone);
   const defenderTactic = tacticFor(defendingPlan, defender);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
 
@@ -377,7 +382,9 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   if (ctx.rng() < contestChance) {
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
-  const newCarrier = rngChoice(ctx.rng, possessingTeam.players);
+  // Weighted by involvement at the zone the ball just advanced *to* — see
+  // engine/involvement.ts.
+  const newCarrier = weightedPlayerChoice(ctx.rng, possessingTeam, newZone);
   return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier };
 }
 
@@ -390,8 +397,12 @@ function runContest(ctx: Ctx, state: State): State {
   const defendingPlan = planFor(ctx, defendingSide);
 
   const contestType = isForward50(state.zone, attackingSide) ? "markContested" : "groundBall";
-  const attackerRep = rngChoice(ctx.rng, attackingTeam.players);
-  const defenderRep = rngChoice(ctx.rng, defendingTeam.players);
+  // Both reps weighted by involvement at the contest's own zone (see
+  // engine/involvement.ts) rather than a uniform pick across all 22 — e.g. a
+  // marking contest inside forward 50 now actually favours a Key Forward as
+  // the attacking rep, not any of the 22 equally.
+  const attackerRep = weightedPlayerChoice(ctx.rng, attackingTeam, state.zone);
+  const defenderRep = weightedPlayerChoice(ctx.rng, defendingTeam, state.zone);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
   const attackerMult =
     contestRatingMultiplier(tacticFor(attackingPlan, attackerRep), contestType, "attacker") *
@@ -497,8 +508,10 @@ function runShot(ctx: Ctx, state: State): State {
 
   // Behind or miss -> kick-in for the defending side, from the same zone
   // (the shooter's forward-50 is the defender's own defensive-50 already).
+  // Weighted the same way as every other rep pick — a real defender is now
+  // actually the likely kick-in taker, not any of the 22 equally.
   const newSide = otherSide(state.possession);
-  const kickInTaker = rngChoice(ctx.rng, teamOf(ctx, newSide).players);
+  const kickInTaker = weightedPlayerChoice(ctx.rng, teamOf(ctx, newSide), state.zone);
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: kickInTaker };
 }
 

@@ -25,10 +25,13 @@ import {
   RUCK_TACTICS,
   DEFENDER_TACTICS,
   GAME_STYLES,
+  chooseGameStyleForClub,
+  aiTeamPlan,
   type TeamPlan,
 } from "./tactics";
 import { ARCHETYPES, type Archetype } from "../types/archetype";
 import { makePlayer } from "../testUtils/makePlayer";
+import type { Player } from "../types/player";
 
 describe("tacticGroupFor / tacticsFor / defaultTacticFor", () => {
   it("assigns every one of the 14 archetypes to exactly one of the 5 groups", () => {
@@ -198,5 +201,60 @@ describe("game style multipliers — Balanced is always a no-op", () => {
   it("Spread the Ground reduces how often a disposal becomes a contest; Chip & Mark reduces forward-entry tempo", () => {
     expect(gameStyleContestChanceMultiplier("Spread the Ground")).toBeLessThan(1);
     expect(gameStyleForwardEntryMultiplier("Chip & Mark")).toBeLessThan(1);
+  });
+});
+
+describe("chooseGameStyleForClub / aiTeamPlan (Phase 8: AI-controlled clubs get a real, roster-driven plan)", () => {
+  const LEAGUE_AVG = 50;
+
+  function makePool(ovrByLine: { Defence: number; Midfield: number; Forwards: number; Ruck: number }): Player[] {
+    const archetypesByLine: Record<keyof typeof ovrByLine, Archetype[]> = {
+      Defence: ["Key Defender", "Medium Defender", "Intercept Defender", "Half Back Flanker", "Back Pocket"],
+      Midfield: ["Inside Mid", "Outside Mid"],
+      Forwards: ["Key Forward", "Medium Forward", "Small Forward", "Pressure Forward", "Hybrid Mid Forward"],
+      Ruck: ["Ruck", "Hybrid Key Forward Ruck"],
+    };
+    const players: Player[] = [];
+    let id = 1;
+    for (const line of Object.keys(archetypesByLine) as (keyof typeof ovrByLine)[]) {
+      for (const archetype of archetypesByLine[line]) {
+        for (let i = 0; i < 3; i++) {
+          players.push(makePlayer({ PlayerID: id++, archetype, OVR: ovrByLine[line] }));
+        }
+      }
+    }
+    return players;
+  }
+
+  it("picks Defensive Flood for a club with a notably weak defence", () => {
+    const pool = makePool({ Defence: 40, Midfield: 50, Forwards: 50, Ruck: 50 });
+    expect(chooseGameStyleForClub(pool, LEAGUE_AVG)).toBe("Defensive Flood");
+  });
+
+  it("picks Forward Press for a notably strong forward line with an ordinary defence", () => {
+    const pool = makePool({ Defence: 50, Midfield: 50, Forwards: 60, Ruck: 50 });
+    expect(chooseGameStyleForClub(pool, LEAGUE_AVG)).toBe("Forward Press");
+  });
+
+  it("picks Attack the Middle for a notably strong midfield with an ordinary defence and forward line", () => {
+    const pool = makePool({ Defence: 50, Midfield: 60, Forwards: 50, Ruck: 50 });
+    expect(chooseGameStyleForClub(pool, LEAGUE_AVG)).toBe("Attack the Middle");
+  });
+
+  it("picks Spread the Ground for a notably weak forward line with an ordinary defence and midfield", () => {
+    const pool = makePool({ Defence: 50, Midfield: 50, Forwards: 40, Ruck: 50 });
+    expect(chooseGameStyleForClub(pool, LEAGUE_AVG)).toBe("Spread the Ground");
+  });
+
+  it("picks Balanced when nothing about the roster stands out", () => {
+    const pool = makePool({ Defence: 50, Midfield: 50, Forwards: 50, Ruck: 50 });
+    expect(chooseGameStyleForClub(pool, LEAGUE_AVG)).toBe("Balanced");
+  });
+
+  it("aiTeamPlan pairs the chosen style with an empty tactics map — sanitizePlan (already run inside match.ts's startMatch) fills every player in with their own archetype's real default from there", () => {
+    const pool = makePool({ Defence: 40, Midfield: 50, Forwards: 50, Ruck: 50 });
+    const plan = aiTeamPlan(pool, LEAGUE_AVG);
+    expect(plan.gameStyle).toBe("Defensive Flood");
+    expect(plan.tactics.size).toBe(0);
   });
 });

@@ -3,7 +3,7 @@ import type { Archetype } from "../types/archetype.ts";
 import type { MatchTeam } from "./team.ts";
 import type { MatchEvent } from "./match.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
-import type { Side, Zone } from "./zones.ts";
+import { ZONE_FOR_LINE as LINE_ZONE, type Side, type Zone } from "./zones.ts";
 
 /**
  * Ground-shape geometry and dot placement for the Canvas match renderer —
@@ -51,11 +51,12 @@ export function maxHalfHeightAt(x: number): number {
 
 export const CENTER_Y = GROUND_HEIGHT / 2;
 
-// Each line's "home" x-position, expressed as a zone — mirrored for the away
-// side, since their attacking direction runs the opposite way (zones.ts:
-// zone 0 is always *home*'s defensive 50, regardless of which side has it).
-const LINE_ZONE: Record<Line, Zone> = { Defence: 0, Midfield: 2, Forwards: 4, Ruck: 2 };
-
+// Each line's "home" x-position, expressed as a zone (imported as LINE_ZONE
+// from zones.ts's own ZONE_FOR_LINE, shared with engine/involvement.ts so
+// the renderer and the real gameplay effect can't drift apart) — mirrored
+// for the away side below, since their attacking direction runs the
+// opposite way (zones.ts: zone 0 is always *home*'s defensive 50,
+// regardless of which side has it).
 function lineZoneFor(side: Side, line: Line): Zone {
   const z = LINE_ZONE[line];
   if (side === "home") return z;

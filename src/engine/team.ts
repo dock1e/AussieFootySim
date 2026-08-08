@@ -1,10 +1,24 @@
 import type { Player } from "../types/player.ts";
-import type { Archetype } from "../types/archetype.ts";
+import type { Archetype, Position } from "../types/archetype.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 
 export interface MatchTeam {
   name: string;
   players: Player[]; // exactly 22, the simulated match-day list
+  /**
+   * PlayerID -> the real on-field slot (FB, CHF, whatever) that player is
+   * assigned to, when known — see `engine/selection.ts`'s `lineupToMatchTeam`
+   * (populated from a real Lineup) and `autoFillLineup` (the suitability-aware
+   * auto-pick, now used for AI-controlled clubs too, not just a human coach's
+   * Selection Committee — see ROADMAP.md "Phase 8"). Optional and additive:
+   * `pickBest22` below still doesn't populate it, so any existing caller that
+   * only ever produced a bare `{name, players}` (the balance simulator,
+   * scratch scripts, tests) keeps working byte-identically. `engine/match.ts`
+   * treats a missing map, or a player missing from it, exactly like a missing
+   * `Position` for `engine/involvement.ts`'s weighting — falls back to the
+   * player's archetype-implied zone rather than erroring.
+   */
+  positions?: Map<number, Position>;
 }
 
 /**

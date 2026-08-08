@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { CLUBS } from "../types/club";
 import { getPlayersByClub } from "../data/loadPlayers";
-import { pickBest22, type MatchTeam } from "../engine/team";
-import { isLineupComplete, lineupToMatchTeam } from "../engine/selection";
+import type { MatchTeam } from "../engine/team";
+import { autoFillLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
 import {
   simulateMatch,
   startMatch,
@@ -51,13 +51,13 @@ export function LiveMatch() {
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
 
-  /** Uses the coach's own Selection Committee lineup when it's their club and it's complete; every other club still falls back to the OVR-only auto-pick (see ROADMAP.md gap #16). */
+  /** Uses the coach's own Selection Committee lineup when it's their club and it's complete; every other club falls back to the same real, suitability-aware auto-fill (`autoFillLineup`) an AI club gets in season simulation now — see engine/season.ts's `buildTeams` and [[Tactics and Positional Play]] — rather than the old coarse OVR-only `pickBest22`. */
   function resolveTeam(clubName: string): MatchTeam {
     const clubPlayers = getPlayersByClub(clubName);
     if (clubName === myClub && myLineup && isLineupComplete(myLineup)) {
       return lineupToMatchTeam(clubName, myLineup, clubPlayers);
     }
-    return pickBest22(clubName, clubPlayers);
+    return lineupToMatchTeam(clubName, autoFillLineup(clubPlayers), clubPlayers);
   }
 
   const homeTeam = useMemo(() => resolveTeam(homeClub), [homeClub, myClub, myLineup]);

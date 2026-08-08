@@ -10,9 +10,9 @@ import {
   type Season,
 } from "../engine/season";
 import type { MatchTeam } from "../engine/team";
-import type { TeamPlan } from "../engine/tactics";
+import { aiTeamPlan, type TeamPlan } from "../engine/tactics";
 import { isLineupComplete, lineupToMatchTeam } from "../engine/selection";
-import { getPlayersByClub } from "../data/loadPlayers";
+import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
 import { useGameStore } from "./useGameStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useTeamPlanStore } from "./useTeamPlanStore";
@@ -25,7 +25,7 @@ interface SeasonStoreState {
   simulateNextRound: () => void;
   simulateAllRemaining: () => void;
   playFinals: () => void;
-  /** Hydrates a Season loaded from a save — see useSaveStore.ts. Rebuilds `teams` the same way startNewSeason does (my-club override from the current Selection Committee lineup, everyone else pickBest22) rather than persisting `teams` itself, since it's always cheaply re-derivable and persisting it too would just be redundant, staler-prone state. */
+  /** Hydrates a Season loaded from a save — see useSaveStore.ts. Rebuilds `teams` the same way startNewSeason does (my-club override from the current Selection Committee lineup, everyone else the real suitability-aware auto-fill — see engine/season.ts's `buildTeams`) rather than persisting `teams` itself, since it's always cheaply re-derivable and persisting it too would just be redundant, staler-prone state. */
   restoreSeason: (season: Season) => void;
   /** Back to "no season in progress" — used after a real off-season step (see useSaveStore.ts's runOffSeason) so SeasonHub's existing empty-state flow runs again fresh. */
   clearSeason: () => void;
@@ -46,20 +46,35 @@ function buildTeamsForMyClub(): Map<number, MatchTeam> {
 
 /**
  * The { clubId -> TeamPlan } map handed to every round-simulation call —
- * just the user's own club's Standing Game Plan (useTeamPlanStore.ts), if
- * they've set one. Read fresh on every call rather than cached on the
- * season, so editing the plan on the Selection tab mid-season takes effect
- * from the next unsimulated round on, no new season required — unlike team
- * selection below, which Engine.md's own design treats as a much less
- * frequent decision. Every other club still always plays with no plan
- * (ROADMAP.md gap #22 — no AI-side tactics yet).
+ * every club gets a real, non-null plan now, not just "yours" (Phase 8, see
+ * [[Tactics and Positional Play]]). Before this, any club without an
+ * explicit plan played fully tactics-inert — not "using the default style",
+ * genuinely no per-player tactic or game-style effect active at all, since
+ * `tacticFor`/`styleFor` in match.ts only fall back to a sensible default
+ * once *some* plan object is supplied (see tactics.ts's own doc comments).
+ * Your own club still uses its Standing Game Plan (useTeamPlanStore.ts) if
+ * you've set one; every other club — and your own, if you haven't set one
+ * yet — gets `aiTeamPlan`'s roster-shape-driven default (engine/tactics.ts),
+ * built fresh from `leagueAverageOvr()` and each club's current list rather
+ * than a single style repeated 18 times over. Read fresh on every call
+ * rather than cached on the season, so editing your own plan on the
+ * Selection tab mid-season takes effect from the next unsimulated round on,
+ * no new season required — unlike team selection below, which Engine.md's
+ * own design treats as a much less frequent decision.
  */
 function currentPlans(): Map<number, TeamPlan> {
   const myClub = useGameStore.getState().myClub;
-  const clubId = clubByName(myClub)?.ClubID;
-  const plan = useTeamPlanStore.getState().planFor(myClub);
+  const myClubId = clubByName(myClub)?.ClubID;
+  const myPlan = useTeamPlanStore.getState().planFor(myClub);
+  const leagueAvgOvr = leagueAverageOvr();
   const plans = new Map<number, TeamPlan>();
-  if (plan && clubId !== undefined) plans.set(clubId, plan);
+  for (const club of CLUBS) {
+    if (club.ClubID === myClubId && myPlan) {
+      plans.set(club.ClubID, myPlan);
+      continue;
+    }
+    plans.set(club.ClubID, aiTeamPlan(getPlayersByClub(club.name), leagueAvgOvr));
+  }
   return plans;
 }
 
@@ -81,9 +96,12 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
 
   startNewSeason: (seed = Math.floor(Math.random() * 1_000_000_000)) => {
     // The user's own club fields its completed Selection Committee lineup
-    // instead of the pickBest22 fallback — same resolution LiveMatch.tsx's
+    // instead of the auto-fill fallback — same resolution LiveMatch.tsx's
     // resolveTeam() already does for the Match tab. Everyone else still
-    // always auto-picks (gap #22).
+    // always auto-picks (a real, suitability-aware lineup as of Phase 8 —
+    // see engine/season.ts's buildTeams — just not a human-edited one; no
+    // AI-side Selection Committee UI exists, gap #22 still stands for that
+    // specific piece).
     const clubIds = CLUBS.map((c) => c.ClubID);
     set({ season: initSeason(seed, clubIds), teams: buildTeamsForMyClub() });
   },

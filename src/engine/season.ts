@@ -1,6 +1,6 @@
 import { CLUBS, clubById } from "../types/club.ts";
 import { getPlayersByClub } from "../data/loadPlayers.ts";
-import { pickBest22, type MatchTeam } from "./team.ts";
+import type { MatchTeam } from "./team.ts";
 import { simulateMatch, type MatchResult } from "./match.ts";
 import { mulberry32 } from "./rng.ts";
 import { generateFixture, matchesInRound, SEASON_ROUNDS, type FixtureMatch } from "./fixture.ts";
@@ -8,6 +8,7 @@ import { computeLadder, top8, type LadderRow, type MatchOutcome } from "./ladder
 import { runFinalsSeries, type FinalsSeriesResult } from "./finals.ts";
 import type { TeamPlan } from "./tactics.ts";
 import { updateConditionAfterRound } from "./progression.ts";
+import { autoFillLineup, lineupToMatchTeam } from "./selection.ts";
 
 /**
  * Season orchestration — ties fixture.ts + match.ts + ladder.ts + finals.ts
@@ -23,12 +24,18 @@ import { updateConditionAfterRound } from "./progression.ts";
  * match.ts's own `homePlan`/`awayPlan` already established) — see
  * useSeasonStore.ts for where they're actually populated from the Selection
  * Committee lineup / standing game plan for whichever club the UI treats as
- * "yours". Every *other* club still always fields `pickBest22` with no
- * plan — there's no AI-side Selection Committee or tactics decision-making
- * yet (see ROADMAP.md gap #22). Teams are still picked once at season start
- * and held fixed for its duration (gap #16) — only plans are re-read fresh
- * each round, since Engine.md frames tactics/game-style as something a coach
- * can reasonably change week to week, unlike a roster pick.
+ * "yours". Every *other* club is AI-controlled: it still doesn't get its own
+ * Selection Committee UI or a coach making live tactical calls (see
+ * ROADMAP.md gap #22 — that's a genuinely different, bigger feature), but as
+ * of Phase 8 (see [[Tactics and Positional Play]]) it does get a real,
+ * suitability-aware 22-slot lineup (`autoFillLineup`, the same auto-pick a
+ * human coach's own "Auto-fill" button uses) instead of the old coarse
+ * line-target `pickBest22`, and a real tactics/game-style plan built from its
+ * own roster shape — see `useSeasonStore.ts`'s `currentPlans()`. Teams are
+ * still picked once at season start and held fixed for its duration (gap
+ * #16) — only plans are re-read fresh each round, since Engine.md frames
+ * tactics/game-style as something a coach can reasonably change week to
+ * week, unlike a roster pick.
  *
  * `Season.condition` (PlayerID -> condition, see engine/progression.ts) is
  * carried on the `Season` itself rather than threaded as a caller-supplied
@@ -78,7 +85,17 @@ export interface Season {
   condition: Map<number, number>;
 }
 
-/** `overrides` lets a caller supply a specific MatchTeam for a club (e.g. a completed Selection Committee lineup) instead of the `pickBest22` fallback — any club not present in `overrides` is unaffected. */
+/**
+ * `overrides` lets a caller supply a specific MatchTeam for a club (e.g. a
+ * completed Selection Committee lineup) instead of the AI auto-pick fallback
+ * — any club not present in `overrides` is unaffected. The fallback itself
+ * is `autoFillLineup` (a real, suitability-aware walk of the actual 18-slot
+ * + interchange structure — every AI club fields a genuine positional
+ * lineup, not just a coarse per-line OVR sort) run through
+ * `lineupToMatchTeam`, so the resulting `MatchTeam` also carries real
+ * per-player position data for `engine/involvement.ts`'s zone-weighted
+ * picks (Phase 8 Slice B) to use — see [[Tactics and Positional Play]].
+ */
 export function buildTeams(clubIds: number[], overrides?: Map<number, MatchTeam>): Map<number, MatchTeam> {
   const map = new Map<number, MatchTeam>();
   for (const id of clubIds) {
@@ -89,7 +106,8 @@ export function buildTeams(clubIds: number[], overrides?: Map<number, MatchTeam>
     }
     const club = clubById(id);
     if (!club) continue;
-    map.set(id, pickBest22(club.name, getPlayersByClub(club.name)));
+    const players = getPlayersByClub(club.name);
+    map.set(id, lineupToMatchTeam(club.name, autoFillLineup(players), players));
   }
   return map;
 }

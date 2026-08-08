@@ -1,5 +1,6 @@
 import type { Archetype } from "../types/archetype.ts";
 import type { Player } from "../types/player.ts";
+import { summariseLines, bandForGap, type Line } from "../data/lines.ts";
 
 /**
  * Per-player tactics and team-wide game styles — Engine.md "Tactics system"
@@ -107,6 +108,48 @@ export interface TeamPlan {
 
 export function defaultTeamPlan(): TeamPlan {
   return { gameStyle: DEFAULT_GAME_STYLE, tactics: new Map() };
+}
+
+/**
+ * A real, roster-shape-driven default game style — Phase 8 (see
+ * [[Tactics and Positional Play]]): AI-controlled clubs previously played
+ * every match with no `TeamPlan` supplied at all, which is fully inert
+ * (`tacticFor` below returns `undefined` outright for a `null` plan, not
+ * even each player's own archetype default — see its own doc comment), not
+ * just "using the default style". This gives every AI club a genuine read
+ * of its *own* roster instead of a fixed style repeated 18 times over,
+ * built entirely from data that already existed and was already vetted —
+ * `data/lines.ts`'s `summariseLines`/`bandForGap`, the exact same
+ * league-relative gap the List Needs report and Dashboard rating bars
+ * already show a human coach. Deliberately a simple, explainable,
+ * roster-only decision tree rather than a full strategic AI (it doesn't
+ * know who it's playing this week, or the ladder situation) — see the
+ * research doc's own "Open questions" section for why that's a separate,
+ * later piece of work, not scope creep on top of this one.
+ */
+export function chooseGameStyleForClub(clubPlayers: Player[], leagueAvgOvr: number): GameStyle {
+  const lines = summariseLines(clubPlayers, leagueAvgOvr);
+  const bandOf = (line: Line) => bandForGap(lines.find((l) => l.line === line)?.gapToLeague ?? 0);
+
+  if (bandOf("Defence") === "red") return "Defensive Flood"; // a leaky defence gets shored up first
+  if (bandOf("Forwards") === "green") return "Forward Press"; // a strong forward line can afford to press high up the ground
+  if (bandOf("Midfield") === "green") return "Attack the Middle"; // a strong midfield wants more of the contested ball
+  if (bandOf("Forwards") === "red") return "Spread the Ground"; // no strong targets inside 50 - favour ball movement over contested forward-half footy
+  return "Balanced"; // nothing stands out either way - a real, common choice, not a placeholder
+}
+
+/**
+ * The full plan an AI-controlled club fields — `chooseGameStyleForClub`
+ * above plus an empty per-player tactics map, which is enough on its own:
+ * `match.ts`'s `startMatch` runs every supplied plan through `sanitizePlan`
+ * regardless, which fills every player in with their own tactic group's
+ * real default (e.g. defenders start on "Defensive Shoulder") — the same
+ * fallback a human coach who never touches Match Preparation also gets. See
+ * `useSeasonStore.ts`'s `currentPlans()` for where this is actually called,
+ * once per club per season/round.
+ */
+export function aiTeamPlan(clubPlayers: Player[], leagueAvgOvr: number): TeamPlan {
+  return { gameStyle: chooseGameStyleForClub(clubPlayers, leagueAvgOvr), tactics: new Map() };
 }
 
 /**

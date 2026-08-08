@@ -2,7 +2,7 @@ import type { Player } from "../types/player.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
 import { suitabilityFor } from "../types/archetype.ts";
 import { SUITABILITY_RANK } from "./selection.ts";
-import { ZONE_FOR_POSITION, type Zone } from "./zones.ts";
+import { ZONE_FOR_POSITION, ownZone, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import type { Rng } from "./rng.ts";
 
@@ -47,6 +47,12 @@ for (const [position, zone] of Object.entries(ZONE_FOR_POSITION) as [Position, Z
  * position mapped to that zone, reusing `selection.ts`'s existing
  * Very=3/Somewhat=2/Barely=1/Not=0 ranking as the numeric weight.
  *
+ * `zone` here must already be expressed in the *player's own* attacking-
+ * direction terms (0 = their own defensive 50), not necessarily the raw
+ * home-relative zone `match.ts` tracks — see `involvementWeight`/
+ * `weightedPlayerChoice` below, which do that mirroring via `ownZone` before
+ * calling in here. This function itself stays side-agnostic on purpose.
+ *
  * Checked against `NOT_SUITABLE_OVERRIDE` (types/archetype.ts): every
  * archetype's own real home zone always has at least one "Very suitable"
  * position landing in it (by construction — `data/lines.ts`'s
@@ -82,11 +88,24 @@ export function archetypeZoneWeight(archetype: Archetype, zone: Zone): number {
  * — a missing or unmapped (`INT`) position just falls back to the archetype
  * read, exactly matching pre-Phase-8 behaviour for any team built without
  * real position data.
+ *
+ * `side` and `zone` follow `match.ts`'s own raw, home-relative convention
+ * (zone 0 is always *home's* defensive 50 — see zones.ts) — this function
+ * mirrors internally via `ownZone` before doing any position/archetype
+ * lookup, so callers just pass whichever side they're actually weighting for
+ * and don't need to think about the mirroring themselves. Fixed Aug 2026:
+ * earlier Phase 8 code compared the raw zone directly, which is only
+ * correct for the home side — the away side's positions/archetypes were
+ * being read against the *wrong* end of the ground (their real defenders
+ * were favoured in their own forward 50, and vice versa). Every existing
+ * test only ever checked the home side, which is exactly how this went
+ * uncaught — see involvement.test.ts's now-explicit away-side coverage.
  */
-export function involvementWeight(player: Player, zone: Zone, position?: Position | null): number {
+export function involvementWeight(side: Side, player: Player, zone: Zone, position?: Position | null): number {
   const archetype = player.archetype as Archetype;
-  const base = archetypeZoneWeight(archetype, zone);
-  if (position && ZONE_FOR_POSITION[position] === zone) {
+  const relative = ownZone(side, zone);
+  const base = archetypeZoneWeight(archetype, relative);
+  if (position && ZONE_FOR_POSITION[position] === relative) {
     return Math.max(base, SUITABILITY_RANK["Very suitable"]);
   }
   return base;
@@ -115,7 +134,7 @@ export function weightedChoice<T>(rng: Rng, items: readonly T[], weightOf: (item
   return items[items.length - 1]; // floating-point safety net (weights summing fractionally short of `total`)
 }
 
-/** Convenience wrapper for `match.ts`'s call sites: picks one of `team`'s 22 players, weighted by their involvement plausibility for `zone` (their real assigned position if `team.positions` has one for them, else their archetype's own implied zone). */
-export function weightedPlayerChoice(rng: Rng, team: MatchTeam, zone: Zone): Player {
-  return weightedChoice(rng, team.players, (p) => involvementWeight(p, zone, team.positions?.get(p.PlayerID)));
+/** Convenience wrapper for `match.ts`'s call sites: picks one of `team`'s 22 players, weighted by their involvement plausibility for `zone` (their real assigned position if `team.positions` has one for them, else their archetype's own implied zone). `side` is which side `team` is playing as *this match* — needed so the zone can be mirrored correctly for an away team (see `involvementWeight`'s doc comment). */
+export function weightedPlayerChoice(rng: Rng, side: Side, team: MatchTeam, zone: Zone): Player {
+  return weightedChoice(rng, team.players, (p) => involvementWeight(side, p, zone, team.positions?.get(p.PlayerID)));
 }

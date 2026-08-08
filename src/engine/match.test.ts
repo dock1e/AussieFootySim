@@ -301,6 +301,39 @@ describe("Phase 8: position-weighted involvement (engine/involvement.ts wired in
     expect(ffInFwd50).toBeGreaterThan(fbInFwd50);
   });
 
+  it("the same holds for the AWAY team, at the *mirrored* raw zones (Aug 2026 fix — the away side's zone wasn't mirrored before, so its positional weighting was backwards and this exact check would have failed)", () => {
+    const awayFbId = findByPosition(away, "FB");
+    const awayFfId = findByPosition(away, "FF");
+
+    // Raw zone 0 is home's defensive 50 == away's *forward* 50; raw zone 4
+    // is the reverse. So for the away team, the FF should dominate raw zone
+    // 0 and the FB should dominate raw zone 4 - the mirror image of the
+    // home-side test directly above.
+    let fbInOwnFwd50 = 0;
+    let ffInOwnFwd50 = 0;
+    let fbInOwnDef50 = 0;
+    let ffInOwnDef50 = 0;
+
+    const N = 30;
+    for (let i = 0; i < N; i++) {
+      const seed = 21000 + i;
+      const result = simulateMatch(home, away, mulberry32(seed), seed, { recordEvents: true });
+      for (const ev of result.events) {
+        if (ev.zone === 0) {
+          if (ev.playerIds.includes(awayFbId)) fbInOwnFwd50++;
+          if (ev.playerIds.includes(awayFfId)) ffInOwnFwd50++;
+        }
+        if (ev.zone === 4) {
+          if (ev.playerIds.includes(awayFbId)) fbInOwnDef50++;
+          if (ev.playerIds.includes(awayFfId)) ffInOwnDef50++;
+        }
+      }
+    }
+
+    expect(ffInOwnFwd50).toBeGreaterThan(fbInOwnFwd50);
+    expect(fbInOwnDef50).toBeGreaterThan(ffInOwnDef50);
+  });
+
   it("a team built without real position data (pickBest22) still simulates fine, falling back to archetype-only weighting", () => {
     const bestBest = pickBest22("BestOnly", makeClubPool("BestOnly"));
     expect(bestBest.positions).toBeUndefined();

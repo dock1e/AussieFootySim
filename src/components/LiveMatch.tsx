@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CLUBS } from "../types/club";
 import { getPlayersByClub } from "../data/loadPlayers";
 import type { MatchTeam } from "../engine/team";
@@ -366,15 +366,49 @@ function TeamStatBars({
   );
 }
 
+/**
+ * Newest-first play-by-play feed. Two real bugs fixed here Aug 2026, both
+ * reported live by Tyler after actually watching matches on his own
+ * machine:
+ *
+ * 1. Rows keyed on `ev.tick` could repeat visibly (e.g. "Daicos clears it
+ *    for Collingwood" showing several times with unrelated events in
+ *    between) — confirmed live by pulling the rendered DOM directly, not
+ *    just from the screenshots. Root cause: `match.ts`'s `runStoppage`
+ *    always logs *two* events (a hit-out, then its clearance) sharing one
+ *    `ctx.tick`, so `key={ev.tick}` collided on every single stoppage —
+ *    combined with this list re-ordering (newest-first) and growing every
+ *    tick, duplicate keys are exactly the scenario React's own reconciler
+ *    handles worst, and it showed up as stale/repeated row content. Fixed
+ *    by keying on each event's own stable original index into the full
+ *    `events` array instead — always unique, since events are only ever
+ *    appended, never reordered or removed.
+ * 2. The *sort* here was already newest-first (index 0 = most recent), but
+ *    nothing kept the scrollable box actually showing that top row, so a
+ *    user who'd scrolled at all would watch new rows arrive "underneath"
+ *    their view and have to scroll back up to find them — which reads
+ *    exactly like "newest should be at the top" from the outside even
+ *    though the sort itself was correct. Fixed by pinning `scrollTop` to 0
+ *    whenever a new event is revealed.
+ */
 function PlayByPlay({ events }: { events: MatchResult["events"] }) {
-  const recent = [...events].reverse().slice(0, 40);
+  const recent = events
+    .map((ev, i) => ({ ev, i }))
+    .reverse()
+    .slice(0, 40);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [events.length]);
+
   return (
     <div className="card">
       <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Play by play</div>
-      <div className="max-h-64 space-y-1 overflow-y-auto text-sm">
+      <div ref={scrollRef} className="max-h-64 space-y-1 overflow-y-auto text-sm">
         {recent.length === 0 && <div className="text-slate-500">Kick-off coming up…</div>}
-        {recent.map((ev) => (
-          <div key={ev.tick} className="flex gap-2 text-slate-300">
+        {recent.map(({ ev, i }) => (
+          <div key={i} className="flex gap-2 text-slate-300">
             <span className="w-10 shrink-0 tabular-nums text-slate-500">Q{ev.quarter}</span>
             <span>{ev.description}</span>
           </div>

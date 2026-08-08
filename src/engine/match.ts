@@ -318,7 +318,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // for the ball's *current* zone (see engine/involvement.ts), so a Key
   // Defender is actually the likely defender deep in defensive 50, not
   // exactly as likely as a Small Forward the way a uniform pick made them.
-  const defender = tagger ?? weightedPlayerChoice(ctx.rng, defendingTeam, state.zone);
+  const defender = tagger ?? weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
   const defenderTactic = tacticFor(defendingPlan, defender);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
 
@@ -384,7 +384,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   }
   // Weighted by involvement at the zone the ball just advanced *to* — see
   // engine/involvement.ts.
-  const newCarrier = weightedPlayerChoice(ctx.rng, possessingTeam, newZone);
+  const newCarrier = weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone);
   return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier };
 }
 
@@ -401,8 +401,8 @@ function runContest(ctx: Ctx, state: State): State {
   // engine/involvement.ts) rather than a uniform pick across all 22 — e.g. a
   // marking contest inside forward 50 now actually favours a Key Forward as
   // the attacking rep, not any of the 22 equally.
-  const attackerRep = weightedPlayerChoice(ctx.rng, attackingTeam, state.zone);
-  const defenderRep = weightedPlayerChoice(ctx.rng, defendingTeam, state.zone);
+  const attackerRep = weightedPlayerChoice(ctx.rng, attackingSide, attackingTeam, state.zone);
+  const defenderRep = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
   const attackerMult =
     contestRatingMultiplier(tacticFor(attackingPlan, attackerRep), contestType, "attacker") *
@@ -511,7 +511,7 @@ function runShot(ctx: Ctx, state: State): State {
   // Weighted the same way as every other rep pick — a real defender is now
   // actually the likely kick-in taker, not any of the 22 equally.
   const newSide = otherSide(state.possession);
-  const kickInTaker = weightedPlayerChoice(ctx.rng, teamOf(ctx, newSide), state.zone);
+  const kickInTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), state.zone);
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: kickInTaker };
 }
 

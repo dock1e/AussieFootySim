@@ -50,6 +50,21 @@ export function otherSide(side: Side): Side {
 }
 
 /**
+ * Mirrors `zone` into `side`'s own attacking-direction terms: the result is
+ * always 0 = *this side's own* defensive 50, 4 = *this side's own* forward
+ * 50, regardless of whether `side` is home or away. It's its own inverse
+ * (`ownZone(side, ownZone(side, z)) === z`), so the same function converts in
+ * either direction. `lineZoneFor` in `engine/ground.ts` already did exactly
+ * this mirroring locally for the away side's rendered formation; pulled up
+ * here as a shared, named primitive so `engine/involvement.ts` can (and, per
+ * the Aug 2026 fix below, must) apply the identical mirroring to real
+ * gameplay, not just rendering.
+ */
+export function ownZone(side: Side, zone: Zone): Zone {
+  return side === "home" ? zone : ((4 - zone) as Zone);
+}
+
+/**
  * Each of the four coarse lines' (`data/lines.ts`) "home" zone — the same
  * judgement call `ground.ts`'s renderer already made locally (mirrored for
  * the away side there, since zone 0 is always *home*'s defensive 50

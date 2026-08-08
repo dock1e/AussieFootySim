@@ -81,8 +81,8 @@ const SKILL_ATTRIBUTES: Record<DiscreteSkill, readonly RatedAttribute[]> = {
 
 type ArchetypeFrame = "Tall" | "Mid";
 
-/** See this file's doc comment point 2 — grounded in real avg_height_cm per archetype, not guessed. */
-const ARCHETYPE_FRAME: Record<Archetype, ArchetypeFrame> = {
+/** See this file's doc comment point 2 — grounded in real avg_height_cm per archetype, not guessed. Exported (Position Switch, engine/positionSwitch.ts) for a genuine gameplay need — restricting switch targets to the player's own frame — unlike draft.ts's own locally-redeclared copy, which only ever needed it for a cosmetic height jitter and so didn't warrant the real export. */
+export const ARCHETYPE_FRAME: Record<Archetype, ArchetypeFrame> = {
   Ruck: "Tall",
   "Hybrid Key Forward Ruck": "Tall",
   "Key Forward": "Tall",

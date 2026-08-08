@@ -19,7 +19,10 @@ import { gapBand, type PillTone } from "./StatusPill";
  * Footer shortcuts into Contracts, Trade, and the Draft are all real now
  * that all three exist (Phase 4 Slices 3, 4, and 5) — every step of the
  * Off-Season Hub sequence up to the Draft itself now has a real screen
- * behind it; only Pre-Season Draft/Pre-Season Investment remain open.
+ * behind it; only Pre-Season Draft/Pre-Season Investment remain open. A
+ * separate, visually distinct shortcut into Position Switch sits below that
+ * row — it's deliberately not styled as "step 5", since it isn't part of
+ * the 8-step sequence at all (see PositionSwitch.tsx's own doc comment).
  */
 
 const STRATEGY_TONE: Record<ClubStrategy, PillTone> = {
@@ -38,11 +41,13 @@ export function ListNeeds({
   onGoToContracts,
   onGoToTrade,
   onGoToDraft,
+  onGoToPositionSwitch,
 }: {
   onGoToCombine?: () => void;
   onGoToContracts?: () => void;
   onGoToTrade?: () => void;
   onGoToDraft?: () => void;
+  onGoToPositionSwitch?: () => void;
 }) {
   const myClub = useGameStore((s) => s.myClub);
   const league = useMemo(() => buildLeaguePlayersByClub(), []);
@@ -186,6 +191,17 @@ export function ListNeeds({
           )}
         </div>
         <span>Pre-Season Draft and Pre-Season Investment aren&rsquo;t built yet.</span>
+        {onGoToPositionSwitch && (
+          <>
+            <span className="pt-1">
+              Position Switch isn&rsquo;t part of this sequence — Engine.md frames it as a check worth making any
+              time, not a Hub step.
+            </span>
+            <button onClick={onGoToPositionSwitch} className="rounded-lg bg-base-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-base-700">
+              Review Position Switches
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

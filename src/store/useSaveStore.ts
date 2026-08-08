@@ -5,8 +5,10 @@ import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerm
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
 import { generateProspectPool, buildDraftOrder, draftPlayer, autoResolvePick, SCOUT_BUDGET_PER_DRAFT } from "../engine/draft";
 import { selectCombineInvitees, computeCombineResults } from "../engine/combine";
+import { applySwitch } from "../engine/positionSwitch";
 import { computeLeagueStrategies, buildLeaguePlayersByClub, type ClubStrategy } from "../engine/listNeeds";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
+import type { Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
 import { CURRENT_SEASON_YEAR } from "../config";
 import { useGameStore } from "./useGameStore";
@@ -119,6 +121,21 @@ interface SaveStoreState {
   finishDraft: () => void;
   /** Spends one unit of the shared scouting budget to reveal one headline attribute on a prospect. */
   scoutAttribute: (prospectId: number, attribute: RatedAttribute) => void;
+
+  // --- Position Switch --------------------------------------------------
+  // Not one of the 8 Off-Season Hub steps (Contracts/Trade/Combine/Draft) —
+  // Engine.md frames this as a phase-boundary check-pass the coach reviews
+  // whenever they open its always-available tab, not a step with a "start"
+  // action. So unlike Combine/Draft there's no window/session state to open
+  // here — engine/positionSwitch.ts's `findSwitchCandidates` is pure and
+  // cheap enough (see that file's own doc comment) to call straight from
+  // the component on every render, the same way ListNeeds/Contracts already
+  // call listNeeds.ts's functions directly rather than through a store
+  // action. Only the one actual mutation needs to live here, matching this
+  // file's own established rule.
+
+  /** Switches `playerId` to `newArchetype` — recomputes their OVR, leaves POT untouched, writes a fresh `archetype_reason` (see engine/positionSwitch.ts's `applySwitch`). No-op if `playerId` isn't found. */
+  applyPositionSwitch: (playerId: number, newArchetype: Archetype) => void;
 }
 
 /**
@@ -597,6 +614,14 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
   scoutAttribute: (prospectId, attribute) => {
     useDraftStore.getState().revealAttribute(prospectId, attribute);
+    void get().saveNow();
+  },
+
+  applyPositionSwitch: (playerId, newArchetype) => {
+    const after = applySwitch(playerId, newArchetype, ALL_PLAYERS);
+    if (!after) return; // playerId not found — no-op
+    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? after : p)));
+    set({ poolVersion: get().poolVersion + 1 });
     void get().saveNow();
   },
 }));

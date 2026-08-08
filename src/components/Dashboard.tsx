@@ -24,10 +24,17 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="card flex flex-wrap items-center justify-between gap-4">
+      {/* Left border in the club's own colour — Aug 2026 branding pass (ROADMAP.md item #13):
+          the one moment on this screen that's most "this is YOUR club," styled the way a real
+          broadcast product colour-codes team identity at a glance. */}
+      <div
+        className="card flex flex-wrap items-center justify-between gap-4 border-l-4"
+        style={{ borderLeftColor: club?.primaryColor }}
+      >
         <div>
           <div className="text-xs uppercase tracking-wide text-slate-400">Coaching</div>
-          <div className="font-display text-2xl">
+          <div className="flex items-center gap-2 font-display text-2xl">
+            <span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: club?.primaryColor }} />
             {club?.name} <span className="text-slate-400">{club?.nickname}</span>
           </div>
           <div className="text-xs text-slate-500">

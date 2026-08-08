@@ -32,4 +32,27 @@
   .stat-pill-info {
     @apply bg-info/15 text-info;
   }
+
+  /*
+   * Solid variant — added Aug 2026 (AFL.com.au-inspired branding pass,
+   * ROADMAP.md item #13). The soft/translucent pills above were this app's
+   * original aflclubmanager.com-derived look; live AFL.com.au itself favours
+   * a bolder, fully-solid circular pill for W/L-style form indicators
+   * (checked directly against the real ladder page via the Chrome tools).
+   * A distinct class rather than a variant prop default, so every one of
+   * StatusPill's existing call sites keeps its current soft look unchanged
+   * unless it deliberately opts in.
+   */
+  .stat-pill-good-solid {
+    @apply bg-good text-white;
+  }
+  .stat-pill-warn-solid {
+    @apply bg-warn text-white;
+  }
+  .stat-pill-bad-solid {
+    @apply bg-bad text-white;
+  }
+  .stat-pill-info-solid {
+    @apply bg-info text-white;
+  }
 }

@@ -41,7 +41,16 @@ export function LadderTable({ ladder, highlightClubId }: { ladder: LadderRow[]; 
                   {isFinals && <span className="ml-1 text-accent-light">•</span>}
                 </td>
                 <td className={`px-3 py-2 ${isMine ? "font-semibold text-accent-light" : "font-medium"}`}>
-                  {club?.name ?? `Club ${row.clubId}`}
+                  <span className="inline-flex items-center gap-2">
+                    {/* Club-colour dot — Aug 2026 branding pass (ROADMAP.md item #13), a
+                        copyright-safe stand-in for the crest-in-ladder look real AFL.com.au
+                        uses (no crest artwork exists in this project to reproduce). */}
+                    <span
+                      className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: club?.primaryColor ?? "#666" }}
+                    />
+                    {club?.name ?? `Club ${row.clubId}`}
+                  </span>
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">{row.played}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{row.wins}</td>

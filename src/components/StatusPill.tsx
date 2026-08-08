@@ -16,8 +16,22 @@ const TONE_CLASS: Record<PillTone, string> = {
   info: "stat-pill-info",
 };
 
-export function StatusPill({ label, tone }: { label: string; tone: PillTone }) {
-  return <span className={`stat-pill ${TONE_CLASS[tone]}`}>{label}</span>;
+/** Aug 2026 branding pass (ROADMAP.md item #13) — see index.css's doc comment on the `-solid` classes. */
+const TONE_CLASS_SOLID: Record<PillTone, string> = {
+  good: "stat-pill-good-solid",
+  warn: "stat-pill-warn-solid",
+  bad: "stat-pill-bad-solid",
+  info: "stat-pill-info-solid",
+};
+
+/**
+ * `variant` defaults to `"soft"` — every existing call site keeps its
+ * current translucent-background look unchanged. Pass `"solid"` for the
+ * bolder, fully-filled look real AFL.com.au uses for its W/L form circles.
+ */
+export function StatusPill({ label, tone, variant = "soft" }: { label: string; tone: PillTone; variant?: "soft" | "solid" }) {
+  const toneClass = variant === "solid" ? TONE_CLASS_SOLID[tone] : TONE_CLASS[tone];
+  return <span className={`stat-pill ${toneClass}`}>{label}</span>;
 }
 
 export function NumberWithPill({

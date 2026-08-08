@@ -52,9 +52,22 @@ export default function App() {
 
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-4 py-6">
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="font-display text-3xl italic tracking-tight">
-          Sim<span className="text-accent">AFL</span>
+      <header className="mb-6">
+        {/* Logo + SaveMenu get their own row, deliberately separate from nav
+            below — see the regression this fixed: with both in one
+            `flex-wrap` row, nav growing to 11 tabs (Position Switch) was
+            enough to wrap the whole header, dropping SaveMenu onto its own
+            line in small `text-slate-500` text with nothing to its right
+            forcing it into view (a single flex child on a wrapped line just
+            sits at the line's start under `justify-between`) — easy to read
+            as "the save button is gone" even though Export/Import/New Game
+            were still there. Splitting the row means nav can keep growing
+            and wrapping freely without ever touching this row again. */}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="font-display text-3xl italic tracking-tight">
+            Sim<span className="text-accent">AFL</span>
+          </div>
+          <SaveMenu />
         </div>
         <nav className="flex flex-wrap gap-2">
           {(
@@ -83,7 +96,6 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <SaveMenu />
       </header>
 
       <main key={poolVersion}>
@@ -119,9 +131,21 @@ export default function App() {
  * Deliberately three plain buttons rather than a dropdown menu — nothing
  * else in this codebase has a dropdown component yet, and three buttons is
  * simple enough not to need one.
+ *
+ * There has never been a manual "Save" button — saving has always been
+ * fully automatic (a debounced write on every store change). Added a live
+ * "Saved HH:MM:SS" / dot indicator (`useSaveStore.ts`'s new `lastSavedAt`)
+ * after Tyler went looking for one and, reasonably, read its absence as a
+ * bug rather than a design choice — this makes the automatic behaviour
+ * actually visible instead of invisible-by-default. Also see App.tsx's
+ * header comment: this whole row was independently found to be dropping
+ * onto its own low-contrast line once nav grew past 10 tabs, which was the
+ * more likely real cause of "the save button disappeared" — both fixed
+ * together.
  */
 function SaveMenu() {
   const year = useSaveStore((s) => s.year);
+  const lastSavedAt = useSaveStore((s) => s.lastSavedAt);
   const newGame = useSaveStore((s) => s.newGame);
   const exportJSON = useSaveStore((s) => s.exportJSON);
   const importJSON = useSaveStore((s) => s.importJSON);
@@ -160,6 +184,10 @@ function SaveMenu() {
     <div className="flex items-center gap-2 text-xs text-slate-500">
       <span className="tabular-nums">
         {year} &middot; {ALL_PLAYERS.length} players
+      </span>
+      <span className="flex items-center gap-1.5 tabular-nums" title="Saving is automatic — there's no manual Save button, this confirms it's actually happening">
+        <span className={`h-1.5 w-1.5 rounded-full ${lastSavedAt ? "bg-good" : "bg-base-600"}`} />
+        {lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : "Not saved yet"}
       </span>
       <button onClick={handleExport} className="rounded-lg bg-base-800 px-3 py-1.5 text-slate-400 hover:bg-base-700" title="Download your save as a JSON file">
         Export

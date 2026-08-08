@@ -50,6 +50,8 @@ interface SaveStoreState {
   status: "loading" | "ready";
   /** False until something has actually been saved at least once — a brand-new session with nothing in IndexedDB yet reads as false, but the app is fully usable regardless (exactly today's pre-persistence behaviour); the first auto-save flips this true. */
   hasSave: boolean;
+  /** Wall-clock time of the last successful `saveNow` write, or null before the first one. Purely a UI signal (SaveMenu's "Saved HH:MM:SS" text) — nothing reads this for save/load logic itself. Added after Tyler couldn't tell whether autosave was actually running (there's deliberately no manual "Save" button — see SaveMenu's own doc comment — so this is the only visible confirmation that it's working). */
+  lastSavedAt: number | null;
   /** The live in-fiction year. CURRENT_SEASON_YEAR (src/config.ts) until a save exists or an off-season has run; from then on this is the actual persisted value. Components needing "what year is it" (contract-status badges, SeasonHub's header) should read this, not the static import — see ROADMAP.md's persistence writeup. */
   year: number;
   /** Bumped every time the live player pool (data/loadPlayers.ts's ALL_PLAYERS) is replaced wholesale — a load, a new game, or an off-season step. Not bumped for reads. Components that memoize off getPlayersByClub()/getPlayerById() should add this to their dependency array so they refresh immediately after a pool swap without needing an unrelated re-render or a navigation away and back. */
@@ -232,6 +234,7 @@ let subscribed = false;
 export const useSaveStore = create<SaveStoreState>((set, get) => ({
   status: "loading",
   hasSave: false,
+  lastSavedAt: null,
   year: CURRENT_SEASON_YEAR,
   poolVersion: 0,
 
@@ -251,7 +254,11 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
     if (loaded) {
       hydrateStoresFrom(loaded);
-      set({ status: "ready", hasSave: true, year: loaded.year, poolVersion: get().poolVersion + 1 });
+      // lastSavedAt is "now", not whenever the write actually happened — accurate
+      // enough (nothing has changed since the load, so what's on disk still
+      // matches this state) and avoids needing to persist a real timestamp
+      // inside SaveGameData just for a UI label.
+      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1 });
     } else {
       set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR });
     }
@@ -272,7 +279,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   saveNow: async () => {
     const save = snapshotSave(get().year);
     await writeSaveToDB(serializeSave(save));
-    set({ hasSave: true });
+    set({ hasSave: true, lastSavedAt: Date.now() });
   },
 
   newGame: async (myClub) => {

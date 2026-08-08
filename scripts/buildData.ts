@@ -27,6 +27,13 @@ const STRING_FIELDS = new Set([
   "draft_draftType",
   "archetype",
   "archetype_reason",
+  // Added Aug 2026 SuperCoach trend recalibration (see Schema.md) — sc_trend_z is
+  // numeric-looking but kept as a string like archetype_reason above (it's a
+  // transparency/provenance field, not consumed by engine logic); sc_trend_years is a
+  // comma-joined year list ("2022,2023,2024") and would throw the numeric-coercion
+  // error below if left off this list. Both are "" for players with no SuperCoach match.
+  "sc_trend_z",
+  "sc_trend_years",
 ]);
 
 function coerceRow(raw: Record<string, string>): Player {

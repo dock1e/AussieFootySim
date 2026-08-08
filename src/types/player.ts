@@ -200,6 +200,23 @@ export interface Player extends ImprovementRates, DeclineRates {
    * `players_master.csv`, which does not carry this field.
    */
   tags?: ProvenanceTag[];
+
+  // --- SuperCoach trend recalibration (added Aug 2026) ---
+  // See Schema.md "SuperCoach trend recalibration (Aug 2026)". Both are the raw
+  // CSV strings (not parsed further here) — "" for the ~176 players with no
+  // matched SuperCoach data across the 3 uploaded season files.
+  /**
+   * z-scored linear trend of SuperCoach season-average across the player's
+   * available years (roughly -3..+3, "" if unmatched). Fed into this
+   * recalibration pass's imp_/deg_ and POT nudges — not re-applied
+   * automatically on every future off-season step. Optional (rather than a
+   * required ""-able string like the CSV always provides) because synthetic
+   * players built by hand — draft.ts's generated prospects, testUtils/makePlayer.ts's
+   * test fixtures — have no CSV row and no SuperCoach match to speak of.
+   */
+  sc_trend_z?: string;
+  /** Comma-joined years the trend was computed from, e.g. "2023,2024,2025,2026". Optional, same reasoning as `sc_trend_z`. */
+  sc_trend_years?: string;
 }
 
 /** The exact 20 rated attributes OVR is computed from — see Schema.md "Rated attributes". */

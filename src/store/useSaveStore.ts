@@ -1,9 +1,10 @@
 import { create } from "zustand";
 import { ALL_PLAYERS, loadPool, resetPoolToGenerated } from "../data/loadPlayers";
-import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData, type DraftWindow } from "../engine/saveGame";
+import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData, type DraftWindow, type CombineWindow } from "../engine/saveGame";
 import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
 import { generateProspectPool, buildDraftOrder, draftPlayer, autoResolvePick, SCOUT_BUDGET_PER_DRAFT } from "../engine/draft";
+import { selectCombineInvitees, computeCombineResults } from "../engine/combine";
 import { computeLeagueStrategies, buildLeaguePlayersByClub, type ClubStrategy } from "../engine/listNeeds";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
 import { CLUBS } from "../types/club";
@@ -15,6 +16,7 @@ import { useTeamPlanStore } from "./useTeamPlanStore";
 import { useContractStore } from "./useContractStore";
 import { useTradeStore } from "./useTradeStore";
 import { useDraftStore } from "./useDraftStore";
+import { useCombineStore } from "./useCombineStore";
 import { readSaveFromDB, writeSaveToDB, clearSaveInDB } from "./db";
 
 /**
@@ -92,11 +94,20 @@ interface SaveStoreState {
   /** The "Simulate a Day" bulk action — runs one more day of AI-vs-AI background trading (engine/trade.ts's `simulateLeagueTrades`) followed by that day's fresh AI-initiated offers into `myClub`'s Inbox (`generateInboundOffers`, evaluated against the post-AI-trades roster), deterministic per (year, day). */
   simulateTradeDay: () => void;
 
+  // --- National Combine (Phase 4 "Slice 6") --------------------------------
+  // Never mutates the live player pool at all (nothing about running the
+  // Combine changes any real player) — included here anyway, alongside
+  // Contracts/Trade/Draft, purely to keep "every save-relevant action lives
+  // in one store" the established rule, matching startDraft's own rationale.
+
+  /** Generates this year's prospect pool, invites/tests `COMBINE_INVITE_COUNT` of them, and opens the Combine window. No-op if this year's Combine has already run. */
+  runCombine: () => void;
+
   // --- National Draft (Phase 4 Slice 5) ------------------------------------
   // Same centralisation rule as Contracts/Trade above — every action that
   // mutates the live player pool lives here, never on useDraftStore directly.
 
-  /** Generates this year's prospect pool + pick order and opens the draft window — the one explicit "start" this Off-Season Hub step needs that Contracts/Trade don't (see DraftWindow's own doc comment). No-op if a draft is already open. */
+  /** Generates this year's prospect pool + pick order and opens the draft window — the one explicit "start" this Off-Season Hub step needs that Contracts/Trade don't (see DraftWindow's own doc comment). Reuses this year's `CombineWindow.pool` outright if the Combine has already run (see DraftWindow's own doc comment) rather than regenerating. No-op if a draft is already open. */
   startDraft: () => void;
   /** The coach's own pick, when `myClub` is on the clock — drafts `prospectId` from the pool, splices the resulting rookie into the live pool, and logs the pick. No-op if it isn't `myClub`'s turn or `prospectId` isn't a still-undrafted prospect in this window's pool. */
   confirmDraftPick: (prospectId: number) => void;
@@ -166,6 +177,7 @@ function snapshotSave(year: number): SaveGameData {
     season: useSeasonStore.getState().season,
     lineups: useSelectionStore.getState().lineups,
     teamPlans: useTeamPlanStore.getState().plans,
+    combineWindow: useCombineStore.getState().window,
     contractWindow: useContractStore.getState().window,
     tradeWindow: useTradeStore.getState().window,
     draftWindow: useDraftStore.getState().window,
@@ -177,6 +189,7 @@ function hydrateStoresFrom(save: SaveGameData): void {
   useGameStore.getState().setMyClub(save.myClub);
   useSelectionStore.getState().restoreLineups(save.lineups);
   useTeamPlanStore.getState().restorePlans(save.teamPlans);
+  useCombineStore.getState().restoreWindow(save.combineWindow);
   useContractStore.getState().restoreWindow(save.contractWindow);
   useTradeStore.getState().restoreWindow(save.tradeWindow);
   useDraftStore.getState().restoreWindow(save.draftWindow);
@@ -235,6 +248,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       useContractStore.subscribe(scheduleAutoSave);
       useTradeStore.subscribe(scheduleAutoSave);
       useDraftStore.subscribe(scheduleAutoSave);
+      useCombineStore.subscribe(scheduleAutoSave);
     }
   },
 
@@ -258,6 +272,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
+    useCombineStore.getState().clearWindow();
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
     useDraftStore.getState().clearWindow();
@@ -477,6 +492,28 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     void get().saveNow();
   },
 
+  runCombine: () => {
+    if (useCombineStore.getState().window) return; // already run this off-season
+    const year = get().year;
+    // Same seed formula as startDraft below — deliberately, so a same-year
+    // Combine and Draft agree on the identical generated prospect class
+    // (see CombineWindow's own doc comment). Combine doesn't itself rely on
+    // that agreement (it only ever reads its own freshly-generated pool),
+    // but startDraft's reuse-if-present logic below does.
+    const seed = year * 7919 + 13;
+    const pool = generateProspectPool(ALL_PLAYERS, year, seed);
+    const invitees = selectCombineInvitees(pool);
+    const results = computeCombineResults(pool, invitees);
+    const window: CombineWindow = {
+      year,
+      pool,
+      invitedPlayerIds: invitees.map((p) => p.PlayerID),
+      results,
+    };
+    useCombineStore.getState().openWindow(window);
+    void get().saveNow();
+  },
+
   startDraft: () => {
     if (useDraftStore.getState().window) return; // already in progress this off-season
     const year = get().year;
@@ -484,7 +521,14 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     // year*1000+day scheme (which is keyed per-day, not per-year) — the
     // whole pool is generated once per draft night, not once per step.
     const seed = year * 7919 + 13;
-    const pool = generateProspectPool(ALL_PLAYERS, year, seed);
+    // Reuse this year's Combine pool wholesale if it already ran, rather
+    // than independently regenerating with the same seed — the live roster
+    // (ALL_PLAYERS) can genuinely have changed since Combine ran (Contracts/
+    // Trade both sit between Combine and Draft in the real Hub sequence),
+    // which would silently desync two separate generations even with a
+    // matching seed. See CombineWindow's own doc comment.
+    const combineWindow = useCombineStore.getState().window;
+    const pool = combineWindow && combineWindow.year === year ? combineWindow.pool : generateProspectPool(ALL_PLAYERS, year, seed);
     const order = buildDraftOrder(useSeasonStore.getState().season?.ladder);
     const window: DraftWindow = {
       year,

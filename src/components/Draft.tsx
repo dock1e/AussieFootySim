@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useGameStore } from "../store/useGameStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { useDraftStore } from "../store/useDraftStore";
+import { useCombineStore } from "../store/useCombineStore";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { buildLeaguePlayersByClub } from "../engine/listNeeds";
 import {
@@ -20,6 +21,7 @@ import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
 import type { Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
+import { StatusPill } from "./StatusPill";
 
 /**
  * National Draft — Phase 4 Slice 5 (ROADMAP.md). User Interface.md's Draft
@@ -34,9 +36,16 @@ import { playerFullName, type Player, type RatedAttribute } from "../types/playe
  *   modelled anywhere in this codebase (Academy bids are an explicit,
  *   disclosed cut, see draft.ts's own doc comment), but home state is real,
  *   generated data and serves a similar "where'd they come from" role.
- * - **No standalone Combine screen** — this board's own fogged view (Scout
- *   OVR band, POTENTIAL letter grade, CONF%, the reveal budget) *is* the
- *   scouting deliverable for this slice, per draft.ts's own scope note.
+ * - **The `COMBINE` tag + `COMBINE ONLY` filter** (User Interface.md names
+ *   both) now do something real, closing that gap from this slice's own
+ *   original scope note: if this year's National Combine has been run (see
+ *   engine/combine.ts, Phase 4 "Slice 6"), whichever of this board's
+ *   prospects were among its `COMBINE_INVITE_COUNT` (80) tested invitees get
+ *   a small tag next to their name, and the toggle filters the board down to
+ *   just them. Reads directly off `useCombineStore`'s window for the current
+ *   year — no combine, or a stale prior-year one, and the tag/toggle simply
+ *   don't appear (this board works exactly as it always did if Combine was
+ *   skipped this off-season).
  * - **POTENTIAL reads as a bare "?" until at least one headline attribute
  *   has been scouted on that prospect**, not just before the coach has
  *   opened their profile — a deliberate choice (not spec-literal, which just
@@ -88,10 +97,20 @@ export function Draft() {
   const finishDraft = useSaveStore((s) => s.finishDraft);
   const scoutAttribute = useSaveStore((s) => s.scoutAttribute);
   const window_ = useDraftStore((s) => s.window);
+  const combineWindow_ = useCombineStore((s) => s.window);
   const ladder = useSeasonStore((s) => s.season?.ladder);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [lineFilter, setLineFilter] = useState<Line | "All">("All");
+  const [combineOnly, setCombineOnly] = useState(false);
+
+  // Only meaningful if this year's Combine actually ran — a stale prior-year
+  // window (or none at all) just means no prospect gets tagged, same as if
+  // Combine had never been built.
+  const combineInvitedIds = useMemo(
+    () => (combineWindow_ && combineWindow_.year === currentYear ? new Set(combineWindow_.invitedPlayerIds) : null),
+    [combineWindow_, currentYear],
+  );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const playersByClub = useMemo(() => buildLeaguePlayersByClub(), [poolVersion]);
@@ -119,7 +138,8 @@ export function Draft() {
 
   const pickedIds = new Set(window_.picks.map((p) => p.playerId));
   const remaining = window_.pool.filter((p) => !pickedIds.has(p.PlayerID));
-  const filteredRemaining = lineFilter === "All" ? remaining : remaining.filter((p) => ARCHETYPE_LINE[p.archetype as Archetype] === lineFilter);
+  const lineFiltered = lineFilter === "All" ? remaining : remaining.filter((p) => ARCHETYPE_LINE[p.archetype as Archetype] === lineFilter);
+  const filteredRemaining = combineOnly && combineInvitedIds ? lineFiltered.filter((p) => combineInvitedIds.has(p.PlayerID)) : lineFiltered;
   const sortedRemaining = [...filteredRemaining].sort((a, b) => {
     const bandB = scoutOvrBand(b, revealedFor(window_, b.PlayerID).length);
     const bandA = scoutOvrBand(a, revealedFor(window_, a.PlayerID).length);
@@ -170,7 +190,16 @@ export function Draft() {
           <div className="card">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <span className="text-xs uppercase tracking-wide text-slate-400">Draft board ({remaining.length} available)</span>
-              <div className="ml-auto flex flex-wrap gap-1">
+              <div className="ml-auto flex flex-wrap items-center gap-1">
+                {combineInvitedIds && (
+                  <button
+                    onClick={() => setCombineOnly((v) => !v)}
+                    title="Show only this year's National Combine invitees"
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${combineOnly ? "bg-accent text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+                  >
+                    COMBINE ONLY
+                  </button>
+                )}
                 {(["All", ...LINES] as const).map((line) => (
                   <button
                     key={line}
@@ -207,7 +236,12 @@ export function Draft() {
                         className={`cursor-pointer border-t border-base-700 hover:bg-base-800 ${selectedId === p.PlayerID ? "bg-base-800" : ""}`}
                       >
                         <td className="py-1.5 pr-2 text-slate-500">{i + 1}</td>
-                        <td className="py-1.5 pr-2 font-medium">{playerFullName(p)}</td>
+                        <td className="py-1.5 pr-2 font-medium">
+                          <span className="inline-flex items-center gap-1.5">
+                            {playerFullName(p)}
+                            {combineInvitedIds?.has(p.PlayerID) && <StatusPill label="COMBINE" tone="info" />}
+                          </span>
+                        </td>
                         <td className="py-1.5 pr-2 text-slate-400">{p.homeState}</td>
                         <td className="py-1.5 pr-2 text-slate-400">{p.archetype}</td>
                         <td className="py-1.5 pr-2 text-right tabular-nums">

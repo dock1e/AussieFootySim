@@ -133,6 +133,27 @@ describe("serializeSave / deserializeSave", () => {
       season: minimalSeason([[1, 76], [2, 100], [3, 40]]),
       lineups: { Adelaide: [1, 2, 3, null] },
       teamPlans: { Adelaide: plan1, Carlton: plan2 },
+      combineWindow: {
+        year: 2027,
+        pool: makePool(2).map((p) => ({ ...p, PlayerID: p.PlayerID + 8000, Team: "Draft Pool", OriginClub: "Draft Pool", ClubID: 0 })),
+        invitedPlayerIds: [8001],
+        results: {
+          8001: {
+            sprint20m: 2.95,
+            agility505: 8.1,
+            beepTest: 13.2,
+            verticalLeap: 68,
+            kickEfficiency: 15,
+            composite: -0.42,
+            reputationRank: 1,
+            combineRank: 1,
+            projectedSlot: 1,
+            delta: 0,
+            standoutTest: "sprint20m",
+            weakestTest: "kickEfficiency",
+          },
+        },
+      },
       contractWindow: {
         daysElapsed: 2,
         activity: [{ id: "1-d1", day: 1, kind: "resigned", playerId: 1, playerName: "Test Player", clubName: "Carlton", detail: "Test Player (RFA) re-signs with Carlton for 3 years." }],
@@ -184,6 +205,20 @@ describe("serializeSave / deserializeSave", () => {
     const wire = JSON.parse(JSON.stringify(serializeSave(save)));
     const restored = deserializeSave(wire);
     expect(restored.season).toBeNull();
+  });
+
+  it("combineWindow survives a real JSON round trip untouched (plain data, no Map inside)", () => {
+    const save = richSave();
+    const wire = JSON.parse(JSON.stringify(serializeSave(save)));
+    const restored = deserializeSave(wire);
+    expect(restored.combineWindow).toEqual(save.combineWindow);
+  });
+
+  it("defaults combineWindow to null for a save written before Phase 4 Slice 6 existed", () => {
+    const wire = JSON.parse(JSON.stringify(serializeSave(richSave())));
+    delete wire.combineWindow;
+    const restored = deserializeSave(wire);
+    expect(restored.combineWindow).toBeNull();
   });
 
   it("contractWindow survives a real JSON round trip untouched (plain data, no Map inside)", () => {

@@ -5,6 +5,7 @@ import type { Lineup } from "./selection.ts";
 import type { LeagueActivityEntry } from "./contracts.ts";
 import type { TradeOffer } from "./trade.ts";
 import type { DraftPickRecord } from "./draft.ts";
+import type { CombineTestResult } from "./combine.ts";
 import { runOffSeason } from "./progression.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 
@@ -76,6 +77,31 @@ export interface TradeWindow {
 }
 
 /**
+ * The current National Combine's state — mirrors useCombineStore's `window`.
+ * Added Phase 4 "Slice 6" without bumping `SAVE_SCHEMA_VERSION`, same
+ * treatment as every other window above. Like `DraftWindow` (not Contracts/
+ * Trade), this is NOT lazily created — generating `pool` is a real, seeded,
+ * one-time-per-year event (`useSaveStore.ts`'s `runCombine`), so `null` means
+ * "the coach hasn't run this year's Combine yet."
+ *
+ * `pool` deliberately holds the FULL generated prospect class (all
+ * ~`DRAFT_POOL_SIZE`), not just the `COMBINE_INVITE_COUNT` (80) invited/
+ * tested prospects — see combine.ts's own doc comment for why: it lets
+ * `startDraft` below reuse this exact pool wholesale when a same-year Combine
+ * already ran, so the Draft board's prospects are the *same* generated
+ * players Combine showed, not a second, potentially-desynced regeneration.
+ */
+export interface CombineWindow {
+  year: number;
+  /** The full generated prospect class this year — see this interface's own doc comment. */
+  pool: Player[];
+  /** Which `COMBINE_INVITE_COUNT` PlayerIDs from `pool` were actually invited/tested — the rest of `pool` has no combine result. */
+  invitedPlayerIds: number[];
+  /** Keyed by PlayerID — present only for `invitedPlayerIds`. `combine.ts`'s `computeCombineResults` output. */
+  results: Record<number, CombineTestResult>;
+}
+
+/**
  * The current National Draft's state — mirrors useDraftStore's `window`,
  * same "added without bumping SAVE_SCHEMA_VERSION" treatment as
  * ContractWindow/TradeWindow above (a save from before the Draft existed
@@ -83,7 +109,10 @@ export interface TradeWindow {
  * NOT lazily created on first activity — generating `pool` is a real,
  * seeded, one-time-per-night event (`useDraftStore.ts`'s `startDraft`), so
  * `null` specifically means "the coach hasn't started this year's Draft yet"
- * rather than merely "no activity logged yet."
+ * rather than merely "no activity logged yet." **If a same-year
+ * `CombineWindow` already exists, `pool` here is that exact same array
+ * (reused wholesale, not regenerated) — see `CombineWindow`'s own doc
+ * comment and `useSaveStore.ts`'s `startDraft`.**
  */
 export interface DraftWindow {
   /** The in-fiction draft year — matches SaveGameData.year at the moment the draft was started. */
@@ -118,6 +147,8 @@ export interface SaveGameData {
   lineups: Record<string, Lineup>;
   /** Keyed by club name — mirrors useTeamPlanStore's `plans`. */
   teamPlans: Record<string, TeamPlan>;
+  /** Null if the coach hasn't run this year's National Combine yet — mirrors useCombineStore's `window`. See CombineWindow's own doc comment. */
+  combineWindow: CombineWindow | null;
   /** Null if no Contracts window has been opened yet this off-season — mirrors useContractStore's `window`. See ContractWindow's own doc comment. */
   contractWindow: ContractWindow | null;
   /** Null if no Trade Period window has been opened yet this off-season — mirrors useTradeStore's `window`. See TradeWindow's own doc comment. */
@@ -137,6 +168,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     season: null,
     lineups: {},
     teamPlans: {},
+    combineWindow: null,
     contractWindow: null,
     tradeWindow: null,
     draftWindow: null,
@@ -160,11 +192,13 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
  * already only points at players still actually on that club's list; no
  * separate reconciliation pass is needed here.
  *
- * `contractWindow`/`tradeWindow`/`draftWindow` reset to null — a new
- * off-season year starts fresh Contracts, Trade Period, and Draft windows,
- * same as `season` resetting. Any prospects the coach chose *not* to draft
- * are not carried over — see engine/draft.ts's own doc comment on why
- * undrafted prospects are deliberately not persisted past their own night.
+ * `combineWindow`/`contractWindow`/`tradeWindow`/`draftWindow` reset to
+ * null — a new off-season year starts fresh Combine, Contracts, Trade
+ * Period, and Draft windows, same as `season` resetting. Any prospects the
+ * coach chose *not* to draft are not carried over — see engine/draft.ts's
+ * own doc comment on why undrafted prospects are deliberately not persisted
+ * past their own night (the same reasoning covers un-drafted Combine
+ * invitees too).
  */
 export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   return {
@@ -172,6 +206,7 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     players: runOffSeason(save.players),
     year: save.year + 1,
     season: null,
+    combineWindow: null,
     contractWindow: null,
     tradeWindow: null,
     draftWindow: null,
@@ -210,6 +245,8 @@ export interface SerializedSaveGame {
   lineups: Record<string, Lineup>;
   teamPlans: Record<string, SerializedTeamPlan>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`/`players`. */
+  combineWindow: CombineWindow | null;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`/`players`. */
   contractWindow: ContractWindow | null;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `contractWindow`. */
   tradeWindow: TradeWindow | null;
@@ -236,6 +273,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     season: save.season ? { ...save.season, condition: [...save.season.condition.entries()] } : null,
     lineups: save.lineups,
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
+    combineWindow: save.combineWindow,
     contractWindow: save.contractWindow,
     tradeWindow: save.tradeWindow,
     draftWindow: save.draftWindow,
@@ -273,6 +311,7 @@ export function deserializeSave(json: unknown): SaveGameData {
     season: s.season ? { ...s.season, condition: new Map(s.season.condition) } : null,
     lineups: s.lineups ?? {},
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
+    combineWindow: s.combineWindow ?? null,
     contractWindow: s.contractWindow ?? null,
     tradeWindow: s.tradeWindow ?? null,
     draftWindow: s.draftWindow ?? null,

@@ -33,7 +33,17 @@ const PRIORITY_TONE: Record<RecommendedAction["priority"], PillTone> = {
   PRIORITY: "warn",
 };
 
-export function ListNeeds({ onGoToContracts, onGoToTrade, onGoToDraft }: { onGoToContracts?: () => void; onGoToTrade?: () => void; onGoToDraft?: () => void }) {
+export function ListNeeds({
+  onGoToCombine,
+  onGoToContracts,
+  onGoToTrade,
+  onGoToDraft,
+}: {
+  onGoToCombine?: () => void;
+  onGoToContracts?: () => void;
+  onGoToTrade?: () => void;
+  onGoToDraft?: () => void;
+}) {
   const myClub = useGameStore((s) => s.myClub);
   const league = useMemo(() => buildLeaguePlayersByClub(), []);
   const report = useMemo(() => computeListNeeds(myClub, league), [myClub, league]);
@@ -149,10 +159,16 @@ export function ListNeeds({ onGoToContracts, onGoToTrade, onGoToDraft }: { onGoT
         )}
       </div>
 
-      {/* User Interface.md specs footer shortcuts into Contracts/Trade/Draft — all
-          three are real now (Phase 4 Slices 3, 4, and 5), so they all get real buttons. */}
+      {/* User Interface.md specs footer shortcuts into Combine/Contracts/Trade/Draft —
+          all four are real now (Phase 4 Slices 3/4/5 plus "Slice 6"'s Combine), so they
+          all get real buttons, in the same order the Off-Season Hub sequence lists them. */}
       <div className="flex flex-col items-center gap-2 text-center text-xs text-slate-500">
         <div className="flex flex-wrap justify-center gap-2">
+          {onGoToCombine && (
+            <button onClick={onGoToCombine} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+              Go to the Combine
+            </button>
+          )}
           {onGoToContracts && (
             <button onClick={onGoToContracts} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
               Go to Contracts

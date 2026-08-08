@@ -3,7 +3,7 @@ import type { Archetype, Position } from "../types/archetype.ts";
 import type { MatchTeam } from "./team.ts";
 import type { MatchEvent } from "./match.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
-import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, type Side, type Zone } from "./zones.ts";
+import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
 
 /**
  * Ground-shape geometry and dot placement for the Canvas match renderer —
@@ -29,7 +29,17 @@ import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, type Side, type
  * phase-of-play-aware one, not a static line with cosmetic jitter.
  */
 export const GROUND_WIDTH = 1000;
-export const GROUND_HEIGHT = 600;
+// Was 600 (a 1.67:1 rectangle, notably more elongated than any real AFL
+// ground). Aug 2026 (Tyler, reference dimensions attached: 135-185m long by
+// 110-155m wide): real grounds run closer to 1.1-1.3:1 — Marvel Stadium's
+// 160x125m is about as close to this app's old ratio gets, and the MCG at
+// 160x141m is nearly circular. 780 (1.28:1) reads as a genuine oval rather
+// than a stretched rectangle while staying comfortably landscape for a wide
+// UI card. Every other constant in this file (MARGIN, ZONE_X_FRACTION,
+// CENTER_Y, maxHalfHeightAt) is expressed as a fraction of GROUND_WIDTH/
+// GROUND_HEIGHT, so this change alone re-scales the whole ground proportionally
+// with no follow-on edits needed elsewhere in this file.
+export const GROUND_HEIGHT = 780;
 const MARGIN = 30;
 const MIN_HALF_HEIGHT = 70;
 
@@ -93,16 +103,25 @@ export interface DotPosition {
  * ground reads as a real extension of the lineup a coach actually picked,
  * not a coincidentally-similar redesign. `lane` is a position's left(-1)/
  * centre(0)/right(+1) slot within its row; `R`/`RR`/`ROV` ("Followers") get
- * a slightly narrower band than `W`/`C` ("Centre") purely so the two rows
- * don't render as one indistinguishable column, even though both map to the
- * same 1-D zone 2 for gameplay (zones.ts's `ZONE_FOR_POSITION`) — a
- * real ruck/rover cluster genuinely does sit centre-bounce, that's accurate,
- * not a compromise. Positions with two real slots (BP, HBF, W, HFF, FP) list
- * both lanes; which of a team's two same-named players lands on which lane
- * is decided in `assignLanes` below, since the engine only records *which*
+ * a tighter band than `W`/`C` ("Centre") purely so the two rows don't render
+ * as one indistinguishable column, even though both map to the same 1-D
+ * zone 2 for gameplay (zones.ts's `ZONE_FOR_POSITION`) — a real ruck/rover
+ * cluster genuinely does sit centre-bounce, that's accurate, not a
+ * compromise. Positions with two real slots (BP, HBF, W, HFF, FP) list both
+ * lanes; which of a team's two same-named players lands on which lane is
+ * decided in `assignLanes` below, since the engine only records *which*
  * position a player fills, not which literal copy of a duplicated slot (see
  * selection.ts's own doc comment) — rendering-only ambiguity, no gameplay
  * effect either way.
+ *
+ * BUG FIXED Aug 2026 (Tyler, live testing): `C`'s lane (0) and `R`'s lane
+ * (also 0) were numerically identical, and both share zone 2 and the same
+ * "nomadic" mobility tier below — so a team's Centre and their tap ruckman
+ * rendered at the *exact* same pixel every single tick, indistinguishable
+ * even on hover. Same root cause independently affects the archetype-line
+ * fallback path (`ZONE_FOR_LINE` also puts Ruck and Midfield at zone 2) —
+ * fixed once, for both paths, via `FOLLOWERS_Y_NUDGE` below rather than
+ * patched twice.
  */
 const POSITION_LANES: Partial<Record<Position, readonly number[]>> = {
   FB: [0],
@@ -111,14 +130,26 @@ const POSITION_LANES: Partial<Record<Position, readonly number[]>> = {
   CHB: [0],
   W: [-1, 1],
   C: [0],
-  ROV: [-0.3],
+  ROV: [-0.12],
   R: [0],
-  RR: [0.3],
+  RR: [0.12],
   HFF: [-1, 1],
   CHF: [0],
   FF: [0],
   FP: [-1, 1],
 };
+
+/**
+ * A fixed pixel offset (not a lane fraction — see `formationFor`) pulling
+ * the Followers trio (real positions R/RR/ROV, or the Ruck line in the
+ * archetype fallback) visibly apart from the Centre line's dead-zero lane,
+ * which they'd otherwise land exactly on top of (see the bug note above).
+ * Real broadcast ground graphics draw the ruck/rover contest tucked inside
+ * the centre square while the wing-centre-wing line spans the full width
+ * outside it; this is a legible approximation of that same visual
+ * convention, not a claim about literal AFL Laws of the Game geometry.
+ */
+const FOLLOWERS_Y_NUDGE = 34;
 
 /**
  * How far (in fractional zones, same 0-4 scale as `ZONE_FOR_POSITION`) a
@@ -159,11 +190,51 @@ const LINE_MOBILITY: Record<Line, number> = {
   Midfield: NOMADIC_POSITION_MOBILITY,
 };
 
+/**
+ * BUG FIXED Aug 2026, found by this round's own scratch-script sweep (not
+ * directly reported by Tyler, but the same collision class he did report):
+ * a Lineup always has 4 `INT` slots, and `INT` has no fixed zone at all (see
+ * `ZONE_FOR_POSITION`) — so those 4 players always go through this fallback
+ * path even on an otherwise fully real-position team. A same-line group of
+ * exactly 1 lands at lane 0, and a group of exactly 2 lands at lanes -1/+1
+ * — both *exactly* the lane values every real position already uses at that
+ * same zone (C/FB/CHB/CHF/FF at 0, BP/HBF/W/HFF/FP at +-1). With 4 INT
+ * players typically splitting into groups of 1-2 per line, this was a near-
+ * guaranteed collision with a real teammate, not a rare edge case.
+ *
+ * First attempt gave the Ruck line `FOLLOWERS_Y_NUDGE` specifically (same
+ * idea as R/RR/ROV, since a fallback Ruck-archetype player conceptually
+ * *is* a follower) — but that just moved the collision: a team fielding
+ * both a real `R` and a bench ruck (Ruck archetype, sitting on `INT`, so it
+ * fell back) landed both at the exact same nudge *and* lane 0, still
+ * identical. Second attempt gave every fallback line the same single nudge
+ * — fixed *that* collision, but reopened the original one a level down:
+ * Midfield-line and Ruck-line fallback groups both sit at zone 2 too (same
+ * as their real-position counterparts), so a single-player Midfield
+ * fallback and a single-player Ruck fallback landed on each other instead.
+ * Every fallback line now gets its *own* nudge — distinct from 0 (every
+ * real Centre-row position), from `FOLLOWERS_Y_NUDGE` (every real Followers
+ * position), and from each other. Defence and Forwards fallback share a
+ * value safely since they're at different zones (0 and 4) and can never
+ * collide with each other regardless of shared Y.
+ */
+const FALLBACK_Y_NUDGE = -22;
+const FALLBACK_RUCK_Y_NUDGE = -40; // must differ from FALLBACK_Y_NUDGE - Midfield and Ruck fallback groups share zone 2
+
+const LINE_Y_NUDGE: Record<Line, number> = {
+  Defence: FALLBACK_Y_NUDGE,
+  Forwards: FALLBACK_Y_NUDGE,
+  Ruck: FALLBACK_RUCK_Y_NUDGE,
+  Midfield: FALLBACK_Y_NUDGE,
+};
+
 interface Anchor {
   /** This player's home zone in *their own* attacking-direction terms (0 = their own defensive 50) — mirrored to the raw home-relative scale in `formationFor` below via `mirrorZone`, same convention `engine/involvement.ts` uses via `zones.ts`'s `ownZone`. Named `homeZone` rather than `ownZone` purely to avoid shadowing that imported function. */
   homeZone: number;
   lane: number;
   mobility: number;
+  /** Fixed pixel offset applied after `lane * halfHeight` — see `FOLLOWERS_Y_NUDGE`. Zero for everyone except the Followers/Ruck cluster. */
+  yNudge: number;
 }
 
 /**
@@ -194,10 +265,11 @@ function assignAnchors(players: Player[], positions: Map<number, Position> | und
     const zone = ZONE_FOR_POSITION[pos] as Zone; // non-null, filtered above
     const lanes = POSITION_LANES[pos] ?? [0];
     const mobility = POSITION_MOBILITY[pos] ?? GENERAL_POSITION_MOBILITY;
+    const yNudge = pos === "R" || pos === "RR" || pos === "ROV" ? FOLLOWERS_Y_NUDGE : 0;
     const sorted = [...group].sort((a, b) => a.PlayerID - b.PlayerID);
     sorted.forEach((p, i) => {
       const lane = lanes[i] ?? lanes[lanes.length - 1] ?? 0;
-      out.set(p.PlayerID, { homeZone: zone, lane, mobility });
+      out.set(p.PlayerID, { homeZone: zone, lane, mobility, yNudge });
     });
   }
 
@@ -212,8 +284,12 @@ function assignAnchors(players: Player[], positions: Map<number, Position> | und
   }
   for (const [line, group] of byLine) {
     group.forEach((p, i) => {
-      const lane = group.length === 1 ? 0 : -1 + (2 * i) / (group.length - 1);
-      out.set(p.PlayerID, { homeZone: LINE_ZONE[line], lane, mobility: LINE_MOBILITY[line] });
+      // Scaled to +-0.6 rather than the full +-1 real positions use, on top
+      // of the yNudge above - two independent forms of separation from a
+      // real teammate at the same zone, not just one (see the bug note on
+      // `FALLBACK_Y_NUDGE`).
+      const lane = group.length === 1 ? 0 : (-1 + (2 * i) / (group.length - 1)) * 0.6;
+      out.set(p.PlayerID, { homeZone: LINE_ZONE[line], lane, mobility: LINE_MOBILITY[line], yNudge: LINE_Y_NUDGE[line] });
     });
   }
 
@@ -273,7 +349,7 @@ function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null): Ma
     const rawZone = mirrorZone(side, shiftedHomeZone);
     const x = zoneFractionToX(rawZone) + sideOffset;
     const halfHeight = maxHalfHeightAt(x) * 0.85;
-    const y = CENTER_Y + a.lane * halfHeight;
+    const y = CENTER_Y + a.lane * halfHeight + a.yNudge;
     out.set(p.PlayerID, {
       playerId: p.PlayerID,
       lname: p.lname,
@@ -338,13 +414,30 @@ export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: Mat
   const awayForm = formationFor(away, "away", event);
   const all = new Map<number, DotPosition>([...homeForm, ...awayForm]);
 
+  // BUG FIXED Aug 2026 (Tyler, live testing): this used to snap every
+  // involved player straight to `(zoneToX(event.zone), CENTER_Y +- spread)`
+  // — a flat, position-blind point. Since `event.zone` is always one of only
+  // 5 discrete values and the y was always dead-centre +-16px, *every*
+  // contest/disposal in the match rendered at one of roughly 15 possible
+  // screen positions, no matter which specific player was involved or where
+  // their real position actually put them — this is the concrete mechanism
+  // behind "the ball is still largely bouncing between 3 or 5 static
+  // points." Now: x blends the player's own real (Slice C) anchor with the
+  // event's authoritative zone rather than discarding the anchor outright,
+  // and y is inherited from the *primary* named player's own anchor instead
+  // of a flat centre line — so a kick to Kade Chandler at Half Forward Flank
+  // now visibly arrives out near where a real HFF stands, not wherever the
+  // last unrelated contest happened to render.
   if (event) {
     const ballX = zoneToX(event.zone);
+    const primary = all.get(event.playerIds[0]);
+    const baseY = primary ? primary.y : CENTER_Y;
     event.playerIds.forEach((id, i) => {
       const existing = all.get(id);
       if (!existing) return;
-      const spread = event.playerIds.length > 1 ? (i === 0 ? -16 : 16) : 0;
-      all.set(id, { ...existing, x: ballX, y: CENTER_Y + spread, involved: true });
+      const spread = event.playerIds.length > 1 ? (i === 0 ? -14 : 14) : 0;
+      const x = existing.x * 0.5 + ballX * 0.5;
+      all.set(id, { ...existing, x, y: baseY + spread, involved: true });
     });
   }
 
@@ -362,12 +455,96 @@ export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: Mat
   return [...all.values()];
 }
 
-/** Where to draw the ball itself: at the current carrier's dot if we can find one, else the zone's centre-line point. */
-export function ballDotPosition(dots: DotPosition[], event: MatchEvent | null): { x: number; y: number } {
-  if (event) {
-    const carrier = dots.find((d) => d.involved && d.playerId === event.playerIds[0]);
-    if (carrier) return { x: carrier.x, y: carrier.y };
-    return { x: zoneToX(event.zone), y: CENTER_Y };
+/**
+ * Ball placement/pacing, event-aware — replaces the old `ballDotPosition`
+ * Aug 2026 (Tyler, live testing: "the position of the football is always on
+ * top of the current player... show the ball on the side of the circle in
+ * the direction they're planning to kick or pass it... above their head if
+ * they've taken a mark... at the bottom of the circle if they're tackled...
+ * the ball can move much slower when it's kicked compared to a handball").
+ *
+ * Every event already carries reliable, structured `statDeltas` (see
+ * engine/match.ts's `log()` call sites) — `marks`/`tackles`/`kicks`/
+ * `handballs` are always present on exactly the events they describe, so
+ * classifying "what kind of moment is this" reads those instead of
+ * pattern-matching `description` strings, which would break the moment
+ * anyone reworded a log line.
+ *
+ * There's no distinct "free kick" event in the engine's data model at all
+ * (match.ts never logs one — see ROADMAP.md), so "give away a free kick" as
+ * a trigger isn't literally implementable yet; a lost-possession tackle is
+ * the closest real analogue and is what this responds to instead. Worth
+ * revisiting if/when free kicks become their own modelled event.
+ */
+export type BallState = "flight" | "marked" | "dropped" | "neutral";
+
+export interface BallTarget {
+  x: number;
+  y: number;
+  state: BallState;
+  /** Relative to a handball's pace (1 = same speed). MatchCanvas.tsx scales the ball's own smoothing half-life by this so a kick visibly takes longer to arrive. */
+  speedMultiplier: number;
+}
+
+function hasStat(event: MatchEvent, stat: string): boolean {
+  return event.statDeltas.some((d) => d.stat === stat);
+}
+
+const BALL_SIDE_OFFSET = 20; // px, kick/handball: to the side, toward wherever it's headed
+const BALL_MARK_OFFSET_Y = -24; // px, above the head
+const BALL_DROPPED_OFFSET_Y = 16; // px, at/below the feet — fumbled
+const BALL_NEUTRAL_OFFSET_Y = -12; // px, held at about chest height — the STOPPAGE/groundBall-win/shot default
+const KICK_SPEED_MULTIPLIER = 3;
+
+export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nextEvent: MatchEvent | null): BallTarget {
+  if (!event) {
+    return { x: zoneToX(MIDFIELD), y: CENTER_Y, state: "neutral", speedMultiplier: 1 };
   }
-  return { x: zoneToX(2), y: CENTER_Y };
+
+  const primary = dots.find((d) => d.involved && d.playerId === event.playerIds[0]);
+  const anchorX = primary?.x ?? zoneToX(event.zone);
+  const anchorY = primary?.y ?? CENTER_Y;
+
+  if (hasStat(event, "marks")) {
+    return { x: anchorX, y: anchorY + BALL_MARK_OFFSET_Y, state: "marked", speedMultiplier: 1 };
+  }
+
+  if (hasStat(event, "tackles")) {
+    // playerIds[1] is the carrier who lost it — see match.ts's `runGeneralPlay`.
+    const tackled = dots.find((d) => d.involved && d.playerId === event.playerIds[1]);
+    return {
+      x: tackled?.x ?? anchorX,
+      y: (tackled?.y ?? anchorY) + BALL_DROPPED_OFFSET_Y,
+      state: "dropped",
+      speedMultiplier: 1,
+    };
+  }
+
+  const isKick = hasStat(event, "kicks");
+  const isHandball = hasStat(event, "handballs");
+  if (isKick || isHandball) {
+    // Point toward wherever the *next* revealed event's featured player
+    // actually is when we know it (a real look-ahead, not a guess) — that's
+    // what makes this read as "kicked toward Chandler" rather than "kicked
+    // generically forward." Falls back to the possessing side's attacking
+    // direction only when there's no next tick yet (last event of a match).
+    const nextTarget = nextEvent ? dots.find((d) => d.playerId === nextEvent.playerIds[0]) : undefined;
+    let dirX = event.possession === "home" ? 1 : -1;
+    let dirY = 0;
+    if (nextTarget && (nextTarget.x !== anchorX || nextTarget.y !== anchorY)) {
+      const dx = nextTarget.x - anchorX;
+      const dy = nextTarget.y - anchorY;
+      const len = Math.hypot(dx, dy) || 1;
+      dirX = dx / len;
+      dirY = dy / len;
+    }
+    return {
+      x: anchorX + dirX * BALL_SIDE_OFFSET,
+      y: anchorY + dirY * BALL_SIDE_OFFSET,
+      state: "flight",
+      speedMultiplier: isKick ? KICK_SPEED_MULTIPLIER : 1,
+    };
+  }
+
+  return { x: anchorX, y: anchorY + BALL_NEUTRAL_OFFSET_Y, state: "neutral", speedMultiplier: 1 };
 }

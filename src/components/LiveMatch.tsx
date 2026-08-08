@@ -234,7 +234,14 @@ export function LiveMatch() {
             </div>
           </div>
 
-          <MatchCanvas home={homeTeam} away={awayTeam} event={playback.currentEvent} liveBoxScore={playback.liveBoxScore} isPlaying={playback.isPlaying} />
+          <MatchCanvas
+            home={homeTeam}
+            away={awayTeam}
+            event={playback.currentEvent}
+            nextEvent={result.events[playback.currentIndex + 1] ?? null}
+            liveBoxScore={playback.liveBoxScore}
+            isPlaying={playback.isPlaying}
+          />
 
           {pendingCoachsCall ? (
             <CoachsCall

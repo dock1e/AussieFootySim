@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
-import { computeDotPositions, ballDotPosition, GROUND_WIDTH, GROUND_HEIGHT, type DotPosition } from "../engine/ground";
+import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, type DotPosition, type BallTarget } from "../engine/ground";
 
 /**
  * The signature feature — User Interface.md "Match simulation screen": a
@@ -25,6 +25,13 @@ import { computeDotPositions, ballDotPosition, GROUND_WIDTH, GROUND_HEIGHT, type
  * dot has fully caught up (a new event, or the continuous off-ball drift
  * updating every frame) with no special-casing needed, unlike a fixed-start/
  * fixed-end tween which would need to decide what to do if interrupted.
+ *
+ * Aug 2026 (Tyler, live testing): the ball itself now gets the exact same
+ * chase-the-target treatment as a dot, but through its own independent ref
+ * and its own smoothing rate (see `ballRenderedRef`/`ballTargetFor` below) —
+ * decoupled from every player dot's shared `SMOOTHING_HALF_LIFE_MS` so a
+ * kick can visibly take ~3x longer to arrive than a handball without
+ * changing how fast any player themselves appears to move.
  */
 const HOME_COLOR = "#ff5a36"; // accent — matches Tailwind config's accent colour
 const AWAY_COLOR = "#4b8fe0"; // info blue, a clear contrast against the accent
@@ -36,25 +43,45 @@ const INVOLVED_DOT_RADIUS = 13;
 // feel constant, same status as `useMatchPlayback.ts`'s `BASE_TICK_MS`.
 const SMOOTHING_HALF_LIFE_MS = 150;
 
+/**
+ * Ground background — Aug 2026 redesign (Tyler attached two reference
+ * images: a clean vector AFL oval icon with a boundary buffer ring, and a
+ * labelled diagram with real dimensions/zone names). Two concrete changes
+ * from the reference: a maroon boundary band outside the turf (every real
+ * broadcast ground graphic draws this), and goal/behind posts sketched at
+ * each end. The oval's actual proportions live in engine/ground.ts's
+ * `GROUND_HEIGHT` (also changed this round) since every position/zone
+ * calculation depends on that ratio too — this function only draws it.
+ */
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
 
-  // Turf
-  ctx.fillStyle = "#0f2a1a";
-  ctx.fillRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
-
   const cx = GROUND_WIDTH / 2;
   const cy = GROUND_HEIGHT / 2;
-  const rx = GROUND_WIDTH / 2 - 20;
-  const ry = GROUND_HEIGHT / 2 - 20;
+  const rx = GROUND_WIDTH / 2 - 14;
+  const ry = GROUND_HEIGHT / 2 - 14;
 
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.lineWidth = 2;
+  // Backdrop behind the oval - reads as the stands/surrounds in every
+  // reference photo, and keeps the canvas's own square corners from
+  // breaking the ground's silhouette.
+  ctx.fillStyle = "#0a0e14";
+  ctx.fillRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
 
-  // Boundary oval
+  // Boundary buffer ring - the maroon band every broadcast graphic (and
+  // Tyler's own reference oval icon) draws just outside the playing surface.
   ctx.beginPath();
   ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.fillStyle = "#5c2323";
+  ctx.fill();
+
+  // Turf, inset from the boundary ring.
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx - 16, ry - 16, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#153d22";
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.lineWidth = 2;
 
   // Centre square + circle
   ctx.strokeRect(cx - 60, cy - 60, 120, 120);
@@ -62,17 +89,33 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.arc(cx, cy, 28, 0, Math.PI * 2);
   ctx.stroke();
 
-  // 50m arcs at each end (simplified as partial ellipses)
+  // 50m arcs at each end (simplified as partial ellipses, radius roughly
+  // matching the real ~1:3 ratio of a 50m arc to a ~150m end-to-end ground).
+  const arcR = GROUND_WIDTH * 0.17;
   ctx.beginPath();
-  ctx.ellipse(20, cy, 130, ry * 0.85, 0, -Math.PI / 2, Math.PI / 2);
+  ctx.ellipse(30, cy, arcR, ry * 0.82, 0, -Math.PI / 2, Math.PI / 2);
   ctx.stroke();
   ctx.beginPath();
-  ctx.ellipse(GROUND_WIDTH - 20, cy, 130, ry * 0.85, 0, Math.PI / 2, (3 * Math.PI) / 2);
+  ctx.ellipse(GROUND_WIDTH - 30, cy, arcR, ry * 0.82, 0, Math.PI / 2, (3 * Math.PI) / 2);
   ctx.stroke();
 
   // Goal squares
-  ctx.strokeRect(4, cy - 30, 24, 60);
-  ctx.strokeRect(GROUND_WIDTH - 28, cy - 30, 24, 60);
+  ctx.strokeRect(4, cy - 30, 22, 60);
+  ctx.strokeRect(GROUND_WIDTH - 26, cy - 30, 22, 60);
+  drawGoalPosts(ctx, 3, cy);
+  drawGoalPosts(ctx, GROUND_WIDTH - 3, cy);
+}
+
+/** Behind-goal-goal-behind, evenly spaced - a light decorative nod to the real ~6.4m post spacing (Tyler's reference diagram), not gameplay-relevant. */
+function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
+  const spacing = 11;
+  const offsets = [-1.5, -0.5, 0.5, 1.5];
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  offsets.forEach((o, i) => {
+    const isBehindPost = i === 0 || i === 3;
+    const h = isBehindPost ? 8 : 14;
+    ctx.fillRect(x - 1, cy + o * spacing - h / 2, 2, h);
+  });
 }
 
 function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition) {
@@ -99,9 +142,17 @@ function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition) {
   ctx.fillText(String(dot.jumperNumber), dot.x, dot.y + 0.5);
 }
 
+/**
+ * Aug 2026: the y-offset used to be a flat, hardcoded -20 here regardless of
+ * what was actually happening (Tyler: "the position of the football is
+ * always on top of the current player") — the offset is now computed by
+ * `ballTargetFor` itself (above the head for a mark, at the feet for a
+ * tackle, to the side toward the direction of travel for a kick/handball),
+ * so this just draws at exactly the position it's given.
+ */
 function drawBall(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }) {
   ctx.beginPath();
-  ctx.ellipse(pos.x, pos.y - 20, 7, 5, Math.PI / 4, 0, Math.PI * 2);
+  ctx.ellipse(pos.x, pos.y, 7, 5, Math.PI / 4, 0, Math.PI * 2);
   ctx.fillStyle = "#f5d76e";
   ctx.fill();
   ctx.strokeStyle = "#8a6d1a";
@@ -113,13 +164,15 @@ export interface MatchCanvasProps {
   home: MatchTeam;
   away: MatchTeam;
   event: MatchEvent | null;
+  /** The event one tick ahead of `event`, when known — lets the ball's flight direction actually point at wherever it's headed next (see `ballTargetFor`) instead of only a generic attacking-direction guess. `null`/omitted at the last tick of a match, or wherever a caller doesn't have it. */
+  nextEvent?: MatchEvent | null;
   /** Live-so-far box score, for the hover tooltip's statline — see hooks/useMatchPlayback.ts. */
   liveBoxScore?: Record<number, BoxScoreLine>;
   /** Freezes the continuous off-ball drift while paused, so "Pause" reads like a real pause rather than players still jiggling in place. Defaults true so every other current caller (there are none yet outside LiveMatch.tsx, but this keeps the prop genuinely optional) keeps animating. */
   isPlaying?: boolean;
 }
 
-export function MatchCanvas({ home, away, event, liveBoxScore, isPlaying = true }: MatchCanvasProps) {
+export function MatchCanvas({ home, away, event, nextEvent = null, liveBoxScore, isPlaying = true }: MatchCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<DotPosition | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -133,6 +186,8 @@ export function MatchCanvas({ home, away, event, liveBoxScore, isPlaying = true 
   awayRef.current = away;
   const eventRef = useRef(event);
   eventRef.current = event;
+  const nextEventRef = useRef(nextEvent);
+  nextEventRef.current = nextEvent;
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
 
@@ -141,6 +196,10 @@ export function MatchCanvas({ home, away, event, liveBoxScore, isPlaying = true 
   const teamsKeyRef = useRef("");
   const driftElapsedRef = useRef(0); // seconds, only advances while isPlaying
   const lastFrameAtRef = useRef(performance.now());
+  // The ball's own rendered position, smoothed independently of every dot's
+  // shared rate (see this file's top-of-file doc comment) so a kick can read
+  // as visibly slower than a handball.
+  const ballRenderedRef = useRef<{ x: number; y: number }>({ x: GROUND_WIDTH / 2, y: GROUND_HEIGHT / 2 });
 
   // A genuinely new match-up (different clubs) should have its dots appear
   // where they belong immediately, not visibly fly in from wherever the
@@ -170,6 +229,7 @@ export function MatchCanvas({ home, away, event, liveBoxScore, isPlaying = true 
       const currentHome = homeRef.current;
       const currentAway = awayRef.current;
       const currentEvent = eventRef.current;
+      const currentNextEvent = nextEventRef.current;
       const targets = computeDotPositions(currentHome, currentAway, currentEvent, driftElapsedRef.current);
       const smoothing = 1 - Math.pow(0.5, dt / SMOOTHING_HALF_LIFE_MS);
 
@@ -185,6 +245,22 @@ export function MatchCanvas({ home, away, event, liveBoxScore, isPlaying = true 
       }
       lastDrawnDotsRef.current = drawn;
 
+      // The ball gets its own target derived from the *target* dots (not the
+      // still-smoothing `drawn` ones) so its direction/offset logic reads
+      // stable positions, then chases that target at its own event-type-
+      // dependent rate — a kick's target has speedMultiplier 3, so its
+      // half-life is 3x longer and it visibly takes longer to arrive than a
+      // handball's, independent of how fast the player dots themselves ease
+      // into place.
+      const ballTarget: BallTarget = ballTargetFor(targets, currentEvent, currentNextEvent);
+      const ballHalfLife = SMOOTHING_HALF_LIFE_MS * ballTarget.speedMultiplier;
+      const ballSmoothing = 1 - Math.pow(0.5, dt / ballHalfLife);
+      const prevBall = ballRenderedRef.current;
+      ballRenderedRef.current = {
+        x: prevBall.x + (ballTarget.x - prevBall.x) * ballSmoothing,
+        y: prevBall.y + (ballTarget.y - prevBall.y) * ballSmoothing,
+      };
+
       const ctx = canvasRef.current?.getContext("2d");
       if (ctx) {
         drawGround(ctx);
@@ -195,7 +271,7 @@ export function MatchCanvas({ home, away, event, liveBoxScore, isPlaying = true 
         for (const dot of drawn) {
           if (dot.involved) drawDot(ctx, dot);
         }
-        drawBall(ctx, ballDotPosition(drawn, currentEvent));
+        drawBall(ctx, ballRenderedRef.current);
       }
 
       requestAnimationFrame(frame);

@@ -63,13 +63,9 @@ const SMOOTHING_HALF_LIFE_MS = 150;
  * the boundary at all (verified by hand: at x=30 on the old 1000x780 canvas,
  * the boundary's true half-height there was ~explicit-computed ~85px, not
  * the ~276px the old `ry * 0.82` produced) — it looked disconnected because
- * it *was* disconnected. `boundaryHalfHeightAt` below fixes that by
- * construction: the arc's small ellipse always gets a vertical radius that
- * matches the real boundary curve at its own centre x, so its top/bottom
- * points genuinely sit on the boundary line rather than floating past it.
- * Goal squares and posts now share one `GOAL_SQUARE_HALF_WIDTH` constant so
- * the posts actually align with the square's edges instead of using an
- * unrelated spacing value.
+ * it *was* disconnected. Goal squares and posts now share one
+ * `GOAL_SQUARE_HALF_WIDTH` constant so the posts actually align with the
+ * square's edges instead of using an unrelated spacing value.
  *
  * Round 3 (Tyler, live testing + a hand-drawn markup sketch): the arc's
  * vertical anchoring from round 2 was correct, but its *depth* (how far it
@@ -91,12 +87,25 @@ const SMOOTHING_HALF_LIFE_MS = 150;
  * equally. The centre circle also gained a diameter line, since real
  * ruckmen stand on opposite halves of it before a ball-up and meet at the
  * middle — Tyler's own description of what was missing.
+ *
+ * Round 4 (Tyler, live testing against the actual round-3 render, with a
+ * hand-drawn markup this time): round 3's arc still read as too small and
+ * hugging the goal square, nowhere near the boundary-to-boundary sweep the
+ * markup showed. Two compounding problems, not one: `arcDepth`'s "~60% of
+ * the way to centre" claim was measured against the wrong base (`GROUND_WIDTH`
+ * instead of the actual goal-line-to-centre distance, `turfRx`) so it only
+ * ever reached ~47%; and, separately, round 2's `boundaryHalfHeightAt`
+ * approach fit the arc's vertical reach to the boundary curve *at the arc's
+ * own small inset centre-x* — still deep in the oval's narrow, pinched tip
+ * near the goal line, so "touches the boundary there" only ever meant ~48%
+ * of the ground's *maximum* half-height, not a dramatic sweep. Replaced with
+ * a genuine true circle (a real 50m arc has equal reach in every direction,
+ * not a squashed ellipse) anchored right at the goal line and clipped to the
+ * turf ellipse, so it's naturally cut off by the real boundary curve
+ * wherever it would otherwise stray outside — see the arc-drawing block
+ * below for the geometry. `boundaryHalfHeightAt` is gone; the clip does its
+ * job now. Centre square nudged bigger again too, a direct, undebated ask.
  */
-function boundaryHalfHeightAt(x: number, cx: number, rx: number, ry: number): number {
-  const t = 1 - ((x - cx) / rx) ** 2;
-  return t > 0 ? ry * Math.sqrt(t) : 0;
-}
-
 const GOAL_SQUARE_HALF_WIDTH = 26; // along the goal line - real goal square is ~6.4m wide
 const GOAL_SQUARE_DEPTH = 73; // into the field - real goal square is ~9m deep: deeper than it is wide (ratio ~1.4), not the other way around
 // Goal posts, behind posts, and the goal square's own width are all the
@@ -138,7 +147,10 @@ function drawGround(ctx: CanvasRenderingContext2D) {
 
   // Centre square + circle - bigger, proportioned against the real ~50m
   // square on a ~160m ground (roughly a third of the ground's short axis).
-  const squareHalf = turfRy * 0.33;
+  // Round 4 (Tyler, live testing against the round-3 redesign): nudged up
+  // again, a bit bigger still - a direct "make it slightly bigger" ask, not
+  // a new real-world ratio to hit.
+  const squareHalf = turfRy * 0.37;
   ctx.strokeRect(cx - squareHalf, cy - squareHalf, squareHalf * 2, squareHalf * 2);
   const circleRadius = squareHalf * 0.32;
   ctx.beginPath();
@@ -151,26 +163,54 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.lineTo(cx, cy + circleRadius);
   ctx.stroke();
 
-  // 50m arcs at each end - a small ellipse whose own centre sits inset from
-  // the goal line and whose vertical radius is derived from the boundary's
-  // real curve at that x (see boundaryHalfHeightAt above), so the arc's
-  // top/bottom points land on the boundary rather than floating past it.
-  // Depth (how far it bulges toward centre) checked against a real 50m
-  // arc's actual geometry: radius 50m from the goal line, on a ground whose
-  // centre sits ~82.5m from each goal line, reaches about 60% of the way to
-  // centre - the old 0.165 fraction only reached about 48% of the way.
-  const arcDepth = GROUND_WIDTH * 0.22;
-  const arcInset = turfRx * 0.13;
-  const leftArcX = cx - turfRx + arcInset;
-  const rightArcX = cx + turfRx - arcInset;
-  const leftArcHalf = boundaryHalfHeightAt(leftArcX, cx, turfRx, turfRy) * 0.97;
-  const rightArcHalf = boundaryHalfHeightAt(rightArcX, cx, turfRx, turfRy) * 0.97;
+  // 50m arcs at each end.
+  //
+  // Round 4 (Tyler, live testing with a hand-drawn markup over an actual
+  // screenshot: the arc should reach almost boundary-to-boundary, bulging
+  // out much further than round 3's version): round 3's own justification
+  // ("reaches about 60% of the way to centre") had a real unit bug - it set
+  // `arcDepth = GROUND_WIDTH * 0.22`, but the goal-line-to-centre distance
+  // is `turfRx` (470 on this canvas), not `GROUND_WIDTH` (1000). 220 / 470
+  // is only ~47%, not 60% - the code never actually did what its own comment
+  // said, which is exactly why it still looked too small live.
+  //
+  // The vertical-reach approach was the bigger problem though, not just that
+  // one number: round 3 fit a small ellipse whose top/bottom points touch the
+  // boundary *at the ellipse's own inset centre x* - only 13% of the way
+  // from the goal line toward centre, still deep in the pinched, narrow tip
+  // of the oval, so "touches the boundary" there only ever reached ~48% of
+  // the ground's *maximum* half-height, nowhere near the dramatic
+  // boundary-to-boundary sweep a real arc (and Tyler's markup) actually
+  // shows.
+  //
+  // Real 50m arcs are true circles (equal reach in every direction), and on
+  // a real ground the boundary at the goal-line end is often narrower than
+  // 50m out - so the arc's own top/bottom really do get cut off by the
+  // boundary line itself before completing a full semicircle, which is
+  // exactly the "nearly touches the boundary near the wing" look every real
+  // broadcast graphic (and Tyler's sketch) shows. Modelled that way directly
+  // instead of hand-fitting an ellipse to one sample point: draw a genuine
+  // circle anchored right at the goal line, sized generously (70% of the
+  // goal-line-to-centre distance, correctly measured against `turfRx` this
+  // time), and clip the whole thing to the turf ellipse so it's naturally
+  // cut off by the real boundary curve wherever the circle would otherwise
+  // stray outside it - no separate "fit the ellipse to the boundary" step
+  // needed, and it can't ever float past the boundary by construction.
+  const arcRadius = turfRx * 0.7;
+  const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
+  const leftArcX = cx - turfRx + arcAnchorInset;
+  const rightArcX = cx + turfRx - arcAnchorInset;
+  ctx.save();
   ctx.beginPath();
-  ctx.ellipse(leftArcX, cy, arcDepth, leftArcHalf, 0, -Math.PI / 2, Math.PI / 2);
+  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.beginPath();
+  ctx.arc(leftArcX, cy, arcRadius, -Math.PI / 2, Math.PI / 2);
   ctx.stroke();
   ctx.beginPath();
-  ctx.ellipse(rightArcX, cy, arcDepth, rightArcHalf, 0, Math.PI / 2, (3 * Math.PI) / 2);
+  ctx.arc(rightArcX, cy, arcRadius, Math.PI / 2, (3 * Math.PI) / 2);
   ctx.stroke();
+  ctx.restore();
 
   // Goal squares, anchored at the turf edge (not the canvas edge) so they
   // never render partly off the ground.

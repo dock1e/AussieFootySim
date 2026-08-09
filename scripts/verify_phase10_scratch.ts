@@ -4,14 +4,21 @@
 // (3) event-aware ball placement (mark/tackle/kick/handball) and its
 // direction/speed logic. Run directly with `node --experimental-strip-types`,
 // same untracked-scratch-script pattern as every prior phase.
+//
+// Extended for round 2 (bigger centre square/50m-arcs/goal-square visuals,
+// GROUND_HEIGHT -10% for screen fit, live per-player stat sidebars): section
+// 4's ratio assertion was updated for the new intentionally-narrower-than-
+// real height, and section 5 was added to sanity-check the live-sidebar math
+// (fantasyPointsFor folded over a partial box score) independently of React.
 
 import { ALL_PLAYERS, getPlayersByClub, leagueAverageOvr } from "../src/data/loadPlayers.ts";
 import { CLUBS } from "../src/types/club.ts";
 import { buildTeams } from "../src/engine/season.ts";
-import { simulateMatch } from "../src/engine/match.ts";
+import { simulateMatch, type BoxScoreLine } from "../src/engine/match.ts";
 import { mulberry32 } from "../src/engine/rng.ts";
 import { aiTeamPlan } from "../src/engine/tactics.ts";
 import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT } from "../src/engine/ground.ts";
+import { fantasyPointsFor } from "../src/engine/ratings.ts";
 
 console.log(`Real pool: ${ALL_PLAYERS.length} players across ${CLUBS.length} clubs\n`);
 
@@ -182,11 +189,15 @@ console.log(directionChecks === 0 || directionCorrect === directionChecks
   : "FAIL: ball direction disagreed with where play actually went next");
 
 // --- 4. Ground dimensions + bounds sanity after the GROUND_HEIGHT change ---
+// Round 2 deliberately took the ratio narrower than a real AFL ground
+// (Tyler's explicit "make it 10% narrower so it fits nicer on screen" ask),
+// so this is no longer a real-ratio check - just a sane-bounds check that
+// the width/height are still a believable oval, not a degenerate shape.
 console.log("\n--- 4. Ground proportions ---");
 console.log(`  GROUND_WIDTH=${GROUND_WIDTH} GROUND_HEIGHT=${GROUND_HEIGHT} ratio=${(GROUND_WIDTH / GROUND_HEIGHT).toFixed(2)}:1`);
-console.log(GROUND_WIDTH / GROUND_HEIGHT < 1.4 && GROUND_WIDTH / GROUND_HEIGHT > 1.1
-  ? "PASS: ratio now sits in the real-AFL-ground range (~1.1-1.3:1), not the old 1.67:1"
-  : "FAIL: ratio outside the intended range");
+console.log(GROUND_WIDTH / GROUND_HEIGHT < 1.6 && GROUND_WIDTH / GROUND_HEIGHT > 1.1
+  ? "PASS: ratio is a believable oval shape (intentionally narrower than real AFL's ~1.1-1.3:1, per Tyler's screen-fit request)"
+  : "FAIL: ratio outside sane bounds");
 
 let outOfBounds = 0;
 for (const ev of result.events) {
@@ -196,5 +207,50 @@ for (const ev of result.events) {
   }
 }
 console.log(outOfBounds === 0 ? "PASS: every dot stays within the new ground bounds (incl. drift wobble)" : `FAIL: ${outOfBounds} out-of-bounds dots`);
+
+// --- 5. Live sidebar math: fantasyPointsFor over a folded partial box score ---
+// Replicates exactly what useMatchPlayback.ts's liveBoxScore + LivePlayerStats
+// do every tick, outside of React: fold statDeltas up to a cut-off tick into
+// a per-player BoxScoreLine, score it with fantasyPointsFor, and check the
+// sidebar's sort-by-score behaves and that scores only grow as the match
+// progresses (every tracked stat is a positive increment - no clangers/
+// turnovers exist in this data model - so this should never regress).
+console.log("\n--- 5. Live per-player stat sidebar math ---");
+
+function emptyLine(): BoxScoreLine {
+  return { disposals: 0, kicks: 0, handballs: 0, marks: 0, contestedMarks: 0, tackles: 0, clearances: 0, hitouts: 0, contestedPoss: 0, uncontestedPoss: 0, goals: 0, behinds: 0 };
+}
+
+const allIds = [...home.players, ...away.players].map((p) => p.PlayerID);
+const linesAtQ1: Record<number, BoxScoreLine> = {};
+const linesFull: Record<number, BoxScoreLine> = {};
+for (const id of allIds) {
+  linesAtQ1[id] = emptyLine();
+  linesFull[id] = emptyLine();
+}
+for (const ev of result.events) {
+  const target = ev.quarter === 1 ? linesAtQ1 : null;
+  for (const d of ev.statDeltas) {
+    linesFull[d.playerId][d.stat] += d.delta;
+    if (target) target[d.playerId][d.stat] += d.delta;
+  }
+}
+// Q1 lines never saw quarters 2-4, so carry them forward as a lower bound.
+let monotonicOk = true;
+for (const id of allIds) {
+  const scQ1 = fantasyPointsFor(linesAtQ1[id]);
+  const scFull = fantasyPointsFor(linesFull[id]);
+  if (scFull < scQ1) monotonicOk = false;
+}
+console.log(monotonicOk
+  ? "PASS: every player's live fantasy score only grows as more of the match is folded in (no regressions mid-match)"
+  : "FAIL: some player's full-match score was lower than their Q1 score");
+
+const sortedFull = allIds
+  .map((id) => ({ id, sc: fantasyPointsFor(linesFull[id]) }))
+  .sort((a, b) => b.sc - a.sc);
+const isSorted = sortedFull.every((row, i) => i === 0 || sortedFull[i - 1].sc >= row.sc);
+console.log(`  top scorer this match: playerId ${sortedFull[0].id} with ${Math.round(sortedFull[0].sc)} SC`);
+console.log(isSorted ? "PASS: sort-by-SC (as used in the sidebar) produces a properly descending order" : "FAIL: sort order broken");
 
 console.log("\nDone.");

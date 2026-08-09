@@ -33,13 +33,20 @@ export const GROUND_WIDTH = 1000;
 // ground). Aug 2026 (Tyler, reference dimensions attached: 135-185m long by
 // 110-155m wide): real grounds run closer to 1.1-1.3:1 — Marvel Stadium's
 // 160x125m is about as close to this app's old ratio gets, and the MCG at
-// 160x141m is nearly circular. 780 (1.28:1) reads as a genuine oval rather
+// 160x141m is nearly circular. 780 (1.28:1) read as a genuine oval rather
 // than a stretched rectangle while staying comfortably landscape for a wide
 // UI card. Every other constant in this file (MARGIN, ZONE_X_FRACTION,
 // CENTER_Y, maxHalfHeightAt) is expressed as a fraction of GROUND_WIDTH/
 // GROUND_HEIGHT, so this change alone re-scales the whole ground proportionally
 // with no follow-on edits needed elsewhere in this file.
-export const GROUND_HEIGHT = 780;
+//
+// Aug 2026, round 2 (Tyler, live testing): trimmed a further 10%, to 702
+// (1.42:1) — with the ball/player realism fixes landed, the next ask was
+// fitting the whole Live Match screen (ground + new player-stat sidebars,
+// see LiveMatch.tsx) on one screen without scrolling, not a further
+// proportion correctness pass. Still comfortably inside a real oval's look,
+// just a little shorter so the page reads less tall.
+export const GROUND_HEIGHT = 702;
 const MARGIN = 30;
 const MIN_HALF_HEIGHT = 70;
 

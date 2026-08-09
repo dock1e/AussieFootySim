@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CLUBS } from "../types/club";
+import { playerFullName } from "../types/player";
 import { getPlayersByClub } from "../data/loadPlayers";
 import type { MatchTeam } from "../engine/team";
 import { autoFillLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
@@ -15,6 +16,7 @@ import {
   type BoxScoreLine,
 } from "../engine/match";
 import { mulberry32 } from "../engine/rng";
+import { fantasyPointsFor } from "../engine/ratings";
 import type { TeamPlan, GameStyle } from "../engine/tactics";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
@@ -234,14 +236,18 @@ export function LiveMatch() {
             </div>
           </div>
 
-          <MatchCanvas
-            home={homeTeam}
-            away={awayTeam}
-            event={playback.currentEvent}
-            nextEvent={result.events[playback.currentIndex + 1] ?? null}
-            liveBoxScore={playback.liveBoxScore}
-            isPlaying={playback.isPlaying}
-          />
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-[205px_minmax(0,1fr)_205px]">
+            <LivePlayerStats team={homeTeam} liveBoxScore={playback.liveBoxScore} />
+            <MatchCanvas
+              home={homeTeam}
+              away={awayTeam}
+              event={playback.currentEvent}
+              nextEvent={result.events[playback.currentIndex + 1] ?? null}
+              liveBoxScore={playback.liveBoxScore}
+              isPlaying={playback.isPlaying}
+            />
+            <LivePlayerStats team={awayTeam} liveBoxScore={playback.liveBoxScore} />
+          </div>
 
           {pendingCoachsCall ? (
             <CoachsCall
@@ -319,6 +325,90 @@ function ScoreBlock({
       <div className="text-3xl font-bold tabular-nums">{points}</div>
       <div className="text-xs text-slate-500 tabular-nums">
         {goals}.{behinds}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Live per-player stat sidebar — Aug 2026 (Tyler, live testing): "we have a
+ * lot of screen real estate to the left and right [of the ground]... down
+ * the left we could have the Melbourne players statistics and down the
+ * right the Collingwood players statistics," referencing footypig.com's
+ * live-scores ticker as a style example. That reference page has ~11
+ * columns (D/M/T/CP/CLR/HO/G.B/CLG/DE/TOG/SC); this only shows the ones
+ * genuinely backed by real tracked data (`match.ts`'s `BoxScoreLine`) rather
+ * than inventing the rest — no clanger/turnover tracking exists in this
+ * engine at all, and neither disposal efficiency nor time-on-ground are
+ * tracked per player, so CLG/DE/TOG are left out rather than faked. SC
+ * (fantasy points) *is* real: `ratings.ts`'s `fantasyPointsFor` is a pure
+ * function of `BoxScoreLine` totals with no whole-match normalisation step,
+ * so — unlike `computeSimAFLRatings`, which rescales against the *entire*
+ * match's final point pool and can't mean anything read mid-match — it's
+ * safe to recompute live, every tick, from `liveBoxScore` alone. Sorted by
+ * that live fantasy score, same "who's actually having a good game right
+ * now" ordering footypig's own SC-sorted list uses.
+ */
+function LivePlayerStats({ team, liveBoxScore }: { team: MatchTeam; liveBoxScore: Record<number, BoxScoreLine> }) {
+  const rows = team.players
+    .map((p) => {
+      const line = liveBoxScore[p.PlayerID];
+      return { player: p, line, sc: line ? fantasyPointsFor(line) : 0 };
+    })
+    .sort((a, b) => b.sc - a.sc);
+
+  return (
+    <div className="card flex h-full flex-col !px-2">
+      <div className="mb-2 truncate px-1 text-xs uppercase tracking-wide text-slate-400" title={team.name}>
+        {team.name}
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <table className="w-full text-[11px] tabular-nums">
+          <thead className="sticky top-0 bg-base-800 text-slate-500">
+            <tr>
+              <th className="pb-1 text-left font-medium">Player</th>
+              <th className="pb-1 text-right font-medium" title="Disposals">
+                D
+              </th>
+              <th className="pb-1 text-right font-medium" title="Marks">
+                M
+              </th>
+              <th className="pb-1 text-right font-medium" title="Tackles">
+                T
+              </th>
+              <th className="pb-1 text-right font-medium" title="Clearances">
+                CLR
+              </th>
+              <th className="pb-1 text-right font-medium" title="Hitouts">
+                HO
+              </th>
+              <th className="pb-1 text-right font-medium" title="Goals.Behinds">
+                G.B
+              </th>
+              <th className="pb-1 text-right font-medium" title="Live fantasy score">
+                SC
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ player, line, sc }, i) => (
+              <tr key={player.PlayerID} className={i === 0 && sc > 0 ? "text-accent" : "text-slate-300"}>
+                <td className="max-w-[64px] truncate py-0.5" title={playerFullName(player)}>
+                  {player.lname}
+                </td>
+                <td className="text-right">{line?.disposals ?? 0}</td>
+                <td className="text-right">{line?.marks ?? 0}</td>
+                <td className="text-right">{line?.tackles ?? 0}</td>
+                <td className="text-right">{line?.clearances ?? 0}</td>
+                <td className="text-right">{line?.hitouts ?? 0}</td>
+                <td className="text-right">
+                  {line?.goals ?? 0}.{line?.behinds ?? 0}
+                </td>
+                <td className="text-right font-semibold">{Math.round(sc)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

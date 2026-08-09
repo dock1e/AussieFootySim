@@ -46,13 +46,39 @@ const SMOOTHING_HALF_LIFE_MS = 150;
 /**
  * Ground background — Aug 2026 redesign (Tyler attached two reference
  * images: a clean vector AFL oval icon with a boundary buffer ring, and a
- * labelled diagram with real dimensions/zone names). Two concrete changes
- * from the reference: a maroon boundary band outside the turf (every real
- * broadcast ground graphic draws this), and goal/behind posts sketched at
- * each end. The oval's actual proportions live in engine/ground.ts's
- * `GROUND_HEIGHT` (also changed this round) since every position/zone
- * calculation depends on that ratio too — this function only draws it.
+ * labelled diagram with real dimensions/zone names). A maroon boundary band
+ * outside the turf, plus goal/behind posts and a goal square at each end.
+ * The oval's actual proportions live in engine/ground.ts's `GROUND_HEIGHT`
+ * (also changed this round) since every position/zone calculation depends
+ * on that ratio too — this function only draws it.
+ *
+ * Round 2 (Tyler, live testing — "the 50 meter arc, the goal square and the
+ * goal posts need to be upgraded visually and the centre square needs to be
+ * bigger too"): the centre square/circle are now meaningfully bigger
+ * (proportioned against the real ~50m-square-on-a-~160m-ground ratio rather
+ * than an arbitrary small box), and the 50m arcs are properly geometry-
+ * derived rather than an independently-eyeballed ellipse — the old version's
+ * vertical radius (`ry * 0.82`) had no relationship to where the boundary
+ * oval actually *is* at that x, so the arc's own endpoints didn't land on
+ * the boundary at all (verified by hand: at x=30 on the old 1000x780 canvas,
+ * the boundary's true half-height there was ~explicit-computed ~85px, not
+ * the ~276px the old `ry * 0.82` produced) — it looked disconnected because
+ * it *was* disconnected. `boundaryHalfHeightAt` below fixes that by
+ * construction: the arc's small ellipse always gets a vertical radius that
+ * matches the real boundary curve at its own centre x, so its top/bottom
+ * points genuinely sit on the boundary line rather than floating past it.
+ * Goal squares and posts now share one `GOAL_SQUARE_HALF_WIDTH` constant so
+ * the posts actually align with the square's edges instead of using an
+ * unrelated spacing value.
  */
+function boundaryHalfHeightAt(x: number, cx: number, rx: number, ry: number): number {
+  const t = 1 - ((x - cx) / rx) ** 2;
+  return t > 0 ? ry * Math.sqrt(t) : 0;
+}
+
+const GOAL_SQUARE_HALF_WIDTH = 38; // along the goal line - real goal square is ~6.4m wide, roughly matched proportionally against a ~135-155m ground width
+const GOAL_SQUARE_DEPTH = 52; // into the field - real goal square is ~9m deep, deeper than it is wide, same as here
+
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
 
@@ -60,6 +86,8 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   const cy = GROUND_HEIGHT / 2;
   const rx = GROUND_WIDTH / 2 - 14;
   const ry = GROUND_HEIGHT / 2 - 14;
+  const turfRx = rx - 16;
+  const turfRy = ry - 16;
 
   // Backdrop behind the oval - reads as the stands/surrounds in every
   // reference photo, and keeps the canvas's own square corners from
@@ -76,45 +104,66 @@ function drawGround(ctx: CanvasRenderingContext2D) {
 
   // Turf, inset from the boundary ring.
   ctx.beginPath();
-  ctx.ellipse(cx, cy, rx - 16, ry - 16, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
   ctx.fillStyle = "#153d22";
   ctx.fill();
 
   ctx.strokeStyle = "rgba(255,255,255,0.4)";
   ctx.lineWidth = 2;
 
-  // Centre square + circle
-  ctx.strokeRect(cx - 60, cy - 60, 120, 120);
+  // Centre square + circle - bigger, proportioned against the real ~50m
+  // square on a ~160m ground (roughly a third of the ground's short axis).
+  const squareHalf = turfRy * 0.33;
+  ctx.strokeRect(cx - squareHalf, cy - squareHalf, squareHalf * 2, squareHalf * 2);
   ctx.beginPath();
-  ctx.arc(cx, cy, 28, 0, Math.PI * 2);
+  ctx.arc(cx, cy, squareHalf * 0.32, 0, Math.PI * 2);
   ctx.stroke();
 
-  // 50m arcs at each end (simplified as partial ellipses, radius roughly
-  // matching the real ~1:3 ratio of a 50m arc to a ~150m end-to-end ground).
-  const arcR = GROUND_WIDTH * 0.17;
+  // 50m arcs at each end - a small ellipse whose own centre sits inset from
+  // the goal line and whose vertical radius is derived from the boundary's
+  // real curve at that x (see boundaryHalfHeightAt above), so the arc's
+  // top/bottom points land on the boundary rather than floating past it.
+  const arcDepth = GROUND_WIDTH * 0.165;
+  const arcInset = turfRx * 0.13;
+  const leftArcX = cx - turfRx + arcInset;
+  const rightArcX = cx + turfRx - arcInset;
+  const leftArcHalf = boundaryHalfHeightAt(leftArcX, cx, turfRx, turfRy) * 0.97;
+  const rightArcHalf = boundaryHalfHeightAt(rightArcX, cx, turfRx, turfRy) * 0.97;
   ctx.beginPath();
-  ctx.ellipse(30, cy, arcR, ry * 0.82, 0, -Math.PI / 2, Math.PI / 2);
+  ctx.ellipse(leftArcX, cy, arcDepth, leftArcHalf, 0, -Math.PI / 2, Math.PI / 2);
   ctx.stroke();
   ctx.beginPath();
-  ctx.ellipse(GROUND_WIDTH - 30, cy, arcR, ry * 0.82, 0, Math.PI / 2, (3 * Math.PI) / 2);
+  ctx.ellipse(rightArcX, cy, arcDepth, rightArcHalf, 0, Math.PI / 2, (3 * Math.PI) / 2);
   ctx.stroke();
 
-  // Goal squares
-  ctx.strokeRect(4, cy - 30, 22, 60);
-  ctx.strokeRect(GROUND_WIDTH - 26, cy - 30, 22, 60);
-  drawGoalPosts(ctx, 3, cy);
-  drawGoalPosts(ctx, GROUND_WIDTH - 3, cy);
+  // Goal squares, anchored at the turf edge (not the canvas edge) so they
+  // never render partly off the ground.
+  const leftGoalLineX = cx - turfRx;
+  const rightGoalLineX = cx + turfRx;
+  ctx.strokeRect(leftGoalLineX, cy - GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_DEPTH, GOAL_SQUARE_HALF_WIDTH * 2);
+  ctx.strokeRect(rightGoalLineX - GOAL_SQUARE_DEPTH, cy - GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_DEPTH, GOAL_SQUARE_HALF_WIDTH * 2);
+  drawGoalPosts(ctx, leftGoalLineX, cy);
+  drawGoalPosts(ctx, rightGoalLineX, cy);
 }
 
-/** Behind-goal-goal-behind, evenly spaced - a light decorative nod to the real ~6.4m post spacing (Tyler's reference diagram), not gameplay-relevant. */
+/**
+ * Behind-goal-goal-behind, sharing `GOAL_SQUARE_HALF_WIDTH` with the goal
+ * square itself so the main goal posts actually sit at the square's own
+ * edges (previously an unrelated spacing value, so they didn't line up) -
+ * a light decorative nod to the real ~6.4m post spacing (Tyler's reference
+ * diagram), not gameplay-relevant. Drawn right at the goal line/turf edge,
+ * straddling into the boundary ring, the way every reference broadcast
+ * graphic shows posts poking out past the playing surface itself.
+ */
 function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
-  const spacing = 11;
-  const offsets = [-1.5, -0.5, 0.5, 1.5];
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  offsets.forEach((o, i) => {
-    const isBehindPost = i === 0 || i === 3;
-    const h = isBehindPost ? 8 : 14;
-    ctx.fillRect(x - 1, cy + o * spacing - h / 2, 2, h);
+  const behindGap = 22;
+  const offsets = [-(GOAL_SQUARE_HALF_WIDTH + behindGap), -GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_HALF_WIDTH + behindGap];
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  offsets.forEach((dy, i) => {
+    const isGoalPost = i === 1 || i === 2;
+    const w = isGoalPost ? 5 : 3.5;
+    const h = isGoalPost ? 24 : 16;
+    ctx.fillRect(x - w / 2, cy + dy - h / 2, w, h);
   });
 }
 

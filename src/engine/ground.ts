@@ -127,7 +127,7 @@ export interface DotPosition {
  * rendered at the *exact* same pixel every single tick, indistinguishable
  * even on hover. Same root cause independently affects the archetype-line
  * fallback path (`ZONE_FOR_LINE` also puts Ruck and Midfield at zone 2) —
- * fixed once, for both paths, via `FOLLOWERS_Y_NUDGE` below rather than
+ * fixed once, for both paths, via `FOLLOWERS_LANE_NUDGE` below rather than
  * patched twice.
  */
 const POSITION_LANES: Partial<Record<Position, readonly number[]>> = {
@@ -147,16 +147,84 @@ const POSITION_LANES: Partial<Record<Position, readonly number[]>> = {
 };
 
 /**
- * A fixed pixel offset (not a lane fraction — see `formationFor`) pulling
- * the Followers trio (real positions R/RR/ROV, or the Ruck line in the
- * archetype fallback) visibly apart from the Centre line's dead-zero lane,
- * which they'd otherwise land exactly on top of (see the bug note above).
- * Real broadcast ground graphics draw the ruck/rover contest tucked inside
- * the centre square while the wing-centre-wing line spans the full width
- * outside it; this is a legible approximation of that same visual
- * convention, not a claim about literal AFL Laws of the Game geometry.
+ * A LANE-FRACTION offset (added directly to `lane`, then scaled by
+ * `halfHeight` just like every real lane — see `formationFor`) pulling the
+ * Followers trio (real positions R/RR/ROV, or the Ruck line in the archetype
+ * fallback) visibly apart from the Centre line's dead-zero lane, which
+ * they'd otherwise land exactly on top of (see the bug note above). Real
+ * broadcast ground graphics draw the ruck/rover contest tucked inside the
+ * centre square while the wing-centre-wing line spans the full width outside
+ * it; this is a legible approximation of that same visual convention, not a
+ * claim about literal AFL Laws of the Game geometry.
+ *
+ * BUG FIXED Aug 2026, round 3 (Tyler, live testing: "Ned Long and Nick
+ * Daicos are both occupying the same point"): this used to be a FIXED PIXEL
+ * offset applied *after* the lane*halfHeight term, not scaled by it — which
+ * quietly broke the moment ROV/RR's own lanes were tightened from +-0.3 to
+ * +-0.12 the same round this constant was introduced. ROV's lane is
+ * *negative* (-0.12), so its own lane*halfHeight term (up to about -33px at
+ * the ground's widest) was subtracting almost the entire +34px nudge back
+ * off again — verified by hand against the exact real match Tyler
+ * screenshotted (Collingwood's C and ROV): at the widest point of their
+ * shared zone's realistic range the two landed just 1.3px apart, invisible
+ * as two separate dots even though they were never numerically identical
+ * (so the exact-pixel duplicate sweep in the scratch script didn't catch it
+ * either — it was checking for identical dots, not merely indistinguishable
+ * ones). A fixed px value can never safely out-fight a term that scales with
+ * `halfHeight`, which itself ranges from ~60px to ~270px depending on where
+ * press has shifted a player's x — so this is now a lane fraction too,
+ * added to `lane` *before* the halfHeight multiply, which keeps the ratio
+ * between "real lane" and "nudge" constant regardless of halfHeight and
+ * removes the cancellation risk by construction rather than by a bigger
+ * magic number.
  */
-const FOLLOWERS_Y_NUDGE = 34;
+const FOLLOWERS_LANE_NUDGE = 0.3;
+
+/**
+ * BUG FIXED Aug 2026, round 3 — found by this round's own scratch-script
+ * sweep, not directly reported by Tyler, but the same visual symptom class:
+ * the 5 "spine" positions (`FB`/`CHB`/`C`/`CHF`/`FF`, each the single
+ * centre-line position for its zone, lane exactly 0, no nudge at all) have
+ * *zero* Y separation from each other if their X ever coincides. That
+ * shouldn't normally happen — they sit a full zone apart — but `press`
+ * shifts every player's zone continuously and at a different *rate* per
+ * mobility tier (`C` is NOMADIC at 1.3, `CHF` next door is KEY at only
+ * 0.35), so their shift *curves* cross: at some specific press value,
+ * `2 + 1.3*press` (C's shifted zone) and `3 + 0.35*press` (CHF's) work out
+ * to the same number, and real match data confirms this isn't a rare
+ * theoretical case — it happens often enough across real matches to be
+ * worth guarding against, not just at extreme/saturating press. Since two
+ * *different* positions' zones can legitimately land on the same value now
+ * and then, the fix isn't to stop that (would mean capping how far a
+ * position's shape is allowed to press forward/back, undoing real Phase 9
+ * behaviour) — it's to make sure Y still separates them when it does, the
+ * same principle `FOLLOWERS_LANE_NUDGE` already applies to the Followers
+ * cluster. A small alternating nudge (adjacent zones get opposite signs)
+ * keeps every *adjacent* spine pair apart; non-adjacent spine positions
+ * sharing a sign (FB/C/FF) would need to cross *two* zones' worth of
+ * shift to ever meet, a much rarer case not worth a bigger nudge for.
+ *
+ * Sign flipped Aug 2026, round 3 continued (found the same way as the
+ * `FALLBACK_RUCK_LANE_NUDGE` fix above — re-running the scratch sweep after
+ * that fix, still at press saturation): `C` is the one spine position that
+ * shares zone 2 with the Followers cluster (`R`/`RR`/`ROV`, all *positive* —
+ * see `FOLLOWERS_LANE_NUDGE`), and the old `+0.08` put it only 0.10 away from
+ * `ROV`'s own combined lane+nudge (+0.18) — the tightest static gap left
+ * anywhere in this file, confirmed live: Brisbane's Josh Dunkley (`C`) and
+ * Hugh McCluggage (`ROV`) sat under 16px apart in 8 of 16 drift samples at a
+ * deep, repeatedly-saturating stoppage. `FB`/`CHF`/`FF` have no such neighbour
+ * (nothing else shares their zone), so only `C` actually needed to move — but
+ * moving just `C` would break the alternating-adjacent-zone property this
+ * whole nudge exists for (`C` and `CHB`, or `C` and `CHF`, would end up on the
+ * same sign). So the *entire* pattern flips instead, preserving alternation
+ * (every adjacent pair still opposite signs) while putting `C` on the
+ * negative side, away from the all-positive Followers cluster: gap to `ROV`
+ * widens to 0.26, and the Defence/Forwards/Midfield-fallback margins (which
+ * shrink slightly since `FB`/`C`/`FF` moved toward their fallback's own
+ * negative range) still clear by 0.27 — comfortably more than enough at any
+ * realistic on-ground `halfHeight`.
+ */
+const SPINE_LANE_NUDGE: Partial<Record<Position, number>> = { FB: -0.08, CHB: 0.08, C: -0.08, CHF: 0.08, FF: -0.08 };
 
 /**
  * How far (in fractional zones, same 0-4 scale as `ZONE_FOR_POSITION`) a
@@ -209,7 +277,7 @@ const LINE_MOBILITY: Record<Line, number> = {
  * players typically splitting into groups of 1-2 per line, this was a near-
  * guaranteed collision with a real teammate, not a rare edge case.
  *
- * First attempt gave the Ruck line `FOLLOWERS_Y_NUDGE` specifically (same
+ * First attempt gave the Ruck line `FOLLOWERS_LANE_NUDGE` specifically (same
  * idea as R/RR/ROV, since a fallback Ruck-archetype player conceptually
  * *is* a follower) — but that just moved the collision: a team fielding
  * both a real `R` and a bench ruck (Ruck archetype, sitting on `INT`, so it
@@ -220,19 +288,64 @@ const LINE_MOBILITY: Record<Line, number> = {
  * as their real-position counterparts), so a single-player Midfield
  * fallback and a single-player Ruck fallback landed on each other instead.
  * Every fallback line now gets its *own* nudge — distinct from 0 (every
- * real Centre-row position), from `FOLLOWERS_Y_NUDGE` (every real Followers
- * position), and from each other. Defence and Forwards fallback share a
- * value safely since they're at different zones (0 and 4) and can never
- * collide with each other regardless of shared Y.
+ * real Centre-row position), from `FOLLOWERS_LANE_NUDGE` (every real
+ * Followers position), and from each other. Defence and Forwards fallback
+ * share a value safely since they're at different zones (0 and 4) and can
+ * never collide with each other regardless of shared lane.
+ *
+ * Round 3 (Tyler, live testing): converted from fixed pixels to lane
+ * fractions for the same reason `FOLLOWERS_LANE_NUDGE` was — see that
+ * constant's own doc comment for the general "a fixed px can't safely
+ * out-fight a halfHeight-scaled term" argument.
+ *
+ * Round 3, continued (found by re-running this round's own scratch-script
+ * sweep after the `hashPlayer` fix landed — sections 6/7 improved a lot but
+ * section 6 still failed persistently, not just transiently): the *spread*
+ * within a fallback group (see the lane formula in `assignAnchors` below)
+ * was wide enough to fight this nudge back down at the group's own extreme
+ * member. A 2+ person Forwards-line fallback group's highest-PlayerID member
+ * sat at lane +0.6; add `FALLBACK_LANE_NUDGE` (-0.55) and that's +0.05 — just
+ * 0.03 away from `FF`'s own real-position value (`SPINE_LANE_NUDGE.FF` =
+ * +0.08). Confirmed directly against a real match: Brisbane Lions' Cam
+ * Rayner (fallback Forwards/`INT`) rendered barely 3-4px from Callum Ah Chee
+ * (real `FF`) *before any jitter at all* — a static near-cancellation, not
+ * the phase-correlation bug `hashPlayer` fixes, which is why it survived
+ * that fix untouched. This is the exact same "two different anchor groups'
+ * lane+nudge sums happen to cross" class `SPINE_LANE_NUDGE` exists to
+ * prevent for pairs of *real* positions — it just wasn't checked for a
+ * fallback group against its own zone's real spine position too.
+ *
+ * The spread's own job (breaking ties *within* a fallback group) doesn't
+ * need the full +-0.6 range to work any more — `individualZoneNudge` and
+ * `driftOffset` (both `hashPlayer`-based now, see above) already add two
+ * more independent, per-player forms of separation on top, so it's shrunk to
+ * `FALLBACK_LANE_SPREAD` (+-0.2 — a group of 4 still spans a visible
+ * -0.2/-0.067/+0.067/+0.2, comfortably clear of +-0.08). `FALLBACK_RUCK_LANE_NUDGE`
+ * also moved from -0.85 to +0.71: with the Defence/Forwards/Midfield block
+ * now [-0.75,-0.35], there's no longer safe room for Ruck on the negative
+ * side without butting into either that block or `W`'s dual-lane -1 — the
+ * clear gap left is between the Followers cluster's own top value (`RR`,
+ * +0.42) and the dual-lane positions' +1, so Ruck-fallback now sits centred
+ * there instead (`FALLBACK_RUCK_LANE_SPREAD`, a tighter +-0.1 since that gap
+ * is narrower), clear of both by construction rather than by empirical luck.
  */
-const FALLBACK_Y_NUDGE = -22;
-const FALLBACK_RUCK_Y_NUDGE = -40; // must differ from FALLBACK_Y_NUDGE - Midfield and Ruck fallback groups share zone 2
+const FALLBACK_LANE_NUDGE = -0.55;
+const FALLBACK_RUCK_LANE_NUDGE = 0.71; // must differ from FALLBACK_LANE_NUDGE - Midfield and Ruck fallback groups share zone 2
+const FALLBACK_LANE_SPREAD = 0.2;
+const FALLBACK_RUCK_LANE_SPREAD = 0.1; // tighter - has a narrower gap to fit in (RR at +0.42 .. W at +1), see doc comment above
 
-const LINE_Y_NUDGE: Record<Line, number> = {
-  Defence: FALLBACK_Y_NUDGE,
-  Forwards: FALLBACK_Y_NUDGE,
-  Ruck: FALLBACK_RUCK_Y_NUDGE,
-  Midfield: FALLBACK_Y_NUDGE,
+const LINE_LANE_NUDGE: Record<Line, number> = {
+  Defence: FALLBACK_LANE_NUDGE,
+  Forwards: FALLBACK_LANE_NUDGE,
+  Ruck: FALLBACK_RUCK_LANE_NUDGE,
+  Midfield: FALLBACK_LANE_NUDGE,
+};
+
+const LINE_LANE_SPREAD: Record<Line, number> = {
+  Defence: FALLBACK_LANE_SPREAD,
+  Forwards: FALLBACK_LANE_SPREAD,
+  Ruck: FALLBACK_RUCK_LANE_SPREAD,
+  Midfield: FALLBACK_LANE_SPREAD,
 };
 
 interface Anchor {
@@ -240,8 +353,14 @@ interface Anchor {
   homeZone: number;
   lane: number;
   mobility: number;
-  /** Fixed pixel offset applied after `lane * halfHeight` — see `FOLLOWERS_Y_NUDGE`. Zero for everyone except the Followers/Ruck cluster. */
-  yNudge: number;
+  /**
+   * An extra lane fraction added to `lane` before the `halfHeight` multiply
+   * (see `formationFor`) — NOT a fixed pixel offset. Zero for everyone
+   * except the Followers/Ruck-fallback cluster; see `FOLLOWERS_LANE_NUDGE`'s
+   * doc comment for why this has to scale with `lane` rather than being a
+   * flat px value added after.
+   */
+  laneNudge: number;
 }
 
 /**
@@ -272,11 +391,11 @@ function assignAnchors(players: Player[], positions: Map<number, Position> | und
     const zone = ZONE_FOR_POSITION[pos] as Zone; // non-null, filtered above
     const lanes = POSITION_LANES[pos] ?? [0];
     const mobility = POSITION_MOBILITY[pos] ?? GENERAL_POSITION_MOBILITY;
-    const yNudge = pos === "R" || pos === "RR" || pos === "ROV" ? FOLLOWERS_Y_NUDGE : 0;
+    const laneNudge = pos === "R" || pos === "RR" || pos === "ROV" ? FOLLOWERS_LANE_NUDGE : (SPINE_LANE_NUDGE[pos] ?? 0);
     const sorted = [...group].sort((a, b) => a.PlayerID - b.PlayerID);
     sorted.forEach((p, i) => {
       const lane = lanes[i] ?? lanes[lanes.length - 1] ?? 0;
-      out.set(p.PlayerID, { homeZone: zone, lane, mobility, yNudge });
+      out.set(p.PlayerID, { homeZone: zone, lane, mobility, laneNudge });
     });
   }
 
@@ -291,12 +410,19 @@ function assignAnchors(players: Player[], positions: Map<number, Position> | und
   }
   for (const [line, group] of byLine) {
     group.forEach((p, i) => {
-      // Scaled to +-0.6 rather than the full +-1 real positions use, on top
-      // of the yNudge above - two independent forms of separation from a
-      // real teammate at the same zone, not just one (see the bug note on
-      // `FALLBACK_Y_NUDGE`).
-      const lane = group.length === 1 ? 0 : (-1 + (2 * i) / (group.length - 1)) * 0.6;
-      out.set(p.PlayerID, { homeZone: LINE_ZONE[line], lane, mobility: LINE_MOBILITY[line], yNudge: LINE_Y_NUDGE[line] });
+      // Scaled to +-LINE_LANE_SPREAD[line] rather than the full +-1 real
+      // positions use, on top of the laneNudge above - two independent forms
+      // of separation from a real teammate at the same zone, not just one
+      // (see the bug note on `FALLBACK_LANE_NUDGE`). Deliberately smaller
+      // than the +-1 real positions get: it only needs to break ties *within*
+      // this fallback group (individualZoneNudge/driftOffset already add two
+      // more independent per-player separators on top), and a wide spread
+      // risks fighting the nudge back down toward 0 at the group's own
+      // extreme member — exactly what happened at the old +-0.6 (see the bug
+      // note).
+      const spread = LINE_LANE_SPREAD[line];
+      const lane = group.length === 1 ? 0 : (-1 + (2 * i) / (group.length - 1)) * spread;
+      out.set(p.PlayerID, { homeZone: LINE_ZONE[line], lane, mobility: LINE_MOBILITY[line], laneNudge: LINE_LANE_NUDGE[line] });
     });
   }
 
@@ -335,13 +461,118 @@ function pressLineFor(side: Side, event: MatchEvent | null): number {
 }
 
 /**
+ * BUG FIXED Aug 2026, round 3 — the actual root cause behind why the
+ * lockstep fix below (and this round's other per-player jitter/nudge
+ * functions) initially looked like it wasn't working even after being
+ * applied: every one of them derived a player's "random" phase from
+ * `playerId % somePrime`, and real teammates on the same club list very
+ * often have *close, sometimes consecutive* PlayerIDs (drafted the same
+ * year, generated sequentially, etc — confirmed directly: Collingwood's
+ * Nick Daicos/Josh Daicos/Ned Long are PlayerIDs 1113/1114/1118). Modulo by
+ * a prime doesn't scramble nearby inputs when the gap between them is small
+ * relative to the modulus — `1113 % 613` and `1114 % 613` are themselves
+ * still consecutive - so two teammates with adjacent IDs got *nearly
+ * identical* phases from every one of these functions, meaning their
+ * "independent" wobble/response-scale/nudge tracked each other almost
+ * perfectly instead of actually diverging. This was invisible in isolated
+ * hand-checks (which happened to pick well-separated IDs) but showed up the
+ * moment the scratch script compared six actual on-field teammates: even
+ * with every jitter fix below already in place, a live 2-second animation
+ * of a real saturated-press moment only ever produced ~1-2px of spread
+ * across 6 different midfielders, because their phases were all clustered
+ * together by ID proximity, not actually spread out.
+ *
+ * `hashPlayer` fixes this at the root: a standard multiplicative hash
+ * (Knuth's 32-bit constant) spreads nearby integer inputs across the whole
+ * output range *before* folding down to [0,1), so consecutive PlayerIDs no
+ * longer produce nearby phases. Every per-player "randomness" function in
+ * this file (`driftOffset`, `pressResponseScale`, `individualZoneNudge`,
+ * and the involved-player tie-break in `computeDotPositions`) now goes
+ * through this instead of its own ad hoc `% prime` — each with a different
+ * `salt` so they're independent of *each other* too, not just of nearby
+ * PlayerIDs. Still fully deterministic (same playerId+salt always hashes to
+ * the same value) — no `Math.random`, so replays and screenshots stay
+ * reproducible, exactly the same requirement every other per-player
+ * function in this file already had to satisfy.
+ */
+function hashPlayer(playerId: number, salt: number): number {
+  let h = (playerId + salt * 40503) * 2654435761;
+  h = h >>> 0;
+  h = (h ^ (h >>> 15)) >>> 0;
+  return h / 4294967296; // [0, 1)
+}
+
+/**
+ * BUG FIXED Aug 2026, round 3 (Tyler, live testing: "the entire midfield for
+ * Collingwood is moving as an entire entity... each player should have
+ * their own configured running pattern"). Confirmed, not just a subjective
+ * impression: `pressLineFor` returns one shared number per side, and every
+ * player in the same mobility tier (e.g. every real Midfield position —
+ * W/C/R/RR/ROV — is NOMADIC_POSITION_MOBILITY) was multiplying that *same*
+ * number by the *same* mobility constant, so the whole tier shifted by an
+ * identical delta every tick — a rigid-body translation, indistinguishable
+ * from "the whole line moving as one" because it literally was. The small
+ * per-player `driftOffset` wobble layered on top (+-9px) was never big
+ * enough to break that illusion against a press-driven shift that can move
+ * a player most of a zone's width.
+ *
+ * Fixed by giving each player their own deterministic response scale to
+ * `press` — same non-random, PlayerID-derived-phase approach as
+ * `driftOffset` below, for the same reason (reproducibility: a screenshot
+ * or replay of a given match/seed must always draw the same thing).
+ *
+ * Range is deliberately +-15% around 1.0, not bigger: the first version of
+ * this fix used +-30% and immediately regressed a *different* thing this
+ * same round's scratch-script sweep was checking — `NOMADIC`/`GENERAL`
+ * mobility positions sitting at *adjacent* home zones (Half Forward Flank
+ * at zone 3, Forward Pocket at zone 4) could already, even pre-jitter, push
+ * far enough under full press to touch each other's zone; +-30% jitter on
+ * top of that pushed a real Adelaide match's Keays (HFF) and Rachele (FP)
+ * onto the *exact* same clamped zone 4, an exact collision at driftTime=0
+ * that the old, unjittered code never produced. +-15% keeps every tier's
+ * worst-case shift close enough to its pre-jitter value that it doesn't
+ * meaningfully open up new adjacent-zone collisions, while still giving
+ * two same-tier teammates a real, visible difference in how far they reach
+ * at the same instant.
+ */
+function pressResponseScale(playerId: number): number {
+  return 0.85 + hashPlayer(playerId, 2) * 0.3; // 0.85 - 1.15
+}
+
+/**
+ * A second, small, independently-seeded per-player offset (deliberately a
+ * *different* modulus from `pressResponseScale` so the two don't correlate)
+ * added directly to a player's target zone rather than multiplying `press`.
+ * Needed because `pressResponseScale` alone isn't enough at the extremes:
+ * `shiftedHomeZone` is clamped to [0,4], and when `press` is large enough
+ * (a deep, clearly-possessed stoppage right in a defensive or forward 50 —
+ * not rare in a real match), *every* same-tier player's shift overshoots the
+ * clamp regardless of their individual response scale, so they all land
+ * back on the identical clamped value — confirmed by this round's own
+ * scratch-script sweep, which found a real match where 3 of 6 midfielders'
+ * rendered position still collapsed onto 1 shared value even with
+ * `pressResponseScale` alone. Adding this small offset *before* the clamp
+ * means players spread out on both sides of the saturation point instead of
+ * all piling onto it — some will still share the exact boundary value when
+ * press is extreme enough (a real player physically can't run past the
+ * boundary line either), but not all of them at once. Kept small (+-0.06
+ * zone, down from an initial +-0.2 attempt) for the same adjacent-zone-
+ * collision reason `pressResponseScale`'s own doc comment explains above.
+ */
+function individualZoneNudge(playerId: number): number {
+  return (hashPlayer(playerId, 3) - 0.5) * 0.12; // +-0.06 zone
+}
+
+/**
  * Every non-involved player's formation target for this instant: their real
  * (or fallback line-based) anchor, shifted toward/away from wherever the
- * ball currently is by `pressLineFor` scaled by their own mobility. Unlike
- * the pre-Slice-C static formation, this changes *every tick* for all 22,
- * not just the 1-2 players `computeDotPositions` later overrides as
- * "involved" — directly the fix for "positioning should update more
- * frequently for players without the ball too."
+ * ball currently is by `pressLineFor` scaled by their own mobility (and,
+ * since round 3, their own individual response scale — see
+ * `pressResponseScale` above). Unlike the pre-Slice-C static formation,
+ * this changes *every tick* for all 22, not just the 1-2 players
+ * `computeDotPositions` later overrides as "involved" — directly the fix
+ * for "positioning should update more frequently for players without the
+ * ball too."
  */
 function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null): Map<number, DotPosition> {
   const anchors = assignAnchors(team.players, team.positions);
@@ -352,11 +583,13 @@ function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null): Ma
   for (const p of team.players) {
     const a = anchors.get(p.PlayerID);
     if (!a) continue; // every player gets either a real or fallback anchor above — defensive only
-    const shiftedHomeZone = Math.min(4, Math.max(0, a.homeZone + press * a.mobility));
+    const individualPress = press * pressResponseScale(p.PlayerID);
+    const rawZoneTarget = a.homeZone + individualPress * a.mobility + individualZoneNudge(p.PlayerID);
+    const shiftedHomeZone = Math.min(4, Math.max(0, rawZoneTarget));
     const rawZone = mirrorZone(side, shiftedHomeZone);
     const x = zoneFractionToX(rawZone) + sideOffset;
     const halfHeight = maxHalfHeightAt(x) * 0.85;
-    const y = CENTER_Y + a.lane * halfHeight + a.yNudge;
+    const y = CENTER_Y + (a.lane + a.laneNudge) * halfHeight;
     out.set(p.PlayerID, {
       playerId: p.PlayerID,
       lname: p.lname,
@@ -380,12 +613,26 @@ function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null): Ma
  * derived from their own PlayerID, so the same player always wanders the
  * same way relative to their own clock, and different players land out of
  * phase with each other so the group doesn't visibly move in unison.
+ *
+ * BUG FIXED Aug 2026, round 3: that last claim ("different players land out
+ * of phase") was only ever true for players with well-separated PlayerIDs —
+ * the phase used to come straight from `(playerId % 997) * 0.0171`, and
+ * real teammates frequently have *close* PlayerIDs, which modulo doesn't
+ * scramble apart. Confirmed directly: simulating 2 seconds of live
+ * animation for 6 real on-field midfielders (Collingwood, a real saturated-
+ * press moment) only ever produced ~1-2px of spread between them, because
+ * their nearly-consecutive PlayerIDs gave them nearly-identical phase, so
+ * their "independent" wobble was actually near-perfectly correlated — the
+ * concrete mechanism behind Tyler's "moving as an entire entity" well
+ * beyond just the press-response fix elsewhere in this file. Now goes
+ * through `hashPlayer` (see its own doc comment), which decorrelates
+ * nearby PlayerIDs properly.
  */
 const DRIFT_RADIUS_X = 9;
 const DRIFT_RADIUS_Y = 13;
 
 function driftOffset(playerId: number, driftTime: number): { dx: number; dy: number } {
-  const phase = (playerId % 997) * 0.0171;
+  const phase = hashPlayer(playerId, 1) * Math.PI * 2;
   return {
     dx: Math.sin(driftTime * 0.9 + phase) * DRIFT_RADIUS_X,
     dy: Math.cos(driftTime * 0.7 + phase * 1.33) * DRIFT_RADIUS_Y,
@@ -444,17 +691,70 @@ export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: Mat
       if (!existing) return;
       const spread = event.playerIds.length > 1 ? (i === 0 ? -14 : 14) : 0;
       const x = existing.x * 0.5 + ballX * 0.5;
-      all.set(id, { ...existing, x, y: baseY + spread, involved: true });
+      // BUG FIXED Aug 2026, round 3: found by this round's own scratch-script
+      // sweep, not reported by Tyler directly, but the same underlying
+      // symptom class - an *involved* player's blended x/y is a genuinely
+      // continuous function of their own anchor and the ball's zone, which
+      // occasionally lands exactly on some unrelated *uninvolved* teammate's
+      // independently-computed formation position by pure numeric
+      // coincidence (confirmed example: Tom Doedee, pulled in as the sole
+      // involved player in a midfield event, blended to the exact spot Ryan
+      // Lester's own CHB anchor already occupied). Because an involved dot
+      // is drawn bigger, ringed, and on top (see MatchCanvas.tsx's drawDot),
+      // an exact coincidence doesn't read as "two dots merged" so much as
+      // "the uninvolved player's dot vanished entirely" - arguably worse.
+      // A small deterministic per-player tie-break, applied after the
+      // blend, doesn't change *which* zone/direction the involved dot reads
+      // as heading toward, just breaks exact numeric coincidence with
+      // whichever other player's position it happens to fall on.
+      const tieBreak = hashPlayer(id, 4) - 0.5; // +-0.5, deterministic, decorrelated from every other per-player function in this file via a different salt
+      all.set(id, { ...existing, x: x + tieBreak * 8, y: baseY + spread + tieBreak * 6, involved: true });
     });
   }
 
+  // BUG FIXED Aug 2026, round 3 (Tyler, live testing: "Ned Long and Nick
+  // Daicos are both occupying the same point" — this specific pairing turned
+  // out to be the FOLLOWERS_LANE_NUDGE cancellation above, but the same
+  // *scratch-script sweep* that confirmed that fix also found a second,
+  // structurally different collision: Rory Lobb (real BP, lane +-1) and
+  // Jason Johannisen (fallback Defence INT, lane -0.35) rendering at the
+  // exact same point despite having clearly different lanes). Root cause was
+  // here, not in the anchor math: this used to clamp wobbled `y` to the
+  // *entire* [CENTER_Y-halfHeight, CENTER_Y+halfHeight] range regardless of
+  // where the player's own anchor actually sat within it — so any player
+  // whose lane already put them near that outer edge (every BP/HBF/W/HFF/FP
+  // at lane +-1, and some fallback groups) got clipped to the *identical*
+  // absolute boundary the instant wobble pushed them further out, erasing
+  // whatever lane separation they had from any other player near that same
+  // edge.
+  //
+  // First attempt bounded wobble to each player's own `dot.y +- DRIFT_RADIUS_Y`
+  // intersected with `maxHalfHeightAt(x) * 0.85` as the outer safety net —
+  // looked right, but `formationFor` places lane +-1 positions at exactly
+  // that *same* `* 0.85` bound, so for any of them the "outer safety net"
+  // and "the edge they already stand on" were identical: zero slack, so the
+  // ground-bound was *always* the binding constraint for lane +-1 players,
+  // not a rare edge case, and it clipped Lobb and Johannisen to the same
+  // floor exactly as before. Fixed by using the *true*, unscaled
+  // `maxHalfHeightAt(x)` (no `* 0.85`) as the outer safety net instead — the
+  // real ~29px gap between where a lane +-1 player stands and the actual
+  // ground edge, comfortably more than `DRIFT_RADIUS_Y` (13), so a lane +-1
+  // player's own small local window now fits inside the true edge instead of
+  // being clipped by it, and the ground-bound only ever binds for a player
+  // whose formation anchor was already unusually close to the literal
+  // boundary. Same fix applied to x for consistency, though the x case is
+  // lower-risk (DRIFT_RADIUS_X is small relative to the ground's width).
   if (driftTime !== 0) {
     for (const [id, dot] of all) {
       if (dot.involved) continue; // involved players are already headed somewhere specific - don't also wobble them
       const { dx, dy } = driftOffset(id, driftTime);
-      const halfHeight = maxHalfHeightAt(dot.x) * 0.85; // same taper bound formationFor itself uses
-      const x = Math.min(GROUND_WIDTH - MARGIN, Math.max(MARGIN, dot.x + dx));
-      const y = Math.min(CENTER_Y + halfHeight, Math.max(CENTER_Y - halfHeight, dot.y + dy));
+      const trueHalfHeight = maxHalfHeightAt(dot.x); // the real ground edge - NOT the *0.85 bound formationFor itself places lane +-1 anchors at, which would leave zero slack for their own wobble
+      const xMin = Math.max(MARGIN, dot.x - DRIFT_RADIUS_X);
+      const xMax = Math.min(GROUND_WIDTH - MARGIN, dot.x + DRIFT_RADIUS_X);
+      const yMin = Math.max(CENTER_Y - trueHalfHeight, dot.y - DRIFT_RADIUS_Y);
+      const yMax = Math.min(CENTER_Y + trueHalfHeight, dot.y + DRIFT_RADIUS_Y);
+      const x = Math.min(xMax, Math.max(xMin, dot.x + dx));
+      const y = Math.min(yMax, Math.max(yMin, dot.y + dy));
       all.set(id, { ...dot, x, y });
     }
   }

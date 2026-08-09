@@ -70,14 +70,39 @@ const SMOOTHING_HALF_LIFE_MS = 150;
  * Goal squares and posts now share one `GOAL_SQUARE_HALF_WIDTH` constant so
  * the posts actually align with the square's edges instead of using an
  * unrelated spacing value.
+ *
+ * Round 3 (Tyler, live testing + a hand-drawn markup sketch): the arc's
+ * vertical anchoring from round 2 was correct, but its *depth* (how far it
+ * bulges toward the centre) was still an eyeballed guess — checked against
+ * a real 50m arc's actual geometry (radius 50m from the goal line, on a
+ * ground whose centre sits roughly 82.5m from each goal line) it should
+ * reach about 60% of the way from the goal line to centre, not the ~48% the
+ * old `arcDepth` produced; `arcDepth` increased to match. The goal square
+ * was also backwards — 76px wide by 52px deep is *wider* than it is deep,
+ * when a real goal square (6.4m x 9m) is the other way around — now 52 wide
+ * by 73 deep (ratio 1.40, matching 9/6.4 almost exactly). Goal/behind post
+ * spacing used to come from two unrelated constants (the square's own half
+ * width for the goal-to-goal gap, a separate `behindGap` for the two outer
+ * gaps), which is exactly why the goal-to-goal gap (76px) read as roughly
+ * 3.5x wider than each behind gap (22px) — Tyler's own complaint, and a real
+ * inconsistency: real goal posts and behind posts are *all* 6.4m apart, one
+ * consistent spacing, not two different ones. Now a single `POST_SPACING`
+ * (tied to the new, correct goal-square width) drives all three gaps
+ * equally. The centre circle also gained a diameter line, since real
+ * ruckmen stand on opposite halves of it before a ball-up and meet at the
+ * middle — Tyler's own description of what was missing.
  */
 function boundaryHalfHeightAt(x: number, cx: number, rx: number, ry: number): number {
   const t = 1 - ((x - cx) / rx) ** 2;
   return t > 0 ? ry * Math.sqrt(t) : 0;
 }
 
-const GOAL_SQUARE_HALF_WIDTH = 38; // along the goal line - real goal square is ~6.4m wide, roughly matched proportionally against a ~135-155m ground width
-const GOAL_SQUARE_DEPTH = 52; // into the field - real goal square is ~9m deep, deeper than it is wide, same as here
+const GOAL_SQUARE_HALF_WIDTH = 26; // along the goal line - real goal square is ~6.4m wide
+const GOAL_SQUARE_DEPTH = 73; // into the field - real goal square is ~9m deep: deeper than it is wide (ratio ~1.4), not the other way around
+// Goal posts, behind posts, and the goal square's own width are all the
+// same real ~6.4m unit - one constant drives all of it so the three visual
+// gaps (behind-goal, goal-goal, goal-behind) come out equal by construction.
+const POST_SPACING = GOAL_SQUARE_HALF_WIDTH * 2;
 
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
@@ -115,15 +140,26 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // square on a ~160m ground (roughly a third of the ground's short axis).
   const squareHalf = turfRy * 0.33;
   ctx.strokeRect(cx - squareHalf, cy - squareHalf, squareHalf * 2, squareHalf * 2);
+  const circleRadius = squareHalf * 0.32;
   ctx.beginPath();
-  ctx.arc(cx, cy, squareHalf * 0.32, 0, Math.PI * 2);
+  ctx.arc(cx, cy, circleRadius, 0, Math.PI * 2);
+  ctx.stroke();
+  // The halfway line through the centre circle - real ruckmen stand on
+  // opposite halves of it before a ball-up, meeting in the middle.
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - circleRadius);
+  ctx.lineTo(cx, cy + circleRadius);
   ctx.stroke();
 
   // 50m arcs at each end - a small ellipse whose own centre sits inset from
   // the goal line and whose vertical radius is derived from the boundary's
   // real curve at that x (see boundaryHalfHeightAt above), so the arc's
   // top/bottom points land on the boundary rather than floating past it.
-  const arcDepth = GROUND_WIDTH * 0.165;
+  // Depth (how far it bulges toward centre) checked against a real 50m
+  // arc's actual geometry: radius 50m from the goal line, on a ground whose
+  // centre sits ~82.5m from each goal line, reaches about 60% of the way to
+  // centre - the old 0.165 fraction only reached about 48% of the way.
+  const arcDepth = GROUND_WIDTH * 0.22;
   const arcInset = turfRx * 0.13;
   const leftArcX = cx - turfRx + arcInset;
   const rightArcX = cx + turfRx - arcInset;
@@ -147,17 +183,19 @@ function drawGround(ctx: CanvasRenderingContext2D) {
 }
 
 /**
- * Behind-goal-goal-behind, sharing `GOAL_SQUARE_HALF_WIDTH` with the goal
- * square itself so the main goal posts actually sit at the square's own
- * edges (previously an unrelated spacing value, so they didn't line up) -
- * a light decorative nod to the real ~6.4m post spacing (Tyler's reference
- * diagram), not gameplay-relevant. Drawn right at the goal line/turf edge,
- * straddling into the boundary ring, the way every reference broadcast
- * graphic shows posts poking out past the playing surface itself.
+ * Behind-goal-goal-behind, all three gaps equal to `POST_SPACING` (round 3
+ * fix — Tyler: "the current spacing between the goals makes the goals look
+ * far bigger than the behinds... they should be equally spaced"). Real goal
+ * posts and behind posts are all ~6.4m apart, a single consistent unit, not
+ * a wide goal-to-goal gap with two narrower gaps either side of it (the old
+ * `behindGap` was an unrelated, independently-tuned value, which is exactly
+ * why it didn't match the square's own width). Drawn right at the goal
+ * line/turf edge, straddling into the boundary ring, the way every
+ * reference broadcast graphic shows posts poking out past the playing
+ * surface itself.
  */
 function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
-  const behindGap = 22;
-  const offsets = [-(GOAL_SQUARE_HALF_WIDTH + behindGap), -GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_HALF_WIDTH + behindGap];
+  const offsets = [-1.5 * POST_SPACING, -0.5 * POST_SPACING, 0.5 * POST_SPACING, 1.5 * POST_SPACING];
   ctx.fillStyle = "rgba(255,255,255,0.9)";
   offsets.forEach((dy, i) => {
     const isGoalPost = i === 1 || i === 2;

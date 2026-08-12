@@ -35,7 +35,7 @@ export const GROUND_WIDTH = 1000;
 // 160x125m is about as close to this app's old ratio gets, and the MCG at
 // 160x141m is nearly circular. 780 (1.28:1) read as a genuine oval rather
 // than a stretched rectangle while staying comfortably landscape for a wide
-// UI card. Every other constant in this file (MARGIN, ZONE_X_FRACTION,
+// UI card. Every other constant in this file (MARGIN_X/MARGIN_Y, ZONE_X_FRACTION,
 // CENTER_Y, maxHalfHeightAt) is expressed as a fraction of GROUND_WIDTH/
 // GROUND_HEIGHT, so this change alone re-scales the whole ground proportionally
 // with no follow-on edits needed elsewhere in this file.
@@ -47,7 +47,17 @@ export const GROUND_WIDTH = 1000;
 // proportion correctness pass. Still comfortably inside a real oval's look,
 // just a little shorter so the page reads less tall.
 export const GROUND_HEIGHT = 702;
-const MARGIN = 30;
+// Split into X/Y Aug 2026, round 7 (Tyler, live testing: "stretch the length
+// of the ground... pull the edge of the ground close to the edge of the
+// canvas"): this used to be one shared margin for both axes. `MARGIN_X`
+// shrinks (30 -> 12, matching `MatchCanvas.tsx`'s new combined 4px outer +
+// 8px turf-gap horizontal margin) so the goal-line-to-centre distance grows
+// - "length" specifically means the long (goal-to-goal) axis. `MARGIN_Y`
+// stays at the original 30 (`MatchCanvas.tsx`'s unchanged 14+16 vertical
+// margin) - nothing about the vertical fit was flagged as a problem, and
+// changing it wasn't part of the ask.
+const MARGIN_X = 12;
+const MARGIN_Y = 30;
 const MIN_HALF_HEIGHT = 70;
 
 /**
@@ -69,13 +79,14 @@ const MIN_HALF_HEIGHT = 70;
  * point instead of continuing to taper all the way to a sharp point — a real
  * ellipse's slope goes vertical right at the very tip, so this only ever
  * shaves off the last, steepest little sliver of curve, not the oval's
- * general shape. `MatchCanvas.tsx`'s boundary/turf drawing (which clips the
- * filled ellipse to a slightly-narrower rectangle to get this same flat-tip
- * effect) and this file's `maxHalfHeightAt` (which every player anchor and
- * the wobble clamp both read) share this exact constant so the drawn shape
- * and the shape player positions are actually bounded by can never drift
- * apart — same discipline as round 5's version of this comment, just pointed
- * at a much smaller, more localized effect this time.
+ * general shape. `MatchCanvas.tsx`'s boundary/turf drawing (which builds this
+ * same flat-tip shape as a real path — see that file's `flatCapEllipsePath`,
+ * round 7 — rather than round 6's original clip+rectangle) and this file's
+ * `maxHalfHeightAt` (which every player anchor and the wobble clamp both
+ * read) share this exact constant so the drawn shape and the shape player
+ * positions are actually bounded by can never drift apart — same discipline
+ * as round 5's version of this comment, just pointed at a much smaller, more
+ * localized effect this time.
  */
 export const GROUND_END_CAP_FRACTION = 0.065;
 
@@ -88,7 +99,7 @@ const ZONE_X_FRACTION: Record<Zone, number> = {
 };
 
 export function zoneToX(zone: Zone): number {
-  return MARGIN + ZONE_X_FRACTION[zone] * (GROUND_WIDTH - 2 * MARGIN);
+  return MARGIN_X + ZONE_X_FRACTION[zone] * (GROUND_WIDTH - 2 * MARGIN_X);
 }
 
 /**
@@ -106,7 +117,7 @@ function zoneFractionToX(z: number): number {
   const hi = Math.min(4, lo + 1) as Zone;
   const t = clamped - lo;
   const frac = ZONE_X_FRACTION[lo] + (ZONE_X_FRACTION[hi] - ZONE_X_FRACTION[lo]) * t;
-  return MARGIN + frac * (GROUND_WIDTH - 2 * MARGIN);
+  return MARGIN_X + frac * (GROUND_WIDTH - 2 * MARGIN_X);
 }
 
 /**
@@ -122,8 +133,8 @@ function zoneFractionToX(z: number): number {
  */
 export function maxHalfHeightAt(x: number): number {
   const cx = GROUND_WIDTH / 2;
-  const a = GROUND_WIDTH / 2 - MARGIN;
-  const b = GROUND_HEIGHT / 2 - MARGIN;
+  const a = GROUND_WIDTH / 2 - MARGIN_X;
+  const b = GROUND_HEIGHT / 2 - MARGIN_Y;
   const capInset = a * GROUND_END_CAP_FRACTION;
   const dx = Math.min(a - capInset, Math.abs(x - cx)); // clamp to the flat-cap edge, not the ellipse's own zero-width tip
   const t = Math.max(0, 1 - (dx / a) ** 2);
@@ -824,8 +835,8 @@ export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: Mat
       if (dot.involved) continue; // involved players are already headed somewhere specific - don't also wobble them
       const { dx, dy } = driftOffset(id, driftTime);
       const trueHalfHeight = maxHalfHeightAt(dot.x); // the real ground edge - NOT the *0.85 bound formationFor itself places lane +-1 anchors at, which would leave zero slack for their own wobble
-      const xMin = Math.max(MARGIN, dot.x - DRIFT_RADIUS_X);
-      const xMax = Math.min(GROUND_WIDTH - MARGIN, dot.x + DRIFT_RADIUS_X);
+      const xMin = Math.max(MARGIN_X, dot.x - DRIFT_RADIUS_X);
+      const xMax = Math.min(GROUND_WIDTH - MARGIN_X, dot.x + DRIFT_RADIUS_X);
       const yMin = Math.max(CENTER_Y - trueHalfHeight, dot.y - DRIFT_RADIUS_Y);
       const yMax = Math.min(CENTER_Y + trueHalfHeight, dot.y + DRIFT_RADIUS_Y);
       const x = Math.min(xMax, Math.max(xMin, dot.x + dx));

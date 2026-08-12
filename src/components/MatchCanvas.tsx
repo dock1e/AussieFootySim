@@ -113,14 +113,85 @@ const GOAL_SQUARE_DEPTH = 73; // into the field - real goal square is ~9m deep: 
 // gaps (behind-goal, goal-goal, goal-behind) come out equal by construction.
 const POST_SPACING = GOAL_SQUARE_HALF_WIDTH * 2;
 
+/**
+ * Builds a path for "ellipse, but the last `capFraction` share of each end
+ * is replaced by a flat vertical edge, with the transition rounded off by
+ * `cornerRadius`" - the shape the boundary ring, the turf, and the 50m arc's
+ * clip region all share (`GROUND_END_CAP_FRACTION`). One shared builder so
+ * all three can never independently drift out of sync with each other -
+ * same discipline as sharing the constant with `engine/ground.ts`.
+ *
+ * Round 7 (Tyler, live testing against round 6's actual render, screenshot
+ * annotated with arrows at all four cap corners: "smooth this corner"):
+ * round 6 built this shape by clipping a full ellipse fill to a plain
+ * rectangle, which is simple but leaves a hard slope discontinuity exactly
+ * where the rectangle's straight edge crosses the ellipse's curve - not a
+ * corner of either shape individually, but a visible kink in the combined
+ * silhouette. Rounding the rect's own corners (`ctx.roundRect`) can't fix
+ * this: that rect's actual corners sit well outside the ellipse's own
+ * vertical extent on purpose (so they never become part of the visible
+ * silhouette at all) - the kink lives at the rect *edge*-meets-*curve*
+ * crossing, not at a rect corner. Fixed by building the path directly
+ * instead of clip+rect: walk the ellipse curve to just short of each true
+ * crossing, then `ctx.arcTo` rounds the turn onto the flat edge (and again
+ * turning back onto the curve at the far end of that same flat edge) -
+ * `arcTo` treats the short approach as if it were a straight line for
+ * tangent purposes, a fine approximation at this radius against the
+ * ellipse's own gentle local curvature here, and any sub-pixel mismatch is
+ * invisible anyway since every caller only ever fills or clips with this
+ * path, never strokes its outline directly.
+ */
+function flatCapEllipsePath(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  capFraction: number,
+  cornerRadius: number,
+) {
+  const capInset = rx * capFraction;
+  const theta = Math.acos((rx - capInset) / rx); // half-angle (radians) of the flat cap removed at each end
+  const approach = Math.min(theta * 0.5, 0.25); // how far short of each true crossing the curve stops before arcTo takes over
+
+  const pointAt = (angle: number) => ({ x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) });
+  const rL = pointAt(theta);
+  const rU = pointAt(2 * Math.PI - theta);
+  const lL = pointAt(Math.PI - theta);
+  const lU = pointAt(Math.PI + theta);
+  const lUApproach = pointAt(Math.PI + theta + approach);
+  const rLApproach = pointAt(theta + approach);
+
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, theta + approach, Math.PI - theta - approach); // bottom arc: right-lower around to left-lower
+  ctx.arcTo(lL.x, lL.y, lU.x, lU.y, cornerRadius); // round the curve-to-flat-edge turn at the left cap's lower corner
+  ctx.arcTo(lU.x, lU.y, lUApproach.x, lUApproach.y, cornerRadius); // round the flat-edge-to-curve turn at the left cap's upper corner
+  ctx.ellipse(cx, cy, rx, ry, 0, Math.PI + theta + approach, 2 * Math.PI - theta - approach); // top arc: left-upper around to right-upper
+  ctx.arcTo(rU.x, rU.y, rL.x, rL.y, cornerRadius); // round the right cap's upper corner
+  ctx.arcTo(rL.x, rL.y, rLApproach.x, rLApproach.y, cornerRadius); // round the right cap's lower corner, closing back toward the start
+  ctx.closePath();
+}
+
+const GROUND_CAP_CORNER_RADIUS = 22; // px - how much the flat-cap transitions are rounded (round 7, replacing round 6's hard corner)
+
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
 
   const cx = GROUND_WIDTH / 2;
   const cy = GROUND_HEIGHT / 2;
-  const rx = GROUND_WIDTH / 2 - 14;
+  // Round 7 (Tyler, live testing: "pull the edge of the ground close to the
+  // edge of the canvas... stretch the length of the ground"): horizontal
+  // margins shrink (14 -> 4 outer, 16 -> 8 turf gap) so the oval reaches
+  // further toward the canvas edge and the goal-line-to-centre distance
+  // grows. Vertical margins are untouched - "length" specifically means the
+  // long (goal-to-goal) axis, not the ground's height, and nothing about the
+  // vertical fit was flagged as a problem. `engine/ground.ts`'s
+  // `maxHalfHeightAt` shares this exact combined horizontal margin (there
+  // called `MARGIN_X`) so turfRx and the gameplay bounds every player
+  // position is clamped to can't drift apart.
+  const rx = GROUND_WIDTH / 2 - 4;
   const ry = GROUND_HEIGHT / 2 - 14;
-  const turfRx = rx - 16;
+  const turfRx = rx - 8;
   const turfRy = ry - 16;
 
   // Backdrop behind the oval - reads as the stands/surrounds in every
@@ -131,61 +202,58 @@ function drawGround(ctx: CanvasRenderingContext2D) {
 
   // Boundary buffer ring - the maroon band every broadcast graphic (and
   // Tyler's own reference oval icon) draws just outside the playing surface.
-  //
-  // Round 5 (Tyler, live testing against a sample image: "square off the
-  // left and right ends of the playing field"): first attempt drew this -
-  // and the turf below, and the 50m arc's clip - as a full rounded rectangle
-  // (flat sides all the way round, via a since-removed `GROUND_CORNER_FRACTION`
-  // constant), which squared off almost the *entire* side of the ground, not
-  // just the tips - it read as a stadium/rounded-rect shape overall, not an
-  // oval. Tyler caught this from a screenshot and asked for something "much
-  // more subtle": the oval kept exactly as it was, with only a small flat
-  // cut right behind the goal posts.
-  //
-  // Round 6 (Tyler, the correction above): back to a real ellipse, CLIPPED to
-  // a rectangle that's narrower than the ellipse by `GROUND_END_CAP_FRACTION`
-  // at each end. The clip only ever restricts x, not y, so everywhere inside
-  // that narrower x-range renders exactly as the plain ellipse always did -
-  // unchanged sides and curvature - and only the last sliver at each tip
-  // (which an unclipped ellipse tapers to a sharp point over, since its slope
-  // goes vertical right at the very end) gets cut off by a flat vertical edge
-  // instead. `engine/ground.ts`'s `maxHalfHeightAt` uses this exact same
-  // constant so the drawn shape and the shape player positions are bounded by
-  // can't drift apart - same discipline round 5's version of this comment
-  // already argued for, just pointed at a much smaller effect now.
-  const ringCapInset = rx * GROUND_END_CAP_FRACTION;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(cx - rx + ringCapInset, cy - ry - 20, (rx - ringCapInset) * 2, ry * 2 + 40);
-  ctx.clip();
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  // Round 5 first tried squaring off almost the *entire* side of the ground
+  // (too aggressive, reverted); round 6 corrected that to a small flat cap
+  // right at each tip only; round 7 keeps that same small-cap shape but
+  // builds it as a real rounded path instead of a hard clip corner - see
+  // `flatCapEllipsePath`'s own doc comment for why.
+  flatCapEllipsePath(ctx, cx, cy, rx, ry, GROUND_END_CAP_FRACTION, GROUND_CAP_CORNER_RADIUS);
   ctx.fillStyle = "#5c2323";
   ctx.fill();
-  ctx.restore();
 
-  // Turf, inset from the boundary ring - same flat-tip clip, scaled to the
-  // turf's own rx/ry so the two stay visually parallel.
-  const turfCapInset = turfRx * GROUND_END_CAP_FRACTION;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(cx - turfRx + turfCapInset, cy - turfRy - 20, (turfRx - turfCapInset) * 2, turfRy * 2 + 40);
-  ctx.clip();
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
+  // Turf, inset from the boundary ring - same shape, scaled to the turf's
+  // own rx/ry so the two stay visually parallel.
+  flatCapEllipsePath(ctx, cx, cy, turfRx, turfRy, GROUND_END_CAP_FRACTION, GROUND_CAP_CORNER_RADIUS);
   ctx.fillStyle = "#153d22";
   ctx.fill();
-  ctx.restore();
 
   ctx.strokeStyle = "rgba(255,255,255,0.4)";
   ctx.lineWidth = 2;
 
+  // 50m arc geometry, computed here - ahead of where it's actually drawn,
+  // further down - so the centre square (next) can size itself to provably
+  // clear it. See the arc's own doc comment below for why these formulas.
+  const turfCapInset = turfRx * GROUND_END_CAP_FRACTION;
+  const arcRadius = turfRx * 0.7;
+  const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
+  const leftGoalLineX = cx - (turfRx - turfCapInset);
+  const rightGoalLineX = cx + (turfRx - turfCapInset);
+  const leftArcX = leftGoalLineX + arcAnchorInset;
+  const rightArcX = rightGoalLineX - arcAnchorInset;
+
   // Centre square + circle - bigger, proportioned against the real ~50m
   // square on a ~160m ground (roughly a third of the ground's short axis).
-  // Round 4 (Tyler, live testing against the round-3 redesign): nudged up
-  // again, a bit bigger still - a direct "make it slightly bigger" ask, not
-  // a new real-world ratio to hit.
-  const squareHalf = turfRy * 0.37;
+  // Round 4: nudged up again, a bit bigger still - a direct "make it
+  // slightly bigger" ask, not a new real-world ratio to hit.
+  //
+  // Round 7 (Tyler, live testing against round 6's actual render): the arc
+  // anchored at each goal line reaches inward far enough to visibly overlap
+  // this square's corners. Asked to stretch the ground first (above) and
+  // re-check - stretching alone doesn't clear it, since the arc's own radius
+  // grows right along with turfRx (it's defined as a fraction of it), so per
+  // Tyler's own fallback instruction, the square now caps its own size at
+  // whatever provably clears the arc, rather than a hand-tuned fraction that
+  // could silently start overlapping again the next time either constant
+  // changes. A circle's furthest point from its own anchor, along the line
+  // through its centre, is always `anchor + radius` - so `leftArcX +
+  // arcRadius` is exactly the arc's own rightmost reach, and
+  // `maxSquareHalfForArc` is centre minus that (plus a small extra gap so it
+  // reads as a clean separation, not just-touching). In practice this lands
+  // the square close to `turfRy * 0.33` - almost exactly the pre-round-4
+  // size Tyler asked to return "more similarly to what it was before."
+  const SQUARE_ARC_CLEARANCE = 5;
+  const maxSquareHalfForArc = cx - (leftArcX + arcRadius) - SQUARE_ARC_CLEARANCE;
+  const squareHalf = Math.min(turfRy * 0.37, maxSquareHalfForArc);
   ctx.strokeRect(cx - squareHalf, cy - squareHalf, squareHalf * 2, squareHalf * 2);
   const circleRadius = squareHalf * 0.32;
   ctx.beginPath();
@@ -205,55 +273,21 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // out much further than round 3's version): round 3's own justification
   // ("reaches about 60% of the way to centre") had a real unit bug - it set
   // `arcDepth = GROUND_WIDTH * 0.22`, but the goal-line-to-centre distance
-  // is `turfRx` (470 on this canvas), not `GROUND_WIDTH` (1000). 220 / 470
-  // is only ~47%, not 60% - the code never actually did what its own comment
-  // said, which is exactly why it still looked too small live.
+  // is `turfRx`, not `GROUND_WIDTH`. Real 50m arcs are true circles (equal
+  // reach in every direction) - modelled that way directly instead of
+  // hand-fitting an ellipse to one sample point: a genuine circle anchored
+  // right at the goal line, sized generously (70% of the goal-line-to-centre
+  // distance), clipped to the turf shape so it's naturally cut off by the
+  // real boundary curve wherever it would otherwise stray outside - no
+  // separate "fit the ellipse to the boundary" step needed, and it can't
+  // ever float past the boundary by construction.
   //
-  // The vertical-reach approach was the bigger problem though, not just that
-  // one number: round 3 fit a small ellipse whose top/bottom points touch the
-  // boundary *at the ellipse's own inset centre x* - only 13% of the way
-  // from the goal line toward centre, still deep in the pinched, narrow tip
-  // of the oval, so "touches the boundary" there only ever reached ~48% of
-  // the ground's *maximum* half-height, nowhere near the dramatic
-  // boundary-to-boundary sweep a real arc (and Tyler's markup) actually
-  // shows.
-  //
-  // Real 50m arcs are true circles (equal reach in every direction), and on
-  // a real ground the boundary at the goal-line end is often narrower than
-  // 50m out - so the arc's own top/bottom really do get cut off by the
-  // boundary line itself before completing a full semicircle, which is
-  // exactly the "nearly touches the boundary near the wing" look every real
-  // broadcast graphic (and Tyler's sketch) shows. Modelled that way directly
-  // instead of hand-fitting an ellipse to one sample point: draw a genuine
-  // circle anchored right at the goal line, sized generously (70% of the
-  // goal-line-to-centre distance, correctly measured against `turfRx` this
-  // time), and clip the whole thing to the turf ellipse so it's naturally
-  // cut off by the real boundary curve wherever the circle would otherwise
-  // stray outside it - no separate "fit the ellipse to the boundary" step
-  // needed, and it can't ever float past the boundary by construction.
-  const arcRadius = turfRx * 0.7;
-  const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
-  // Goal squares/posts, anchored at the new flat-capped edge (round 6) rather
-  // than the old ellipse's zero-width pinch point (round 5's own goal, "bring
-  // the goal square forward to match" - still true here, just a much smaller
-  // shift: the tip only pulls in by GROUND_END_CAP_FRACTION of the
-  // goal-line-to-centre distance, not the whole side of the ground). The 50m
-  // arc anchors off this same, moved-in goal line, since a real 50m arc is
-  // measured from the actual goal line, wherever that ends up.
-  const leftGoalLineX = cx - (turfRx - turfCapInset);
-  const rightGoalLineX = cx + (turfRx - turfCapInset);
-  const leftArcX = leftGoalLineX + arcAnchorInset;
-  const rightArcX = rightGoalLineX - arcAnchorInset;
-  // Clipped to the same ellipse-with-flat-tips turf shape as the boundary
-  // above (round 6) rather than round 5's rounded rect - two clips
-  // intersect, so this is the ellipse AND the narrower rect, exactly the
-  // flat-tipped region the turf itself is filled with.
+  // Round 6: clipped to the same flat-capped turf shape as the turf itself
+  // (built above, reused here via `flatCapEllipsePath`) rather than a plain
+  // ellipse, so the arc is cut off by the *actual* drawn turf edge including
+  // its flat caps, not a boundary that no longer matches what's on screen.
   ctx.save();
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
-  ctx.clip();
-  ctx.beginPath();
-  ctx.rect(cx - turfRx + turfCapInset, cy - turfRy - 20, (turfRx - turfCapInset) * 2, turfRy * 2 + 40);
+  flatCapEllipsePath(ctx, cx, cy, turfRx, turfRy, GROUND_END_CAP_FRACTION, GROUND_CAP_CORNER_RADIUS);
   ctx.clip();
   ctx.beginPath();
   ctx.arc(leftArcX, cy, arcRadius, -Math.PI / 2, Math.PI / 2);
@@ -263,6 +297,8 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.stroke();
   ctx.restore();
 
+  // Goal squares/posts, anchored at the flat-capped edge (round 6) rather
+  // than the ellipse's old zero-width pinch point.
   ctx.strokeRect(leftGoalLineX, cy - GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_DEPTH, GOAL_SQUARE_HALF_WIDTH * 2);
   ctx.strokeRect(rightGoalLineX - GOAL_SQUARE_DEPTH, cy - GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_DEPTH, GOAL_SQUARE_HALF_WIDTH * 2);
   drawGoalPosts(ctx, leftGoalLineX, cy);

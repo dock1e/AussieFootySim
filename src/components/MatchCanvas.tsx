@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
-import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_CORNER_FRACTION, type DotPosition, type BallTarget } from "../engine/ground";
+import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_END_CAP_FRACTION, type DotPosition, type BallTarget } from "../engine/ground";
 
 /**
  * The signature feature — User Interface.md "Match simulation screen": a
@@ -133,25 +133,49 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // Tyler's own reference oval icon) draws just outside the playing surface.
   //
   // Round 5 (Tyler, live testing against a sample image: "square off the
-  // left and right ends of the playing field"): both this ring and the turf
-  // below used to be pure ellipses, which taper continuously all the way to
-  // a single point at each end - drawn instead as rounded rectangles (flat
-  // sides, quarter-circle corners) via `GROUND_CORNER_FRACTION`, shared with
-  // `engine/ground.ts`'s `maxHalfHeightAt` so the drawn shape and the shape
-  // player positions are actually bounded by can never drift apart (see that
-  // constant's own doc comment). Reads as a much more squared-off silhouette
-  // matching the sample, while the corners stay smooth rather than sharp
-  // 90-degree angles.
+  // left and right ends of the playing field"): first attempt drew this -
+  // and the turf below, and the 50m arc's clip - as a full rounded rectangle
+  // (flat sides all the way round, via a since-removed `GROUND_CORNER_FRACTION`
+  // constant), which squared off almost the *entire* side of the ground, not
+  // just the tips - it read as a stadium/rounded-rect shape overall, not an
+  // oval. Tyler caught this from a screenshot and asked for something "much
+  // more subtle": the oval kept exactly as it was, with only a small flat
+  // cut right behind the goal posts.
+  //
+  // Round 6 (Tyler, the correction above): back to a real ellipse, CLIPPED to
+  // a rectangle that's narrower than the ellipse by `GROUND_END_CAP_FRACTION`
+  // at each end. The clip only ever restricts x, not y, so everywhere inside
+  // that narrower x-range renders exactly as the plain ellipse always did -
+  // unchanged sides and curvature - and only the last sliver at each tip
+  // (which an unclipped ellipse tapers to a sharp point over, since its slope
+  // goes vertical right at the very end) gets cut off by a flat vertical edge
+  // instead. `engine/ground.ts`'s `maxHalfHeightAt` uses this exact same
+  // constant so the drawn shape and the shape player positions are bounded by
+  // can't drift apart - same discipline round 5's version of this comment
+  // already argued for, just pointed at a much smaller effect now.
+  const ringCapInset = rx * GROUND_END_CAP_FRACTION;
+  ctx.save();
   ctx.beginPath();
-  ctx.roundRect(cx - rx, cy - ry, rx * 2, ry * 2, ry * GROUND_CORNER_FRACTION);
+  ctx.rect(cx - rx + ringCapInset, cy - ry - 20, (rx - ringCapInset) * 2, ry * 2 + 40);
+  ctx.clip();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
   ctx.fillStyle = "#5c2323";
   ctx.fill();
+  ctx.restore();
 
-  // Turf, inset from the boundary ring.
+  // Turf, inset from the boundary ring - same flat-tip clip, scaled to the
+  // turf's own rx/ry so the two stay visually parallel.
+  const turfCapInset = turfRx * GROUND_END_CAP_FRACTION;
+  ctx.save();
   ctx.beginPath();
-  ctx.roundRect(cx - turfRx, cy - turfRy, turfRx * 2, turfRy * 2, turfRy * GROUND_CORNER_FRACTION);
+  ctx.rect(cx - turfRx + turfCapInset, cy - turfRy - 20, (turfRx - turfCapInset) * 2, turfRy * 2 + 40);
+  ctx.clip();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
   ctx.fillStyle = "#153d22";
   ctx.fill();
+  ctx.restore();
 
   ctx.strokeStyle = "rgba(255,255,255,0.4)";
   ctx.lineWidth = 2;
@@ -209,16 +233,27 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // needed, and it can't ever float past the boundary by construction.
   const arcRadius = turfRx * 0.7;
   const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
-  const leftArcX = cx - turfRx + arcAnchorInset;
-  const rightArcX = cx + turfRx - arcAnchorInset;
-  // Clipped to the same rounded-rect turf shape as the boundary above (round
-  // 5) rather than the old pure ellipse - with the ends now squared off, the
-  // turf has real height much closer to the goal line than an ellipse ever
-  // did, so more of each arc's true circular sweep now shows before being
-  // cut off, not less.
+  // Goal squares/posts, anchored at the new flat-capped edge (round 6) rather
+  // than the old ellipse's zero-width pinch point (round 5's own goal, "bring
+  // the goal square forward to match" - still true here, just a much smaller
+  // shift: the tip only pulls in by GROUND_END_CAP_FRACTION of the
+  // goal-line-to-centre distance, not the whole side of the ground). The 50m
+  // arc anchors off this same, moved-in goal line, since a real 50m arc is
+  // measured from the actual goal line, wherever that ends up.
+  const leftGoalLineX = cx - (turfRx - turfCapInset);
+  const rightGoalLineX = cx + (turfRx - turfCapInset);
+  const leftArcX = leftGoalLineX + arcAnchorInset;
+  const rightArcX = rightGoalLineX - arcAnchorInset;
+  // Clipped to the same ellipse-with-flat-tips turf shape as the boundary
+  // above (round 6) rather than round 5's rounded rect - two clips
+  // intersect, so this is the ellipse AND the narrower rect, exactly the
+  // flat-tipped region the turf itself is filled with.
   ctx.save();
   ctx.beginPath();
-  ctx.roundRect(cx - turfRx, cy - turfRy, turfRx * 2, turfRy * 2, turfRy * GROUND_CORNER_FRACTION);
+  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.beginPath();
+  ctx.rect(cx - turfRx + turfCapInset, cy - turfRy - 20, (turfRx - turfCapInset) * 2, turfRy * 2 + 40);
   ctx.clip();
   ctx.beginPath();
   ctx.arc(leftArcX, cy, arcRadius, -Math.PI / 2, Math.PI / 2);
@@ -228,16 +263,6 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.stroke();
   ctx.restore();
 
-  // Goal squares, anchored at the turf edge (not the canvas edge) so they
-  // never render partly off the ground. Round 5: the x formula itself didn't
-  // need to change - `cx +- turfRx` was always the true edge - but with the
-  // ellipse gone, that edge is now a real flat wall the full width of the
-  // goal square and its posts, not the ellipse's zero-width pinch point they
-  // used to sit at. That's what actually "brings them forward": there's now
-  // genuine playing surface right up against the goal line, not just a
-  // mathematical edge with nothing either side of it.
-  const leftGoalLineX = cx - turfRx;
-  const rightGoalLineX = cx + turfRx;
   ctx.strokeRect(leftGoalLineX, cy - GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_DEPTH, GOAL_SQUARE_HALF_WIDTH * 2);
   ctx.strokeRect(rightGoalLineX - GOAL_SQUARE_DEPTH, cy - GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_DEPTH, GOAL_SQUARE_HALF_WIDTH * 2);
   drawGoalPosts(ctx, leftGoalLineX, cy);

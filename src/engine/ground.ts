@@ -53,25 +53,31 @@ const MIN_HALF_HEIGHT = 70;
 /**
  * Aug 2026, round 5 (Tyler, live testing against a sample image: "square off
  * the left and right ends of the playing field... where the goals and the
- * behind posts are should be brought forwards"): the ground boundary used to
- * be a pure ellipse, which pinches to a single point exactly at the goal
- * line — so the goal square and posts, sitting right at that x, were really
- * sitting at the ellipse's zero-width tip, not inside any real flat playing
- * area. Now a rounded rectangle instead: flat top/bottom/left/right edges
- * joined by quarter-circle corners of this fraction of the half-height, so
- * the ground has *constant* full height over most of its length and only
- * tapers within the last `GROUND_CORNER_FRACTION` share of it, right at the
- * ends — matching the sample's much more squared-off silhouette, and putting
- * the goal line inside a genuine flat-walled end instead of a pinch point,
- * without needing to move the goal line's own x formula at all.
- * `MatchCanvas.tsx`'s boundary/turf drawing and this file's `maxHalfHeightAt`
- * (which every player anchor and the wobble clamp both read) share this
- * exact constant so the drawn shape and the shape player positions are
- * actually bounded by can never drift apart — the same class of bug already
- * fixed once this project (gap #74) by insisting on shared constants over
- * independently-eyeballed ones in two files.
+ * behind posts are should be brought forwards"): first attempt replaced the
+ * *entire* boundary with a rounded rectangle (flat sides all the way round,
+ * quarter-circle corners only at the ends) — which squared off almost the
+ * whole side of the ground, not just the tips, and read as a stadium/
+ * rounded-rect shape overall rather than an oval. Tyler caught this from a
+ * screenshot ("this is not right, the change I was asking for was much more
+ * subtle") and asked for the ellipse back, with only a small flat cut
+ * directly behind the goal posts.
+ *
+ * Round 6 (Tyler, the correction above): back to a real ellipse everywhere,
+ * except within the last `GROUND_END_CAP_FRACTION` share of the
+ * goal-line-to-centre distance at each end, where the height is held
+ * constant at whatever the ellipse's own natural height was at that cutoff
+ * point instead of continuing to taper all the way to a sharp point — a real
+ * ellipse's slope goes vertical right at the very tip, so this only ever
+ * shaves off the last, steepest little sliver of curve, not the oval's
+ * general shape. `MatchCanvas.tsx`'s boundary/turf drawing (which clips the
+ * filled ellipse to a slightly-narrower rectangle to get this same flat-tip
+ * effect) and this file's `maxHalfHeightAt` (which every player anchor and
+ * the wobble clamp both read) share this exact constant so the drawn shape
+ * and the shape player positions are actually bounded by can never drift
+ * apart — same discipline as round 5's version of this comment, just pointed
+ * at a much smaller, more localized effect this time.
  */
-export const GROUND_CORNER_FRACTION = 0.35;
+export const GROUND_END_CAP_FRACTION = 0.065;
 
 const ZONE_X_FRACTION: Record<Zone, number> = {
   0: 0.08,
@@ -104,24 +110,24 @@ function zoneFractionToX(z: number): number {
 }
 
 /**
- * Half the playable height at a given x — constant (full height) over the
- * flat-sided middle of the ground, tapering only within the last
- * `GROUND_CORNER_FRACTION` share of the length at each end, via a quarter-
- * circle corner (see `GROUND_CORNER_FRACTION`'s own doc comment above). A
- * floor (`MIN_HALF_HEIGHT`) still guards the (now rarely-hit, since the
- * corner itself never reaches all the way to 0 the way an ellipse's point
- * did) extreme edge case so goal-square dots are never crushed together.
+ * Half the playable height at a given x — the real, continuous ellipse
+ * taper everywhere, except within the last `GROUND_END_CAP_FRACTION` share
+ * of the goal-line-to-centre distance at each end, where it's held constant
+ * at the height the ellipse itself reaches right at that cutoff point
+ * (matching the flat tip `MatchCanvas.tsx` clips the boundary/turf to — see
+ * `GROUND_END_CAP_FRACTION`'s own doc comment). A floor (`MIN_HALF_HEIGHT`)
+ * still guards the extreme edge case so goal-square dots are never crushed
+ * together, though in practice the flat-cap height is already comfortably
+ * clear of it.
  */
 export function maxHalfHeightAt(x: number): number {
   const cx = GROUND_WIDTH / 2;
   const a = GROUND_WIDTH / 2 - MARGIN;
   const b = GROUND_HEIGHT / 2 - MARGIN;
-  const cornerRadius = b * GROUND_CORNER_FRACTION;
-  const dx = Math.min(a, Math.abs(x - cx)); // clamp defensively - callers should never pass x outside the ground anyway
-  if (dx <= a - cornerRadius) return b; // flat-sided region - full height, no taper
-  const cornerDx = dx - (a - cornerRadius);
-  const underRoot = Math.max(0, cornerRadius * cornerRadius - cornerDx * cornerDx);
-  return Math.max(MIN_HALF_HEIGHT, b - cornerRadius + Math.sqrt(underRoot));
+  const capInset = a * GROUND_END_CAP_FRACTION;
+  const dx = Math.min(a - capInset, Math.abs(x - cx)); // clamp to the flat-cap edge, not the ellipse's own zero-width tip
+  const t = Math.max(0, 1 - (dx / a) ** 2);
+  return Math.max(MIN_HALF_HEIGHT, b * Math.sqrt(t));
 }
 
 export const CENTER_Y = GROUND_HEIGHT / 2;
@@ -743,36 +749,41 @@ export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: Mat
       // as heading toward, just breaks exact numeric coincidence with
       // whichever other player's position it happens to fall on.
       //
-      // Widened Aug 2026, round 5: the old +-8px x / +-6px y margin (a plain
-      // `hashPlayer(id,4) - 0.5`, uniform over +-0.5) was "enough" only
-      // because `maxHalfHeightAt`'s old pure-ellipse taper happened to give
-      // any two players at even slightly different x a small amount of
-      // incidental Y separation for free - not by design, just a side effect
-      // of a continuously-varying function. Squaring off the ground's ends
-      // (see `GROUND_CORNER_FRACTION`) made a wide middle band of
-      // `maxHalfHeightAt` genuinely *constant*, so that free, accidental
-      // separation is gone for any two players who both land in it -
-      // confirmed live by the scratch sweep, which caught Port Adelaide's
-      // Joe Richards (HFF, uninvolved) and Darcy Byrne-Jones (FP, involved)
-      // landing 0.6px apart.
+      // Widened Aug 2026, round 5, then REVERTED round 6 - worth recording
+      // why, since it's not obvious: round 5's first (later reverted - see
+      // `GROUND_END_CAP_FRACTION`) attempt at squaring off the ground's ends
+      // made a *wide* middle band of `maxHalfHeightAt` genuinely constant,
+      // which removed the incidental Y separation the original +-8px x /
+      // +-6px y tie-break (a plain `hashPlayer(id,4) - 0.5`, uniform over
+      // +-0.5) had quietly been relying on - confirmed live by the scratch
+      // sweep, which caught Port Adelaide's Joe Richards (HFF, uninvolved)
+      // and Darcy Byrne-Jones (FP, involved) landing 0.6px apart. The fix at
+      // the time widened the tie-break and guaranteed a minimum magnitude
+      // (one hash for a magnitude in [0.4, 1.0), a second, independently-
+      // salted hash for the sign) - and that genuinely did stop those two
+      // specific collisions.
       //
-      // First attempt at a fix just doubled the multiplier (+-8px/+-6px to
-      // +-16px/+-12px) - still not reliable, because a *uniform* +-0.5
-      // tie-break can itself land arbitrarily close to 0 for an unlucky
-      // PlayerID regardless of how big the multiplier is (confirmed: West
-      // Coast's Alex Keath, `hashPlayer(id,4)-0.5` = +0.17, not even a
-      // near-zero case, still wasn't enough margin against Bailey Williams'
-      // independent anchor - a bigger multiplier alone can't fix a tie-break
-      // whose *own* magnitude happens to be small). Fixed properly by
-      // guaranteeing a minimum magnitude instead of hoping for one: one hash
-      // call picks a magnitude in [0.4, 1.0) (never near zero, whatever the
-      // PlayerID), a second, independently-salted hash call picks the sign,
-      // so magnitude and direction can't correlate with each other or with
-      // any other per-player value in this file.
-      const tieMagnitude = 0.4 + hashPlayer(id, 4) * 0.6; // [0.4, 1.0) - never near zero
-      const tieSign = hashPlayer(id, 5) < 0.5 ? -1 : 1;
-      const tieBreak = tieMagnitude * tieSign; // [-1.0,-0.4] union [0.4,1.0)
-      all.set(id, { ...existing, x: x + tieBreak * 16, y: baseY + spread + tieBreak * 12, involved: true });
+      // But once round 6 reverted the ground back to a real ellipse (the flat
+      // band is now only a narrow ~6.5%-of-half-length sliver right at each
+      // goal line, nowhere near where real anchors land - see
+      // `GROUND_END_CAP_FRACTION`), re-running this same scratch sweep found
+      // a *new* collision the widened tie-break itself had introduced: North
+      // Melbourne's Ben Culley (INT fallback, uninvolved) and Melbourne's
+      // Jake Melksham (FF, tackled/involved) landing 0.75px apart, where the
+      // *original* narrow tie-break would have put Melksham 13.9px away -
+      // confirmed by hand-computing both formulas against the real hash
+      // values for this PlayerID. The lesson: a bigger guaranteed-nonzero
+      // per-player nudge only guarantees a player moves well clear of *its
+      // own* un-nudged position - it can't guarantee anything about landing
+      // near *some other, independently-computed* player's position, since
+      // that's a coincidence between two unrelated formulas, not something
+      // either formula alone controls. Making the nudge bigger just changes
+      // *which* coincidences happen, not whether any do. With the ellipse
+      // back (round 6) the original motivating problem is gone, so this
+      // reverts cleanly to the simpler, originally-shipped formula rather
+      // than keep chasing individual coincidences with an ever-bigger nudge.
+      const tieBreak = hashPlayer(id, 4) - 0.5; // +-0.5
+      all.set(id, { ...existing, x: x + tieBreak * 8, y: baseY + spread + tieBreak * 6, involved: true });
     });
   }
 

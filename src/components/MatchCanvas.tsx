@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
-import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, type DotPosition, type BallTarget } from "../engine/ground";
+import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_CORNER_FRACTION, type DotPosition, type BallTarget } from "../engine/ground";
 
 /**
  * The signature feature — User Interface.md "Match simulation screen": a
@@ -131,14 +131,25 @@ function drawGround(ctx: CanvasRenderingContext2D) {
 
   // Boundary buffer ring - the maroon band every broadcast graphic (and
   // Tyler's own reference oval icon) draws just outside the playing surface.
+  //
+  // Round 5 (Tyler, live testing against a sample image: "square off the
+  // left and right ends of the playing field"): both this ring and the turf
+  // below used to be pure ellipses, which taper continuously all the way to
+  // a single point at each end - drawn instead as rounded rectangles (flat
+  // sides, quarter-circle corners) via `GROUND_CORNER_FRACTION`, shared with
+  // `engine/ground.ts`'s `maxHalfHeightAt` so the drawn shape and the shape
+  // player positions are actually bounded by can never drift apart (see that
+  // constant's own doc comment). Reads as a much more squared-off silhouette
+  // matching the sample, while the corners stay smooth rather than sharp
+  // 90-degree angles.
   ctx.beginPath();
-  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  ctx.roundRect(cx - rx, cy - ry, rx * 2, ry * 2, ry * GROUND_CORNER_FRACTION);
   ctx.fillStyle = "#5c2323";
   ctx.fill();
 
   // Turf, inset from the boundary ring.
   ctx.beginPath();
-  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
+  ctx.roundRect(cx - turfRx, cy - turfRy, turfRx * 2, turfRy * 2, turfRy * GROUND_CORNER_FRACTION);
   ctx.fillStyle = "#153d22";
   ctx.fill();
 
@@ -200,9 +211,14 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
   const leftArcX = cx - turfRx + arcAnchorInset;
   const rightArcX = cx + turfRx - arcAnchorInset;
+  // Clipped to the same rounded-rect turf shape as the boundary above (round
+  // 5) rather than the old pure ellipse - with the ends now squared off, the
+  // turf has real height much closer to the goal line than an ellipse ever
+  // did, so more of each arc's true circular sweep now shows before being
+  // cut off, not less.
   ctx.save();
   ctx.beginPath();
-  ctx.ellipse(cx, cy, turfRx, turfRy, 0, 0, Math.PI * 2);
+  ctx.roundRect(cx - turfRx, cy - turfRy, turfRx * 2, turfRy * 2, turfRy * GROUND_CORNER_FRACTION);
   ctx.clip();
   ctx.beginPath();
   ctx.arc(leftArcX, cy, arcRadius, -Math.PI / 2, Math.PI / 2);
@@ -213,7 +229,13 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.restore();
 
   // Goal squares, anchored at the turf edge (not the canvas edge) so they
-  // never render partly off the ground.
+  // never render partly off the ground. Round 5: the x formula itself didn't
+  // need to change - `cx +- turfRx` was always the true edge - but with the
+  // ellipse gone, that edge is now a real flat wall the full width of the
+  // goal square and its posts, not the ellipse's zero-width pinch point they
+  // used to sit at. That's what actually "brings them forward": there's now
+  // genuine playing surface right up against the goal line, not just a
+  // mathematical edge with nothing either side of it.
   const leftGoalLineX = cx - turfRx;
   const rightGoalLineX = cx + turfRx;
   ctx.strokeRect(leftGoalLineX, cy - GOAL_SQUARE_HALF_WIDTH, GOAL_SQUARE_DEPTH, GOAL_SQUARE_HALF_WIDTH * 2);

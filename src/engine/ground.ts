@@ -50,6 +50,29 @@ export const GROUND_HEIGHT = 702;
 const MARGIN = 30;
 const MIN_HALF_HEIGHT = 70;
 
+/**
+ * Aug 2026, round 5 (Tyler, live testing against a sample image: "square off
+ * the left and right ends of the playing field... where the goals and the
+ * behind posts are should be brought forwards"): the ground boundary used to
+ * be a pure ellipse, which pinches to a single point exactly at the goal
+ * line — so the goal square and posts, sitting right at that x, were really
+ * sitting at the ellipse's zero-width tip, not inside any real flat playing
+ * area. Now a rounded rectangle instead: flat top/bottom/left/right edges
+ * joined by quarter-circle corners of this fraction of the half-height, so
+ * the ground has *constant* full height over most of its length and only
+ * tapers within the last `GROUND_CORNER_FRACTION` share of it, right at the
+ * ends — matching the sample's much more squared-off silhouette, and putting
+ * the goal line inside a genuine flat-walled end instead of a pinch point,
+ * without needing to move the goal line's own x formula at all.
+ * `MatchCanvas.tsx`'s boundary/turf drawing and this file's `maxHalfHeightAt`
+ * (which every player anchor and the wobble clamp both read) share this
+ * exact constant so the drawn shape and the shape player positions are
+ * actually bounded by can never drift apart — the same class of bug already
+ * fixed once this project (gap #74) by insisting on shared constants over
+ * independently-eyeballed ones in two files.
+ */
+export const GROUND_CORNER_FRACTION = 0.35;
+
 const ZONE_X_FRACTION: Record<Zone, number> = {
   0: 0.08,
   1: 0.29,
@@ -80,13 +103,25 @@ function zoneFractionToX(z: number): number {
   return MARGIN + frac * (GROUND_WIDTH - 2 * MARGIN);
 }
 
-/** Half the playable height at a given x, tapering toward the goals like a real oval (with a floor so goal-square dots aren't crushed together). */
+/**
+ * Half the playable height at a given x — constant (full height) over the
+ * flat-sided middle of the ground, tapering only within the last
+ * `GROUND_CORNER_FRACTION` share of the length at each end, via a quarter-
+ * circle corner (see `GROUND_CORNER_FRACTION`'s own doc comment above). A
+ * floor (`MIN_HALF_HEIGHT`) still guards the (now rarely-hit, since the
+ * corner itself never reaches all the way to 0 the way an ellipse's point
+ * did) extreme edge case so goal-square dots are never crushed together.
+ */
 export function maxHalfHeightAt(x: number): number {
   const cx = GROUND_WIDTH / 2;
   const a = GROUND_WIDTH / 2 - MARGIN;
   const b = GROUND_HEIGHT / 2 - MARGIN;
-  const t = Math.max(0, 1 - ((x - cx) / a) ** 2);
-  return Math.max(MIN_HALF_HEIGHT, b * Math.sqrt(t));
+  const cornerRadius = b * GROUND_CORNER_FRACTION;
+  const dx = Math.min(a, Math.abs(x - cx)); // clamp defensively - callers should never pass x outside the ground anyway
+  if (dx <= a - cornerRadius) return b; // flat-sided region - full height, no taper
+  const cornerDx = dx - (a - cornerRadius);
+  const underRoot = Math.max(0, cornerRadius * cornerRadius - cornerDx * cornerDx);
+  return Math.max(MIN_HALF_HEIGHT, b - cornerRadius + Math.sqrt(underRoot));
 }
 
 export const CENTER_Y = GROUND_HEIGHT / 2;
@@ -707,8 +742,37 @@ export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: Mat
       // blend, doesn't change *which* zone/direction the involved dot reads
       // as heading toward, just breaks exact numeric coincidence with
       // whichever other player's position it happens to fall on.
-      const tieBreak = hashPlayer(id, 4) - 0.5; // +-0.5, deterministic, decorrelated from every other per-player function in this file via a different salt
-      all.set(id, { ...existing, x: x + tieBreak * 8, y: baseY + spread + tieBreak * 6, involved: true });
+      //
+      // Widened Aug 2026, round 5: the old +-8px x / +-6px y margin (a plain
+      // `hashPlayer(id,4) - 0.5`, uniform over +-0.5) was "enough" only
+      // because `maxHalfHeightAt`'s old pure-ellipse taper happened to give
+      // any two players at even slightly different x a small amount of
+      // incidental Y separation for free - not by design, just a side effect
+      // of a continuously-varying function. Squaring off the ground's ends
+      // (see `GROUND_CORNER_FRACTION`) made a wide middle band of
+      // `maxHalfHeightAt` genuinely *constant*, so that free, accidental
+      // separation is gone for any two players who both land in it -
+      // confirmed live by the scratch sweep, which caught Port Adelaide's
+      // Joe Richards (HFF, uninvolved) and Darcy Byrne-Jones (FP, involved)
+      // landing 0.6px apart.
+      //
+      // First attempt at a fix just doubled the multiplier (+-8px/+-6px to
+      // +-16px/+-12px) - still not reliable, because a *uniform* +-0.5
+      // tie-break can itself land arbitrarily close to 0 for an unlucky
+      // PlayerID regardless of how big the multiplier is (confirmed: West
+      // Coast's Alex Keath, `hashPlayer(id,4)-0.5` = +0.17, not even a
+      // near-zero case, still wasn't enough margin against Bailey Williams'
+      // independent anchor - a bigger multiplier alone can't fix a tie-break
+      // whose *own* magnitude happens to be small). Fixed properly by
+      // guaranteeing a minimum magnitude instead of hoping for one: one hash
+      // call picks a magnitude in [0.4, 1.0) (never near zero, whatever the
+      // PlayerID), a second, independently-salted hash call picks the sign,
+      // so magnitude and direction can't correlate with each other or with
+      // any other per-player value in this file.
+      const tieMagnitude = 0.4 + hashPlayer(id, 4) * 0.6; // [0.4, 1.0) - never near zero
+      const tieSign = hashPlayer(id, 5) < 0.5 ? -1 : 1;
+      const tieBreak = tieMagnitude * tieSign; // [-1.0,-0.4] union [0.4,1.0)
+      all.set(id, { ...existing, x: x + tieBreak * 16, y: baseY + spread + tieBreak * 12, involved: true });
     });
   }
 

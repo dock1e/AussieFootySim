@@ -463,12 +463,22 @@ function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
     // as a goal-square edge (`GOAL_SQUARE_HALF_WIDTH`, `drawGround`'s square)
     // - the two behind posts have no square line to align to, so they keep
     // their original vertical centering. For a goal post, `cy + dy` becomes
-    // one true edge of the rect (the edge nearer the square's interior)
-    // rather than the rect's midpoint, with the post's height extending
-    // outward, away from the square, from there - `dy < 0` and `dy > 0` are
-    // mirror images of each other around the centreline, so the sign of `dy`
-    // alone picks out which of the rect's two edges is the "near" one.
-    const ry = isGoalPost ? (dy < 0 ? cy + dy - h : cy + dy) : cy + dy - h / 2;
+    // one true edge of the rect (not the rect's midpoint), with the post's
+    // height extending from there.
+    //
+    // Round 11 (Tyler, live testing round 10's actual render: "the bottom
+    // goalpost is going the wrong direction... the goal post should still be
+    // going in the 'up' direction from the lower goal square line, not
+    // 'down'. This current view makes it look like the goal posts are in a
+    // 'spread eagled' position"): round 10 read "extend from the line" as
+    // *outward, away from the square* for each post - which mirrors the two
+    // posts in opposite absolute directions (one up, one down), exactly the
+    // "spread eagle" Tyler's describing. What he actually wants is simpler:
+    // both posts extend the *same* absolute screen direction, "up" (toward
+    // smaller y), regardless of which line they're anchored to - so `cy + dy`
+    // is always the rect's *bottom* edge (larger y), never conditional on
+    // `dy`'s own sign the way round 10 had it.
+    const ry = isGoalPost ? cy + dy - h : cy + dy - h / 2;
     ctx.fillStyle = POST_COLOR;
     ctx.fillRect(rx, ry, w, h);
     ctx.strokeStyle = "#0a0e14";

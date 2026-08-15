@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CLUBS } from "../types/club";
+import { CLUBS, clubByName } from "../types/club";
 import { playerFullName } from "../types/player";
 import { getPlayersByClub } from "../data/loadPlayers";
 import type { MatchTeam } from "../engine/team";
@@ -17,6 +17,8 @@ import {
 } from "../engine/match";
 import { mulberry32 } from "../engine/rng";
 import { fantasyPointsFor } from "../engine/ratings";
+import { setActiveGround } from "../engine/ground";
+import { groundForMatch } from "../data/clubGrounds";
 import type { TeamPlan, GameStyle } from "../engine/tactics";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
@@ -52,6 +54,24 @@ export function LiveMatch() {
 
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
+
+  /**
+   * Fixture-driven ground selection (Aug 2026, Phase 10 round 14 — Tyler:
+   * "Build just the smaller scope fixture") — this screen has no fixture/
+   * round of its own (an ad-hoc "pick any two clubs" friendly, a fresh
+   * random seed every time), so `groundForMatch` is called with just the
+   * home club's id, which always resolves to that club's *primary* real
+   * ground (see that function's own doc comment for why round-based
+   * exceptions deliberately don't fire here). `activeGroundName` is a pure
+   * re-derivation for display only, not a read-back of engine state — kept
+   * in sync with `setActiveGround` below by construction, since both come
+   * from the exact same `groundForMatch` call.
+   */
+  const homeClubId = clubByName(homeClub)?.ClubID;
+  const activeGround = groundForMatch(homeClubId ?? -1);
+  useEffect(() => {
+    setActiveGround(activeGround);
+  }, [activeGround]);
 
   /** Uses the coach's own Selection Committee lineup when it's their club and it's complete; every other club falls back to the same real, suitability-aware auto-fill (`autoFillLineup`) an AI club gets in season simulation now — see engine/season.ts's `buildTeams` and [[Tactics and Positional Play]] — rather than the old coarse OVR-only `pickBest22`. */
   function resolveTeam(clubName: string): MatchTeam {
@@ -191,6 +211,9 @@ export function LiveMatch() {
           </select>
           {awayIsCustom && <span className="stat-pill stat-pill-good">your lineup</span>}
         </div>
+        <span className="text-xs text-slate-500" title="Fixture-driven ground selection (Phase 10 round 14) - the home club's real primary ground, since this screen has no fixture round to check exceptions against">
+          @ {activeGround.name}
+        </span>
         {!result ? (
           <button
             onClick={() => setStage("prep")}

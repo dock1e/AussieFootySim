@@ -124,14 +124,97 @@ export const GROUND_CONFIGS: Record<string, GroundConfig> = {
     roundFraction: SHARED_ROUND_FRACTION,
     arcRadiusPullback: SHARED_ARC_RADIUS_PULLBACK,
   },
+
+  /**
+   * Aug 2026, Phase 10 round 14 (Tyler: "Build just the smaller scope
+   * fixture" - greenlighting the "Layer A" ground-*selection* build from the
+   * vault's "Ground Selection - Fixture-Driven Home Grounds" note) - 5 more
+   * venues, same tomgorey.com satellite-traced source and exact same
+   * compression formula as the 7 above (re-derived and verified to reproduce
+   * every one of those 7's exact shipped `groundHeight` before being applied
+   * here - see `scripts/.compute_new_ground_heights.ts.throwaway`). These
+   * fill two different real gaps the round 13 research found:
+   *
+   * `engie`/`peopleFirst` are the two clubs (GWS, Gold Coast) whose real
+   * primary home ground had no shape at all - round 11's original 7-ground
+   * list was scoped to "iconic" grounds for visual variety, not full
+   * 18-club coverage.
+   *
+   * `tasmania`/`tio`/`manuka` are the away-designated-home-game *exception*
+   * venues Tyler named (Tasmania, Darwin, Manuka) - confirmed for real
+   * against the live 2026 AFL fixture in round 13's research. Consumed by
+   * `src/data/clubGrounds.ts`'s `GROUND_EXCEPTIONS` table, not by any
+   * club's primary-ground mapping.
+   */
+  engie: {
+    id: "engie",
+    name: "ENGIE Stadium",
+    realDimensions: { lengthM: 161.1, widthM: 127.2 }, // tomgorey.com's "Sydney Showground" row - same physical venue, renamed several times (GIANTS/Spotless/Sydney Showground/ENGIE Stadium)
+    groundHeight: 649,
+    capFraction: SHARED_CAP_FRACTION,
+    roundFraction: SHARED_ROUND_FRACTION,
+    arcRadiusPullback: SHARED_ARC_RADIUS_PULLBACK,
+  },
+  peopleFirst: {
+    id: "peopleFirst",
+    name: "People First Stadium",
+    realDimensions: { lengthM: 157.4, widthM: 131.5 }, // tomgorey.com's "Carrara Stadium" row - same venue (Carrara/Metricon/Heritage Bank/People First Stadium)
+    groundHeight: 685,
+    capFraction: SHARED_CAP_FRACTION,
+    roundFraction: SHARED_ROUND_FRACTION,
+    arcRadiusPullback: SHARED_ARC_RADIUS_PULLBACK,
+  },
+  tasmania: {
+    id: "tasmania",
+    name: "University of Tasmania Stadium",
+    realDimensions: { lengthM: 160.8, widthM: 129.7 }, // tomgorey.com's "UTAS Stadium" row - Launceston, Hawthorn's confirmed Tasmania exception venue (distinct from Blundstone Arena/Hobart, which no club currently designates a home game at per round 13's research)
+    groundHeight: 662,
+    capFraction: SHARED_CAP_FRACTION,
+    roundFraction: SHARED_ROUND_FRACTION,
+    arcRadiusPullback: SHARED_ARC_RADIUS_PULLBACK,
+  },
+  tio: {
+    id: "tio",
+    name: "TIO Stadium",
+    realDimensions: { lengthM: 164.1, widthM: 131.0 }, // tomgorey.com's "Marrara Oval" row - Darwin; TIO Stadium is Marrara Oval's naming-rights name, confirmed the same venue (not the smaller, separate "Darwin Football Stadium" in the same sporting precinct)
+    groundHeight: 656,
+    capFraction: SHARED_CAP_FRACTION,
+    roundFraction: SHARED_ROUND_FRACTION,
+    arcRadiusPullback: SHARED_ARC_RADIUS_PULLBACK,
+  },
+  manuka: {
+    id: "manuka",
+    name: "Manuka Oval",
+    realDimensions: { lengthM: 159.7, widthM: 133.0 }, // tomgorey.com's "Manuka Oval" row - Canberra, GWS's confirmed Manuka exception venue
+    groundHeight: 683,
+    capFraction: SHARED_CAP_FRACTION,
+    roundFraction: SHARED_ROUND_FRACTION,
+    arcRadiusPullback: SHARED_ARC_RADIUS_PULLBACK,
+  },
 };
 
 /**
- * No ground/stadium selector exists yet (design note's "recommended path"
- * item 2, not built) — every consumer reads this single active config, which
- * is why every value above reproduces today's shipped constants exactly for
- * `mcg`. Changing which ground is "active" today means editing this one line;
- * a real selector would replace it with per-match state instead.
+ * Aug 2026, Phase 10 round 14 — a real ground selector exists now
+ * (`src/data/clubGrounds.ts`'s `groundForMatch`), so this is no longer a
+ * frozen constant: `let`, plus `setActiveGroundConfig` below, so switching
+ * which ground is "active" mid-session is possible without a page reload.
+ * ES module imports are *live bindings*, not one-time value copies — every
+ * file that does `import { ACTIVE_GROUND } from "./grounds"` and reads the
+ * bare identifier (not destructured into its own separately-cached local)
+ * sees the current value automatically, including `MatchCanvas.tsx`'s own
+ * `ACTIVE_GROUND.arcRadiusPullback` read inside `drawGround` (already
+ * re-read fresh every animation frame, so it needed no further change).
+ * `engine/ground.ts`'s `GROUND_HEIGHT`/`GROUND_END_CAP_FRACTION`/`CENTER_Y`
+ * are the one place this alone isn't enough — those hoist a *derived* value
+ * into their own separate frozen bindings rather than reading `.groundHeight`
+ * fresh at each of their own many call sites, so they need their own
+ * `setActiveGround` (that file's own, not this one) to stay in sync — see
+ * that function's doc comment for why.
  */
 export const DEFAULT_GROUND_ID = "mcg";
-export const ACTIVE_GROUND: GroundConfig = GROUND_CONFIGS[DEFAULT_GROUND_ID];
+export let ACTIVE_GROUND: GroundConfig = GROUND_CONFIGS[DEFAULT_GROUND_ID];
+
+/** The only place ACTIVE_GROUND is ever reassigned — everything else only ever reads it. Called by engine/ground.ts's own setActiveGround, which is the real public entry point (also re-syncs that file's derived constants) — nothing outside this file and that one should need to call this directly. */
+export function setActiveGroundConfig(config: GroundConfig): void {
+  ACTIVE_GROUND = config;
+}

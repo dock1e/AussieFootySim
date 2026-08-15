@@ -236,10 +236,19 @@ function flatCapEllipsePath(
 // ground today, including this one, per round 11's numeric finding that this
 // constant doesn't need per-ground tuning to stay visually clean across all
 // 7 real-world target ratios (see that file's doc comment for the sweep).
-const GROUND_CAP_ROUND_FRACTION = ACTIVE_GROUND.roundFraction; // was 0.6 (round 8), then a flat 0.08 (round 9) - see round 9 note above
+//
+// Round 14: moved from a module-level const (read once, at this file's own
+// import time) to a local inside drawGround itself, read fresh on every
+// call - the same pattern ARC_RADIUS_PULLBACK just below already used
+// correctly. Needed now that the active ground can actually change mid-
+// session (src/data/clubGrounds.ts): a module-level const here would have
+// frozen whichever ground was active when this file first loaded, same
+// class of bug GROUND_HEIGHT/CENTER_Y's own const->let fix in
+// engine/ground.ts fixes for those two values.
 
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
+  const GROUND_CAP_ROUND_FRACTION = ACTIVE_GROUND.roundFraction; // was 0.6 (round 8), then a flat 0.08 (round 9) - see round 9 note above
 
   const cx = GROUND_WIDTH / 2;
   const cy = GROUND_HEIGHT / 2;

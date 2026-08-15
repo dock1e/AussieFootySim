@@ -4,7 +4,7 @@ import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import type { MatchEvent } from "./match.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
-import { ACTIVE_GROUND } from "../data/grounds.ts";
+import { ACTIVE_GROUND, setActiveGroundConfig, type GroundConfig } from "../data/grounds.ts";
 import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
 
 /**
@@ -58,7 +58,20 @@ export const GROUND_WIDTH = 1000;
 // preserving refactor, not a visible change). Every other constant in this
 // file is still expressed as a fraction of GROUND_WIDTH/GROUND_HEIGHT, so
 // swapping which ground is active only ever needs to change this one value.
-export const GROUND_HEIGHT = ACTIVE_GROUND.groundHeight;
+//
+// Round 14 (Tyler: "Build just the smaller scope fixture" — the ground-
+// *selection* build, src/data/clubGrounds.ts): `const` → `let`. This value
+// (and GROUND_END_CAP_FRACTION/CENTER_Y below) get read as a bare identifier
+// throughout this whole file — maxHalfHeightAt, formationFor,
+// computeDotPositions, ballTargetFor — and MatchCanvas.tsx imports them the
+// same way, so converting every one of those call sites to a function call
+// just to support a dynamic active ground would have been a much bigger,
+// riskier diff than this file actually needs. A `let`, reassigned by
+// `setActiveGround` below whenever the active ground changes, is a 3-line
+// change instead — every existing call site keeps reading the same bare
+// name and automatically sees the new value, since it's the same live
+// binding either way.
+export let GROUND_HEIGHT = ACTIVE_GROUND.groundHeight;
 // Split into X/Y Aug 2026, round 7 (Tyler, live testing: "stretch the length
 // of the ground... pull the edge of the ground close to the edge of the
 // canvas"): this used to be one shared margin for both axes. `MARGIN_X`
@@ -127,8 +140,14 @@ const MIN_HALF_HEIGHT = 70;
  * finding that the corner construction doesn't need per-ground tuning to
  * stay visually clean across all 7 target real-world ratios. See that file's
  * own doc comment for the full reasoning.
+ *
+ * Round 14: `const` → `let`, same reason and same `setActiveGround`
+ * mechanism as `GROUND_HEIGHT` above — still 0.0523 for all 12 grounds
+ * today (the 5 round 14 added), so in practice this never actually changes
+ * value yet, but it's wired for real rather than silently relying on every
+ * ground happening to share one number forever.
  */
-export const GROUND_END_CAP_FRACTION = ACTIVE_GROUND.capFraction;
+export let GROUND_END_CAP_FRACTION = ACTIVE_GROUND.capFraction;
 
 const ZONE_X_FRACTION: Record<Zone, number> = {
   0: 0.08,
@@ -181,7 +200,28 @@ export function maxHalfHeightAt(x: number): number {
   return Math.max(MIN_HALF_HEIGHT, b * Math.sqrt(t));
 }
 
-export const CENTER_Y = GROUND_HEIGHT / 2;
+export let CENTER_Y = GROUND_HEIGHT / 2;
+
+/**
+ * The real public entry point for switching which ground is active (Aug
+ * 2026, Phase 10 round 14 — `src/data/clubGrounds.ts`'s `groundForMatch`
+ * is the thing that decides *which* config a given match should use; this
+ * is what actually applies that decision). Re-derives every one of this
+ * file's own ground-dimension bindings from the new config, then updates
+ * `data/grounds.ts`'s own `ACTIVE_GROUND` too (via `setActiveGroundConfig`)
+ * so anything reading that directly — MatchCanvas.tsx's own
+ * `ACTIVE_GROUND.arcRadiusPullback` read fresh inside `drawGround`, or its
+ * `ACTIVE_GROUND.roundFraction` read the same way — stays in sync as well.
+ * One call updates both files' worth of state; nothing outside this
+ * function should ever need to touch `GROUND_HEIGHT`/
+ * `GROUND_END_CAP_FRACTION`/`CENTER_Y` or `ACTIVE_GROUND` directly.
+ */
+export function setActiveGround(config: GroundConfig): void {
+  setActiveGroundConfig(config);
+  GROUND_HEIGHT = config.groundHeight;
+  GROUND_END_CAP_FRACTION = config.capFraction;
+  CENTER_Y = GROUND_HEIGHT / 2;
+}
 
 export interface DotPosition {
   playerId: number;

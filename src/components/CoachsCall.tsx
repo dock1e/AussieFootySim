@@ -8,10 +8,14 @@ import type { GameStyle } from "../engine/tactics";
  * attack' / 'Trust the players,' each with flavour text and a small,
  * transparent stat effect." This is also, per the same doc, "the only point
  * the team-wide game style can be changed" mid-match — so rather than invent
- * a parallel mini-system, each option here maps 1:1 onto one of the 6 real
+ * a parallel mini-system, each option here maps 1:1 onto one of the 5 real
  * `GameStyle` values already implemented in tactics.ts, with a flavour label
  * over the *same* real effect text (no new numbers). Wired in LiveMatch.tsx
  * via `setGameStyle()` on the in-progress match.
+ *
+ * "Chip & Mark" (formerly "Slow the Pace" here) was removed Aug 2026 — Tyler:
+ * it "looks like it was going to be a copy of the Spread the Ground game
+ * style" — see [[Tactics and Positional Play]] Part 7.
  */
 const COACHS_CALL_OPTIONS: { style: GameStyle; label: string; blurb: string }[] = [
   { style: "Balanced", label: "Trust the Players", blurb: "No bias — keep playing your natural game." },
@@ -24,11 +28,6 @@ const COACHS_CALL_OPTIONS: { style: GameStyle; label: string; blurb: string }[] 
     style: "Spread the Ground",
     label: "Run & Carry",
     blurb: "More uncontested chains and run-and-carry footy. Higher-scoring and free-flowing, but costs more fatigue.",
-  },
-  {
-    style: "Chip & Mark",
-    label: "Slow the Pace",
-    blurb: "Better disposal efficiency, fewer clangers, fewer inside-50s. Grinds the scoreline down.",
   },
   {
     style: "Attack the Middle",

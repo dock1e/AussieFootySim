@@ -1,4 +1,4 @@
-import type { Archetype } from "../types/archetype.ts";
+import type { Archetype, Position } from "../types/archetype.ts";
 import type { Player } from "../types/player.ts";
 import { summariseLines, bandForGap, type Line } from "../data/lines.ts";
 
@@ -26,10 +26,17 @@ import { summariseLines, bandForGap, type Line } from "../data/lines.ts";
 export type TacticGroup = "Midfield" | "KeyForward" | "SmallForward" | "Ruck" | "Defender";
 
 export const MIDFIELD_TACTICS = ["Run Two Ways", "Attacking", "Defensive", "Tagging"] as const;
-export const KEY_FORWARD_TACTICS = ["Leading Target", "Contested Marking", "Bring Ball to Ground"] as const;
-export const SMALL_FORWARD_TACTICS = ["Free Role", "Crumbing", "Lead-Up Target", "High Press"] as const;
+/**
+ * "General Forward" (Aug 2026) added to both forward lists per Tyler's
+ * hand-drawn tactics pack — see [[Tactics and Positional Play]] Part 7. It
+ * shows up on all four forward position slides (FF, FP, HFF, CHF), so it's
+ * additive to both existing menus rather than replacing anything on either.
+ */
+export const KEY_FORWARD_TACTICS = ["Leading Target", "Contested Marking", "Bring Ball to Ground", "General Forward"] as const;
+export const SMALL_FORWARD_TACTICS = ["Free Role", "Crumbing", "Lead-Up Target", "High Press", "General Forward"] as const;
 export const RUCK_TACTICS = ["Follow the Ball", "Aerial Target", "Hold Position"] as const;
-export const DEFENDER_TACTICS = ["Defensive Shoulder", "Play in Front", "Third Man Up", "Run off Man"] as const;
+/** "General Defender" (Aug 2026) added per Tyler's tactics pack — a genuinely new 5th defender tactic, not a relabelling of an existing one. See [[Tactics and Positional Play]] Part 7. */
+export const DEFENDER_TACTICS = ["Defensive Shoulder", "Play in Front", "Third Man Up", "Run off Man", "General Defender"] as const;
 
 export type MidfieldTactic = (typeof MIDFIELD_TACTICS)[number];
 export type KeyForwardTactic = (typeof KEY_FORWARD_TACTICS)[number];
@@ -83,11 +90,37 @@ export function defaultTacticFor(group: TacticGroup): Tactic {
   return TACTICS_BY_GROUP[group][0];
 }
 
+/**
+ * Finer-grained than `defaultTacticFor`'s one-per-group answer — Tyler's
+ * hand-drawn tactics pack (Aug 2026, see [[Tactics and Positional Play]]
+ * Part 7) gives the flank defensive/forward positions (BP, HBF, FP, HFF)
+ * their own default distinct from their group's centre-position default (FB/
+ * CHB/CHF), matching the same centre-vs-flank split `ground.ts`'s own
+ * `POSITION_LANES` already encodes structurally (single lane for the centre
+ * positions, mirrored dual lane for the flanks). Positions not listed here
+ * (including every centre position, since their default already equals the
+ * group default) fall through to `defaultTacticFor`, same as when
+ * `position` itself is unknown — a match with no Selection Committee lineup
+ * behind it (no `MatchTeam.positions` map) degrades to exactly the old
+ * per-group behaviour, not an error.
+ */
+const POSITION_DEFAULT_TACTIC: Partial<Record<Position, Tactic>> = {
+  BP: "General Defender",
+  HBF: "General Defender",
+  FF: "Contested Marking",
+  FP: "General Forward",
+  HFF: "General Forward",
+};
+
+export function defaultTacticForPosition(position: Position | undefined, group: TacticGroup): Tactic {
+  const positional = position ? POSITION_DEFAULT_TACTIC[position] : undefined;
+  return positional ?? defaultTacticFor(group);
+}
+
 export const GAME_STYLES = [
   "Balanced",
   "Defensive Flood",
   "Spread the Ground",
-  "Chip & Mark",
   "Attack the Middle",
   "Forward Press",
 ] as const;
@@ -164,14 +197,22 @@ export function aiTeamPlan(clubPlayers: Player[], leagueAvgOvr: number): TeamPla
  * `simulateMatch` runs every supplied plan through this before using it, so
  * match.ts's tactic-lookup functions can assume every plan they see is
  * already valid.
+ *
+ * `positions` is optional (Aug 2026) — when the caller has a real Selection
+ * Committee lineup behind this team (`MatchTeam.positions`), an unlisted or
+ * mismatched player falls back to their own *position's* default (see
+ * `defaultTacticForPosition`), not just their archetype group's. Omit it and
+ * every player falls back to the group default exactly as before — this
+ * param doesn't change behaviour for any existing caller that doesn't pass it.
  */
-export function sanitizePlan(players: readonly Player[], plan: TeamPlan): TeamPlan {
+export function sanitizePlan(players: readonly Player[], plan: TeamPlan, positions?: Map<number, Position>): TeamPlan {
   const tactics = new Map<number, PlayerTactic>();
   for (const p of players) {
     const group = tacticGroupFor(p.archetype as Archetype);
     const valid: readonly Tactic[] = tacticsFor(group);
     const existing = plan.tactics.get(p.PlayerID);
-    tactics.set(p.PlayerID, existing && valid.includes(existing.tactic) ? existing : { tactic: defaultTacticFor(group) });
+    const fallback = defaultTacticForPosition(positions?.get(p.PlayerID), group);
+    tactics.set(p.PlayerID, existing && valid.includes(existing.tactic) ? existing : { tactic: fallback });
   }
   return { gameStyle: plan.gameStyle, tactics };
 }
@@ -284,11 +325,10 @@ export function gameStyleDefenderMultiplier(style: GameStyle, defenderIsInForwar
   }
 }
 
-/** Engine.md Spread the Ground "+uncontested-possession chains"; Chip & Mark "+disposal efficiency". */
+/** Engine.md Spread the Ground "+uncontested-possession chains". */
 export function gameStyleDisposalMultiplier(style: GameStyle): number {
   switch (style) {
     case "Spread the Ground":
-    case "Chip & Mark":
       return 1.15;
     default:
       return 1;
@@ -305,11 +345,9 @@ export function gameStyleContestChanceMultiplier(style: GameStyle): number {
   return style === "Spread the Ground" ? 0.8 : 1;
 }
 
-/** Engine.md Chip & Mark "-tempo (fewer inside-50s/quarter)"; Attack the Middle "+inside-50 count off clearances"; Forward Press "+own inside-50 count"; Defensive Flood "-own inside-50 count and forward structure". */
+/** Engine.md Attack the Middle "+inside-50 count off clearances"; Forward Press "+own inside-50 count"; Defensive Flood "-own inside-50 count and forward structure". */
 export function gameStyleForwardEntryMultiplier(style: GameStyle): number {
   switch (style) {
-    case "Chip & Mark":
-      return 0.8;
     case "Attack the Middle":
       return 1.15;
     case "Forward Press":

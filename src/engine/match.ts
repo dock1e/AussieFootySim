@@ -1,5 +1,5 @@
 import type { Player } from "../types/player.ts";
-import type { Archetype } from "../types/archetype.ts";
+import type { Archetype, Position } from "../types/archetype.ts";
 import type { Rng } from "./rng.ts";
 import { computeContestRating, resolveContest, resolveThreshold } from "./contest.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
@@ -8,7 +8,7 @@ import { bestByRating, onGroundPlayers } from "./team.ts";
 import { weightedPlayerChoice } from "./involvement.ts";
 import {
   tacticGroupFor,
-  defaultTacticFor,
+  defaultTacticForPosition,
   ruckHitoutMultiplier,
   taggingClearanceMultiplier,
   carrierDisposalMultiplier,
@@ -192,12 +192,18 @@ function planFor(ctx: Ctx, side: Side): TeamPlan | null {
   return side === "home" ? ctx.homePlan : ctx.awayPlan;
 }
 
-/** Resolves a player's active tactic: undefined if their team has no plan at all, otherwise their explicit choice or their tactic group's default. */
-function tacticFor(plan: TeamPlan | null, player: Player): Tactic | undefined {
+/**
+ * Resolves a player's active tactic: undefined if their team has no plan at
+ * all, otherwise their explicit choice or their default — their own
+ * position's default (Aug 2026, e.g. a Back Pocket falls back to "General
+ * Defender") when `positions` is supplied, otherwise their tactic group's
+ * plain default, same as before `positions` threading existed.
+ */
+function tacticFor(plan: TeamPlan | null, player: Player, positions?: Map<number, Position>): Tactic | undefined {
   if (!plan) return undefined;
   const explicit = plan.tactics.get(player.PlayerID)?.tactic;
   if (explicit) return explicit;
-  return defaultTacticFor(tacticGroupFor(player.archetype as Archetype));
+  return defaultTacticForPosition(positions?.get(player.PlayerID), tacticGroupFor(player.archetype as Archetype));
 }
 
 function styleFor(plan: TeamPlan | null) {
@@ -263,11 +269,11 @@ function runStoppage(ctx: Ctx, state: State): State {
   const homeRuck = bestByRating(home, ruckRating);
   const awayRuck = bestByRating(away, ruckRating);
   const homeRuckMult =
-    ruckHitoutMultiplier(tacticFor(homePlan, homeRuck)) *
+    ruckHitoutMultiplier(tacticFor(homePlan, homeRuck, ctx.home.positions)) *
     thirdManUpRuckMultiplier(teamHasTactic(homePlan, "Third Man Up")) *
     conditionMultiplierFor(ctx, "home", homeRuck);
   const awayRuckMult =
-    ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck)) *
+    ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck, ctx.away.positions)) *
     thirdManUpRuckMultiplier(teamHasTactic(awayPlan, "Third Man Up")) *
     conditionMultiplierFor(ctx, "away", awayRuck);
   const ruckResult = resolveContest(homeRuck, awayRuck, "ruck", ctx.rng, {
@@ -318,7 +324,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const possessingPlan = planFor(ctx, state.possession);
   const defendingPlan = planFor(ctx, defendingSide);
 
-  const carrierTactic = tacticFor(possessingPlan, carrier);
+  const carrierTactic = tacticFor(possessingPlan, carrier, possessingTeam.positions);
   const tag = defendingPlan ? resolveTagger(defendingPlan, carrier.PlayerID) : null;
   const tagger = tag ? defendingTeam.players.find((p) => p.PlayerID === tag.taggerId) : undefined;
   // Phase 8 Slice B: absent a tagger, the defender rep is no longer a
@@ -327,7 +333,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // Defender is actually the likely defender deep in defensive 50, not
   // exactly as likely as a Small Forward the way a uniform pick made them.
   const defender = tagger ?? weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
-  const defenderTactic = tacticFor(defendingPlan, defender);
+  const defenderTactic = tacticFor(defendingPlan, defender, defendingTeam.positions);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
 
   const disposalRating =
@@ -413,10 +419,10 @@ function runContest(ctx: Ctx, state: State): State {
   const defenderRep = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
   const attackerMult =
-    contestRatingMultiplier(tacticFor(attackingPlan, attackerRep), contestType, "attacker") *
+    contestRatingMultiplier(tacticFor(attackingPlan, attackerRep, attackingTeam.positions), contestType, "attacker") *
     conditionMultiplierFor(ctx, attackingSide, attackerRep);
   const defenderMult =
-    contestRatingMultiplier(tacticFor(defendingPlan, defenderRep), contestType, "defender") *
+    contestRatingMultiplier(tacticFor(defendingPlan, defenderRep, defendingTeam.positions), contestType, "defender") *
     gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
     conditionMultiplierFor(ctx, defendingSide, defenderRep);
   const result = resolveContest(attackerRep, defenderRep, contestType, ctx.rng, {
@@ -558,8 +564,8 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
       home: { name: home.name, goals: 0, behinds: 0, points: 0 },
       away: { name: away.name, goals: 0, behinds: 0, points: 0 },
     },
-    homePlan: opts.homePlan ? sanitizePlan(home.players, opts.homePlan) : null,
-    awayPlan: opts.awayPlan ? sanitizePlan(away.players, opts.awayPlan) : null,
+    homePlan: opts.homePlan ? sanitizePlan(home.players, opts.homePlan, home.positions) : null,
+    awayPlan: opts.awayPlan ? sanitizePlan(away.players, opts.awayPlan, away.positions) : null,
     homeCondition: opts.homeCondition ?? null,
     awayCondition: opts.awayCondition ?? null,
   };

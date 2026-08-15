@@ -3,6 +3,7 @@ import {
   tacticGroupFor,
   tacticsFor,
   defaultTacticFor,
+  defaultTacticForPosition,
   sanitizePlan,
   resolveTagger,
   ruckHitoutMultiplier,
@@ -57,14 +58,42 @@ describe("tacticGroupFor / tacticsFor / defaultTacticFor", () => {
     expect(defaultTacticFor("Defender")).toBe("Defensive Shoulder");
   });
 
-  it("GAME_STYLES includes Balanced plus the 5 named styles from Engine.md", () => {
-    expect(GAME_STYLES).toHaveLength(6);
+  it("GAME_STYLES includes Balanced plus the 4 named styles from Engine.md (Chip & Mark removed Aug 2026 — too close a duplicate of Spread the Ground)", () => {
+    expect(GAME_STYLES).toHaveLength(5);
     expect(GAME_STYLES).toContain("Balanced");
     expect(GAME_STYLES).toContain("Defensive Flood");
     expect(GAME_STYLES).toContain("Spread the Ground");
-    expect(GAME_STYLES).toContain("Chip & Mark");
     expect(GAME_STYLES).toContain("Attack the Middle");
     expect(GAME_STYLES).toContain("Forward Press");
+    expect(GAME_STYLES).not.toContain("Chip & Mark");
+  });
+
+  it("DEFENDER_TACTICS and both forward tactic lists carry Tyler's Aug 2026 additions", () => {
+    expect(DEFENDER_TACTICS).toContain("General Defender");
+    expect(KEY_FORWARD_TACTICS).toContain("General Forward");
+    expect(SMALL_FORWARD_TACTICS).toContain("General Forward");
+  });
+
+  it("defaultTacticForPosition falls back to the group default when position is unknown", () => {
+    expect(defaultTacticForPosition(undefined, "Defender")).toBe("Defensive Shoulder");
+    expect(defaultTacticForPosition(undefined, "KeyForward")).toBe("Leading Target");
+  });
+
+  it("defaultTacticForPosition gives the flank defender/forward positions their own new default", () => {
+    expect(defaultTacticForPosition("BP", "Defender")).toBe("General Defender");
+    expect(defaultTacticForPosition("HBF", "Defender")).toBe("General Defender");
+    expect(defaultTacticForPosition("FP", "SmallForward")).toBe("General Forward");
+    expect(defaultTacticForPosition("HFF", "SmallForward")).toBe("General Forward");
+  });
+
+  it("defaultTacticForPosition keeps the centre defender/forward positions on their existing default", () => {
+    expect(defaultTacticForPosition("FB", "Defender")).toBe("Defensive Shoulder");
+    expect(defaultTacticForPosition("CHB", "Defender")).toBe("Defensive Shoulder");
+    expect(defaultTacticForPosition("CHF", "KeyForward")).toBe("Leading Target");
+  });
+
+  it("defaultTacticForPosition gives Full Forward a distinct default from the rest of KeyForward", () => {
+    expect(defaultTacticForPosition("FF", "KeyForward")).toBe("Contested Marking");
   });
 });
 
@@ -99,6 +128,17 @@ describe("sanitizePlan", () => {
   it("preserves gameStyle unchanged", () => {
     const plan: TeamPlan = { gameStyle: "Attack the Middle", tactics: new Map() };
     expect(sanitizePlan(players, plan).gameStyle).toBe("Attack the Middle");
+  });
+
+  it("with a positions map supplied, fills in an unlisted player with their own position's default instead of just their group's", () => {
+    // PlayerID 2 is a Key Defender (group default "Defensive Shoulder") but
+    // occupies BP here, whose Aug 2026 default is "General Defender".
+    const positions = new Map([[2, "BP" as const]]);
+    const plan: TeamPlan = { gameStyle: "Balanced", tactics: new Map() };
+    const cleaned = sanitizePlan(players, plan, positions);
+    expect(cleaned.tactics.get(2)?.tactic).toBe("General Defender");
+    // Players absent from the positions map still fall back to their group default.
+    expect(cleaned.tactics.get(1)?.tactic).toBe("Run Two Ways");
   });
 });
 
@@ -193,14 +233,12 @@ describe("game style multipliers — Balanced is always a no-op", () => {
     expect(gameStyleDefenderMultiplier("Forward Press", false)).toBeLessThan(1);
   });
 
-  it("Spread the Ground and Chip & Mark both boost disposal efficiency", () => {
+  it("Spread the Ground boosts disposal efficiency", () => {
     expect(gameStyleDisposalMultiplier("Spread the Ground")).toBeGreaterThan(1);
-    expect(gameStyleDisposalMultiplier("Chip & Mark")).toBeGreaterThan(1);
   });
 
-  it("Spread the Ground reduces how often a disposal becomes a contest; Chip & Mark reduces forward-entry tempo", () => {
+  it("Spread the Ground reduces how often a disposal becomes a contest", () => {
     expect(gameStyleContestChanceMultiplier("Spread the Ground")).toBeLessThan(1);
-    expect(gameStyleForwardEntryMultiplier("Chip & Mark")).toBeLessThan(1);
   });
 });
 

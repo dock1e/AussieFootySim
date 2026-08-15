@@ -5,7 +5,7 @@ import type { MatchTeam } from "../engine/team";
 import {
   tacticGroupFor,
   tacticsFor,
-  defaultTacticFor,
+  defaultTacticForPosition,
   GAME_STYLES,
   type TacticGroup,
   type Tactic,
@@ -20,10 +20,13 @@ import {
  * group's own menu from Configuration.md), tagger assignment, and a
  * team-wide game style, locked in before kick-off.
  *
- * Every player defaults to their tactic group's Engine.md-confirmed default
- * (e.g. defenders start on "Defensive Shoulder") — a coach who touches
- * nothing here still gets a fully-formed plan, not a no-op one, matching
- * how `sanitizePlan`/`tacticFor` resolve an unlisted player in match.ts.
+ * Every player defaults to their own position's tactic (Aug 2026, e.g. a
+ * Back Pocket starts on "General Defender" while a Full Back starts on
+ * "Defensive Shoulder" — see [[Tactics and Positional Play]] Part 7) when
+ * this team carries real Selection Committee position data, falling back to
+ * the plain tactic-group default otherwise — a coach who touches nothing
+ * here still gets a fully-formed plan, not a no-op one, matching how
+ * `sanitizePlan`/`tacticFor` resolve an unlisted player in match.ts.
  */
 const GROUP_ORDER: TacticGroup[] = ["Midfield", "KeyForward", "SmallForward", "Ruck", "Defender"];
 const GROUP_LABEL: Record<TacticGroup, string> = {
@@ -160,7 +163,7 @@ export function TeamPrep({
             <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">{GROUP_LABEL[group]}</div>
             <div className="space-y-1">
               {byGroup.get(group)!.map((p) => {
-                const current = tactics.get(p.PlayerID)?.tactic ?? defaultTacticFor(group);
+                const current = tactics.get(p.PlayerID)?.tactic ?? defaultTacticForPosition(team.positions?.get(p.PlayerID), group);
                 const taggingTargetId = tactics.get(p.PlayerID)?.taggingTargetId;
                 return (
                   <div key={p.PlayerID} className="flex flex-wrap items-center gap-1.5 text-xs">

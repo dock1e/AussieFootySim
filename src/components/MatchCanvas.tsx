@@ -216,7 +216,21 @@ function flatCapEllipsePath(
   ctx.closePath();
 }
 
-const GROUND_CAP_ROUND_FRACTION = 0.6; // share of the flat cap's own half-angle each corner's Bezier smoothing reaches back into - round 8, replacing round 7's fixed-pixel arcTo radius (see flatCapEllipsePath's own doc comment for why)
+// Round 9 (Tyler, live testing against round 8's actual render: "it's no longer an oval, you have
+// two 'knobs' on the end of the field... perhaps rounding the corners off is just too hard"):
+// round 8's 0.6 was a real, provable bug, not just a matter of taste - forcing the Bezier's end
+// tangent to be exactly vertical (matching the flat edge) at a point where the true ellipse's own
+// tangent is still ~21 degrees off vertical (`theta`) requires the curve to swing outward to stay
+// tangent-continuous at both ends over that big a mismatch, and a hand-computed sweep of the actual
+// control points confirmed it: at 0.6 the Bezier bulges up to ~20px outside the true ellipse curve
+// at its worst point - a real, measurable "knob," not an illusion. The construction itself (exact
+// tangent matching, zero gap - see flatCapEllipsePath's own doc comment) was never the problem;
+// delta (how far back into the curve each corner's smoothing reaches) was just far too large. The
+// same sweep at 0.08 brings the worst-case bulge down to ~2.6px in this 1000-wide canvas (under 2px
+// once displayed) - low enough to read as a clean, smooth corner rather than a distinct lobe, while
+// still softening the harsh vertex round 7's arcTo left behind. Still fully gap-free by
+// construction, just reaching back a much shorter distance into the curve to get there.
+const GROUND_CAP_ROUND_FRACTION = 0.08; // was 0.6 (round 8) - see round 9 note above
 
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
@@ -285,7 +299,16 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // further down - so the centre square (next) can size itself to provably
   // clear it. See the arc's own doc comment below for why these formulas.
   const turfCapInset = turfRx * GROUND_END_CAP_FRACTION;
-  const arcRadius = turfRx * 0.7;
+  // Round 9 (Tyler, live testing: "the 50 meter arc is a bit too high and needs to come back
+  // towards the goal line by about 7%"): a straight 7% pullback multiplier on top of round 4's own
+  // "70% of the goal-line-to-centre distance" sizing, rather than picking a new base fraction from
+  // scratch - keeps the change traceable to exactly what was asked for instead of folding it into
+  // an unexplained new constant. Pulling the radius in also loosens (never tightens) the centre
+  // square's own `maxSquareHalfForArc` clamp just below, since a smaller arc reaches less far
+  // toward centre - the square's existing `Math.min(...)` already picks whichever bound is smaller,
+  // so it adapts on its own with no separate fix needed here.
+  const ARC_RADIUS_PULLBACK = 0.93;
+  const arcRadius = turfRx * 0.7 * ARC_RADIUS_PULLBACK;
   const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
   const leftGoalLineX = cx - (turfRx - turfCapInset);
   const rightGoalLineX = cx + (turfRx - turfCapInset);
@@ -402,7 +425,23 @@ function drawGround(ctx: CanvasRenderingContext2D) {
  * *any* of the three things that can now sit behind it (the white boundary
  * line, the green exterior band, or the turf), rather than relying on
  * colour contrast against one specific background.
+ *
+ * Round 9 (Tyler, live testing: "the goal posts are just not visible enough
+ * ... you might need to make them a different color"): the dark outline
+ * alone wasn't enough once posts sit this close to the white boundary line -
+ * still read as faint white slivers against it. Tyler's other suggestion,
+ * tilting the posts "backwards" into the black background, doesn't have a
+ * meaningful equivalent here - this is a flat top-down orthographic diagram
+ * with no depth axis for anything to lean into, not a perspective scene, so
+ * faking a 3-D tilt would just look like a rendering glitch. Colour is the
+ * fix instead: `POST_COLOR` (a bright cyan) sits far from every other colour
+ * already on the board - the white boundary line, the pale-yellow ball
+ * (`drawBall`, `#f5d76e`), and the orange/blue team dots (`HOME_COLOR`/
+ * `AWAY_COLOR` up top) - so posts can't blend into the line and can't be
+ * mistaken for the ball or a player either.
  */
+const POST_COLOR = "#22e5e5";
+
 function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
   const offsets = [-1.5 * POST_SPACING, -0.5 * POST_SPACING, 0.5 * POST_SPACING, 1.5 * POST_SPACING];
   offsets.forEach((dy, i) => {
@@ -411,7 +450,7 @@ function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
     const h = isGoalPost ? 24 : 16;
     const rx = x - w / 2;
     const ry = cy + dy - h / 2;
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillStyle = POST_COLOR;
     ctx.fillRect(rx, ry, w, h);
     ctx.strokeStyle = "#0a0e14";
     ctx.lineWidth = 1;

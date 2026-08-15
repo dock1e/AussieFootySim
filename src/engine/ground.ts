@@ -1,6 +1,7 @@
 import type { Player } from "../types/player.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
 import type { MatchTeam } from "./team.ts";
+import { onGroundPlayers } from "./team.ts";
 import type { MatchEvent } from "./match.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
@@ -50,13 +51,16 @@ export const GROUND_HEIGHT = 702;
 // Split into X/Y Aug 2026, round 7 (Tyler, live testing: "stretch the length
 // of the ground... pull the edge of the ground close to the edge of the
 // canvas"): this used to be one shared margin for both axes. `MARGIN_X`
-// shrinks (30 -> 12, matching `MatchCanvas.tsx`'s new combined 4px outer +
-// 8px turf-gap horizontal margin) so the goal-line-to-centre distance grows
-// - "length" specifically means the long (goal-to-goal) axis. `MARGIN_Y`
-// stays at the original 30 (`MatchCanvas.tsx`'s unchanged 14+16 vertical
-// margin) - nothing about the vertical fit was flagged as a problem, and
-// changing it wasn't part of the ask.
-const MARGIN_X = 12;
+// shrinks so the goal-line-to-centre distance grows - "length"/"wider"
+// specifically means the long (goal-to-goal) axis. `MARGIN_Y` stays at the
+// original 30 (`MatchCanvas.tsx`'s unchanged 14+16 vertical margin) - nothing
+// about the vertical fit has ever been flagged as a problem.
+//
+// Round 8 (Tyler, live testing, a red line drawn at the canvas edge: "I want
+// the ground to be wider still... reaches the red lines"): shrunk again, 12
+// -> 7, matching `MatchCanvas.tsx`'s new combined 2px outer + 5px turf-gap
+// horizontal margin.
+const MARGIN_X = 7;
 const MARGIN_Y = 30;
 const MIN_HALF_HEIGHT = 70;
 
@@ -627,12 +631,21 @@ function individualZoneNudge(playerId: number): number {
  * ball too."
  */
 function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null): Map<number, DotPosition> {
-  const anchors = assignAnchors(team.players, team.positions);
+  // Aug 2026, round 8 (Tyler: "the Interchange players are currently on the
+  // field the whole time"): only the on-ground roster gets a formation anchor
+  // at all — an interchange player (see MatchTeam.onGround) simply never
+  // appears in the returned map, so MatchCanvas.tsx never draws a dot for
+  // them. `onGroundPlayers` falls back to the full squad when a team has no
+  // on-ground/bench distinction (the plain pickBest22 path, the balance
+  // simulator, every pre-round-8 test), so this is a no-op change for any
+  // caller that doesn't supply real Selection Committee lineup data.
+  const roster = onGroundPlayers(team);
+  const anchors = assignAnchors(roster, team.positions);
   const sideOffset = side === "home" ? 18 : -18;
   const press = pressLineFor(side, event);
   const out = new Map<number, DotPosition>();
 
-  for (const p of team.players) {
+  for (const p of roster) {
     const a = anchors.get(p.PlayerID);
     if (!a) continue; // every player gets either a real or fallback anchor above — defensive only
     const individualPress = press * pressResponseScale(p.PlayerID);

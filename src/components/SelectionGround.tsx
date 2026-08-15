@@ -10,8 +10,9 @@ import type { Lineup } from "../engine/selection";
  * now, polish later" trade-off finally being paid off, not a new idea).
  * Purely a UI/interaction layer over the same `Lineup`/`POSITIONS` data
  * `SelectionCommittee.tsx`'s old flat dropdown list already used —
- * `match.ts` still only ever consumes *who's* in the 22, never which slot,
- * so nothing here touches the engine.
+ * `match.ts` still only ever consumes *who's* in the squad, never which slot
+ * (beyond the on-ground/interchange split derived from it — see
+ * `MatchTeam.onGround`), so nothing here touches the engine.
  *
  * Laid out as the standard AFL team-sheet grid (6 lines of 3, attack at the
  * top per the usual broadcast/team-sheet convention), rather than AFC23's
@@ -31,7 +32,16 @@ const GROUND_ROWS: { label: string; slots: readonly number[] }[] = [
   { label: "Half-Back", slots: [3, 5, 4] }, // HBF, CHB, HBF
   { label: "Back", slots: [1, 0, 2] }, // BP, FB, BP
 ];
-const INTERCHANGE_SLOTS = [18, 19, 20, 21] as const;
+// Aug 2026, round 8: derived from POSITIONS itself (every index whose slot
+// is "INT") rather than a hardcoded [18,19,20,21] — that literal array is
+// exactly what silently capped this screen at 4 interchange slots even after
+// POSITIONS grew a 5th one for the 2026 AFL rule change, since nothing here
+// re-read POSITIONS' own actual length. Deriving it means a future bench-size
+// change can't quietly do the same thing again.
+const INTERCHANGE_SLOTS = POSITIONS.reduce<number[]>((acc, position, i) => {
+  if (position === "INT") acc.push(i);
+  return acc;
+}, []);
 
 const SUITABILITY_BORDER: Record<Suitability, string> = {
   "Very suitable": "border-good",
@@ -71,7 +81,7 @@ export function SelectionGround({ lineup, playerById, previewPlayer, onSlotClick
       </div>
       <div className="border-t border-white/10 pt-3">
         <div className="mb-1.5 text-center text-[10px] uppercase tracking-wide text-slate-400">Interchange</div>
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-5 gap-2">
           {INTERCHANGE_SLOTS.map((slotIndex) => (
             <Slot
               key={slotIndex}

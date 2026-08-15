@@ -1,6 +1,24 @@
 import { create } from "zustand";
 import type { Player } from "../types/player";
 import { autoFillLineup, emptyLineup, type Lineup } from "../engine/selection";
+import { POSITIONS } from "../types/archetype";
+
+/**
+ * Aug 2026, round 8: a lineup saved before `POSITIONS` grew its 5th `INT`
+ * slot (22 -> 23, the 2026 AFL interchange rule change — see
+ * `types/archetype.ts`) is still sitting in plenty of real save files,
+ * Tyler's own included, at its old length. Padding it out to the *current*
+ * `POSITIONS.length` here — the one place every component actually reads a
+ * club's lineup through — means an old save just grows a genuinely empty 5th
+ * interchange slot the next time it's opened, rather than the ground diagram
+ * only ever being able to show 4 forever because nothing told it a 5th slot
+ * should exist. `setSlot` doesn't need the same treatment: writing to the new
+ * index 22 on an old length-22 array is a plain in-bounds append, no gap.
+ */
+function normalized(lineup: Lineup): Lineup {
+  if (lineup.length >= POSITIONS.length) return lineup;
+  return [...lineup, ...Array(POSITIONS.length - lineup.length).fill(null)];
+}
 
 interface SelectionState {
   /** Keyed by club name. A club with no entry here just hasn't been touched yet — SelectionCommittee.tsx treats that as "not customised", falling back to pickBest22 elsewhere (see LiveMatch.tsx). */
@@ -33,7 +51,10 @@ interface SelectionState {
 export const useSelectionStore = create<SelectionState>((set, get) => ({
   lineups: {},
 
-  lineupFor: (clubName) => get().lineups[clubName],
+  lineupFor: (clubName) => {
+    const lineup = get().lineups[clubName];
+    return lineup ? normalized(lineup) : undefined;
+  },
 
   setSlot: (clubName, slotIndex, playerId) =>
     set((state) => {

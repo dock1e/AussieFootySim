@@ -82,17 +82,28 @@ export function lineupPlayerIds(lineup: Lineup): number[] {
 /**
  * Turns a completed lineup into the MatchTeam shape match.ts consumes.
  * Falls back to best-available top-up for any still-empty slots so a match
- * can always kick off with 22, same top-up spirit as pickBest22 — a topped-up
- * player has no real assigned slot, so (like an INT-slotted player) they
- * simply have no entry in `positions`, and `engine/involvement.ts` falls
- * back to their archetype's own implied zone for them, same as it always did
- * before `positions` existed.
+ * can always kick off with a full squad, same top-up spirit as pickBest22 —
+ * a topped-up player has no real assigned slot, so (like an INT-slotted
+ * player) they simply have no entry in `positions`, and
+ * `engine/involvement.ts` falls back to their archetype's own implied zone
+ * for them, same as it always did before `positions` existed.
+ *
+ * Aug 2026, round 8: cap raised 22 -> 23 (`POSITIONS` now has 5 `INT` slots,
+ * matching the 2026 AFL rule change — see that constant's own doc comment).
+ * Also now populates `MatchTeam.onGround`: every player who landed a real,
+ * named on-field slot (i.e. `POSITIONS[i] !== "INT"`) is on the ground; a
+ * player who landed an `INT` slot is on the bench. A top-up player (the loop
+ * below, only reached when the lineup itself had empty slots) is counted as
+ * on-ground — they're standing in for a real position that would otherwise be
+ * empty, the same reasoning that already puts them in `players` at all rather
+ * than leaving the team short.
  */
 export function lineupToMatchTeam(clubName: string, lineup: Lineup, allClubPlayers: readonly Player[]): MatchTeam {
   const byId = new Map(allClubPlayers.map((p) => [p.PlayerID, p]));
   const picked: Player[] = [];
   const pickedIds = new Set<number>();
   const positions = new Map<number, Position>();
+  const onGround = new Set<number>();
   lineup.forEach((id, i) => {
     if (id === null) return;
     const p = byId.get(id);
@@ -100,17 +111,19 @@ export function lineupToMatchTeam(clubName: string, lineup: Lineup, allClubPlaye
       picked.push(p);
       pickedIds.add(id);
       positions.set(id, POSITIONS[i]);
+      if (POSITIONS[i] !== "INT") onGround.add(id);
     }
   });
-  if (picked.length < 22) {
+  if (picked.length < 23) {
     const remaining = [...allClubPlayers].filter((p) => !pickedIds.has(p.PlayerID)).sort((a, b) => b.OVR - a.OVR);
     for (const p of remaining) {
-      if (picked.length >= 22) break;
+      if (picked.length >= 23) break;
       picked.push(p);
       pickedIds.add(p.PlayerID);
+      onGround.add(p.PlayerID);
     }
   }
-  return { name: clubName, players: picked.slice(0, 22), positions };
+  return { name: clubName, players: picked.slice(0, 23), positions, onGround };
 }
 
 /** Convenience: the existing pickBest22 stand-in, exposed here too so callers can offer "reset to auto-pick" without importing team.ts directly. */

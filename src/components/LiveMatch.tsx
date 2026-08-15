@@ -213,9 +213,9 @@ export function LiveMatch() {
         <div className="card text-sm text-slate-400">
           Pick two clubs and continue to Match Preparation to set tactics, a tagger, and a game
           style (or just kick off with the defaults). {myClub} fields whatever's set on the
-          Selection tab once it's a full 22; every other club still fields the auto-picked
-          best-22 by OVR (no AI Selection Committee behaviour yet — see ROADMAP.md). The match
-          runs against a fresh random seed every time.
+          Selection tab once it's a complete lineup; every other club fields the same real,
+          suitability-aware auto-fill an AI club gets in season simulation. The match runs against
+          a fresh random seed every time.
         </div>
       )}
 

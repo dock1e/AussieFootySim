@@ -116,7 +116,7 @@ const POST_SPACING = GOAL_SQUARE_HALF_WIDTH * 2;
 /**
  * Builds a path for "ellipse, but the last `capFraction` share of each end
  * is replaced by a flat vertical edge, with the transition rounded off by
- * `cornerRadius`" - the shape the boundary ring, the turf, and the 50m arc's
+ * `roundFraction`" - the shape the boundary ring, the turf, and the 50m arc's
  * clip region all share (`GROUND_END_CAP_FRACTION`). One shared builder so
  * all three can never independently drift out of sync with each other -
  * same discipline as sharing the constant with `engine/ground.ts`.
@@ -124,22 +124,46 @@ const POST_SPACING = GOAL_SQUARE_HALF_WIDTH * 2;
  * Round 7 (Tyler, live testing against round 6's actual render, screenshot
  * annotated with arrows at all four cap corners: "smooth this corner"):
  * round 6 built this shape by clipping a full ellipse fill to a plain
- * rectangle, which is simple but leaves a hard slope discontinuity exactly
- * where the rectangle's straight edge crosses the ellipse's curve - not a
- * corner of either shape individually, but a visible kink in the combined
- * silhouette. Rounding the rect's own corners (`ctx.roundRect`) can't fix
- * this: that rect's actual corners sit well outside the ellipse's own
- * vertical extent on purpose (so they never become part of the visible
- * silhouette at all) - the kink lives at the rect *edge*-meets-*curve*
- * crossing, not at a rect corner. Fixed by building the path directly
- * instead of clip+rect: walk the ellipse curve to just short of each true
- * crossing, then `ctx.arcTo` rounds the turn onto the flat edge (and again
- * turning back onto the curve at the far end of that same flat edge) -
- * `arcTo` treats the short approach as if it were a straight line for
- * tangent purposes, a fine approximation at this radius against the
- * ellipse's own gentle local curvature here, and any sub-pixel mismatch is
- * invisible anyway since every caller only ever fills or clips with this
- * path, never strokes its outline directly.
+ * rectangle, which left a hard slope discontinuity where the rectangle's
+ * straight edge crossed the ellipse's curve. First fix used `ctx.arcTo`
+ * (walk the ellipse to just short of each true crossing, let `arcTo` round
+ * the turn onto the flat edge).
+ *
+ * Round 8 (Tyler, live testing against round 7's actual render, a second
+ * screenshot circling all four corners: "there is still a 'corner' where it
+ * changes direction at a 140 degree angle"): round 7's `arcTo` fix was a real
+ * improvement but not actually exact, for two compounding reasons. First,
+ * `arcTo(p1, p2, radius)` only ever fillets between two *straight* segments -
+ * feeding it "current point -> p1" as a stand-in for the curve's own tangent
+ * is an approximation, not the curve's real (continuously turning) direction.
+ * Second, and bigger: each corner needs *two* consecutive `arcTo` calls (curve
+ * to flat edge, then flat edge to curve again), and `arcTo`'s own end point is
+ * the tangent point on its *second* control-point segment - generally short of
+ * that segment's actual endpoint. The second `arcTo` in each pair started from
+ * that short-of-target point rather than exactly on the flat edge, and the
+ * subsequent `ctx.ellipse(...)` call for the next true arc always resumes at
+ * an *exact* angle regardless - so the two ends never quite lined up, and the
+ * canvas silently drew a straight connecting line between them, reintroducing
+ * a small kink right where the fillet was supposed to hand off to the curve.
+ * Small at round 7's own proportions, more visible once round 8 also widened
+ * the ground (the flat cap's own absolute size grows with it).
+ *
+ * Fixed properly this time with an exact tangent-matched cubic Bezier at each
+ * corner instead of an `arcTo` approximation. The ellipse's tangent direction
+ * at any angle is exact and cheap (`tangentAt` below, the analytic derivative
+ * of the ellipse parametrisation) - so each corner's Bezier is built to leave
+ * its start point along the *true* ellipse tangent there, and arrive at its
+ * end point along the flat edge's own (purely vertical) direction, with
+ * standard proportional handle lengths. Both junctions are tangent-continuous
+ * by construction, not by sampling a nearby point and hoping it's close
+ * enough - and the flat edge itself is one continuous `lineTo` between the
+ * two true corner points, so there's no longer any short-of-target gap for an
+ * implicit line to paper over. `roundFraction` (a share of the flat cap's own
+ * half-angle `theta`, not a pixel radius) controls how far back along the
+ * ellipse each corner's smoothing reaches - dimensionless and self-scaling,
+ * so it stays visually consistent if `capFraction` or the ground's own size
+ * ever changes again, rather than a fixed pixel count quietly becoming too
+ * small (exactly what happened to round 7's `GROUND_CAP_CORNER_RADIUS`).
  */
 function flatCapEllipsePath(
   ctx: CanvasRenderingContext2D,
@@ -148,31 +172,51 @@ function flatCapEllipsePath(
   rx: number,
   ry: number,
   capFraction: number,
-  cornerRadius: number,
+  roundFraction: number,
 ) {
   const capInset = rx * capFraction;
   const theta = Math.acos((rx - capInset) / rx); // half-angle (radians) of the flat cap removed at each end
-  const approach = Math.min(theta * 0.5, 0.25); // how far short of each true crossing the curve stops before arcTo takes over
+  const delta = theta * roundFraction; // how far back along the true ellipse each corner's smoothing reaches
 
   const pointAt = (angle: number) => ({ x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) });
+  // Exact unit tangent to the ellipse at `angle`, in the direction of increasing angle (this path's own forward direction throughout).
+  const tangentAt = (angle: number) => {
+    const tx = -rx * Math.sin(angle);
+    const ty = ry * Math.cos(angle);
+    const len = Math.hypot(tx, ty) || 1;
+    return { x: tx / len, y: ty / len };
+  };
+  const HANDLE = 0.55; // standard-ish cubic-Bezier handle fraction for a natural-looking fillet between two tangent directions
+  const roundedCorner = (from: { x: number; y: number }, fromTangent: { x: number; y: number }, to: { x: number; y: number }, toTangent: { x: number; y: number }) => {
+    const chord = Math.hypot(to.x - from.x, to.y - from.y);
+    const h = chord * HANDLE;
+    ctx.bezierCurveTo(from.x + fromTangent.x * h, from.y + fromTangent.y * h, to.x - toTangent.x * h, to.y - toTangent.y * h, to.x, to.y);
+  };
+
   const rL = pointAt(theta);
-  const rU = pointAt(2 * Math.PI - theta);
+  const rU = pointAt(-theta);
   const lL = pointAt(Math.PI - theta);
   const lU = pointAt(Math.PI + theta);
-  const lUApproach = pointAt(Math.PI + theta + approach);
-  const rLApproach = pointAt(theta + approach);
+  const rLIn = pointAt(theta + delta);
+  const rUIn = pointAt(-theta - delta);
+  const lLIn = pointAt(Math.PI - theta - delta);
+  const lUIn = pointAt(Math.PI + theta + delta);
+  const UP = { x: 0, y: -1 }; // the flat edges' own direction of travel, left cap (lL -> lU) - lU sits above lL on screen
+  const DOWN = { x: 0, y: 1 }; // right cap (rU -> rL) - the mirror image of the above
 
   ctx.beginPath();
-  ctx.ellipse(cx, cy, rx, ry, 0, theta + approach, Math.PI - theta - approach); // bottom arc: right-lower around to left-lower
-  ctx.arcTo(lL.x, lL.y, lU.x, lU.y, cornerRadius); // round the curve-to-flat-edge turn at the left cap's lower corner
-  ctx.arcTo(lU.x, lU.y, lUApproach.x, lUApproach.y, cornerRadius); // round the flat-edge-to-curve turn at the left cap's upper corner
-  ctx.ellipse(cx, cy, rx, ry, 0, Math.PI + theta + approach, 2 * Math.PI - theta - approach); // top arc: left-upper around to right-upper
-  ctx.arcTo(rU.x, rU.y, rL.x, rL.y, cornerRadius); // round the right cap's upper corner
-  ctx.arcTo(rL.x, rL.y, rLApproach.x, rLApproach.y, cornerRadius); // round the right cap's lower corner, closing back toward the start
+  ctx.ellipse(cx, cy, rx, ry, 0, theta + delta, Math.PI - theta - delta); // bottom arc: rLIn around to lLIn
+  roundedCorner(lLIn, tangentAt(Math.PI - theta - delta), lL, UP); // curve -> left cap's lower corner
+  ctx.lineTo(lU.x, lU.y); // the flat edge itself, exact endpoint to exact endpoint
+  roundedCorner(lU, UP, lUIn, tangentAt(Math.PI + theta + delta)); // left cap's upper corner -> curve
+  ctx.ellipse(cx, cy, rx, ry, 0, Math.PI + theta + delta, 2 * Math.PI - theta - delta); // top arc: lUIn around to rUIn
+  roundedCorner(rUIn, tangentAt(2 * Math.PI - theta - delta), rU, DOWN); // curve -> right cap's upper corner
+  ctx.lineTo(rL.x, rL.y); // the flat edge itself
+  roundedCorner(rL, DOWN, rLIn, tangentAt(theta + delta)); // right cap's lower corner -> back to the exact start point
   ctx.closePath();
 }
 
-const GROUND_CAP_CORNER_RADIUS = 22; // px - how much the flat-cap transitions are rounded (round 7, replacing round 6's hard corner)
+const GROUND_CAP_ROUND_FRACTION = 0.6; // share of the flat cap's own half-angle each corner's Bezier smoothing reaches back into - round 8, replacing round 7's fixed-pixel arcTo radius (see flatCapEllipsePath's own doc comment for why)
 
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
@@ -183,15 +227,22 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // edge of the canvas... stretch the length of the ground"): horizontal
   // margins shrink (14 -> 4 outer, 16 -> 8 turf gap) so the oval reaches
   // further toward the canvas edge and the goal-line-to-centre distance
-  // grows. Vertical margins are untouched - "length" specifically means the
-  // long (goal-to-goal) axis, not the ground's height, and nothing about the
-  // vertical fit was flagged as a problem. `engine/ground.ts`'s
-  // `maxHalfHeightAt` shares this exact combined horizontal margin (there
-  // called `MARGIN_X`) so turfRx and the gameplay bounds every player
-  // position is clamped to can't drift apart.
-  const rx = GROUND_WIDTH / 2 - 4;
+  // grows.
+  //
+  // Round 8 (Tyler, live testing, a red line drawn at the canvas edge in a
+  // screenshot: "I want the ground to be wider still... extended out so that
+  // it reaches the red lines"): shrunk again (4 -> 2 outer, 8 -> 5 turf gap) -
+  // about as tight as sensible while still leaving the new exterior band (see
+  // the boundary-ring fill below) wide enough to read as a deliberate band
+  // rather than vanishing entirely. Vertical margins are still untouched -
+  // "wider"/"length" has meant the long (goal-to-goal) axis both times this
+  // has come up, and nothing about the vertical fit has ever been flagged.
+  // `engine/ground.ts`'s `maxHalfHeightAt` shares this exact combined
+  // horizontal margin (there called `MARGIN_X`) so turfRx and the gameplay
+  // bounds every player position is clamped to can't drift apart.
+  const rx = GROUND_WIDTH / 2 - 2;
   const ry = GROUND_HEIGHT / 2 - 14;
-  const turfRx = rx - 8;
+  const turfRx = rx - 5;
   const turfRy = ry - 16;
 
   // Backdrop behind the oval - reads as the stands/surrounds in every
@@ -200,22 +251,32 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.fillStyle = "#0a0e14";
   ctx.fillRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
 
-  // Boundary buffer ring - the maroon band every broadcast graphic (and
-  // Tyler's own reference oval icon) draws just outside the playing surface.
-  // Round 5 first tried squaring off almost the *entire* side of the ground
-  // (too aggressive, reverted); round 6 corrected that to a small flat cap
-  // right at each tip only; round 7 keeps that same small-cap shape but
-  // builds it as a real rounded path instead of a hard clip corner - see
-  // `flatCapEllipsePath`'s own doc comment for why.
-  flatCapEllipsePath(ctx, cx, cy, rx, ry, GROUND_END_CAP_FRACTION, GROUND_CAP_CORNER_RADIUS);
-  ctx.fillStyle = "#5c2323";
+  // Boundary - round 5 first tried squaring off almost the *entire* side of
+  // the ground (too aggressive, reverted); round 6 corrected that to a small
+  // flat cap right at each tip only; round 7 built that same small-cap shape
+  // as a real rounded path instead of a hard clip corner (see
+  // `flatCapEllipsePath`'s own doc comment).
+  //
+  // Round 8 (Tyler, a reference image: a white boundary line with a short
+  // green exterior, replacing the maroon buffer band every earlier round
+  // used): fills the outer shape first in a slightly darker, more desaturated
+  // green than the turf itself (`EXTERIOR_GREEN`) - since the turf fill right
+  // after this is smaller (`turfRx`/`turfRy`) and sits centred inside it, only
+  // the thin ring between the two stays visible, exactly the "short green
+  // exterior" width `turfRx`'s own inset controls. The turf's own edge is
+  // then stroked white, so the boundary line sits precisely at the true turf
+  // edge rather than as a separate, independently-positioned line that could
+  // drift out of sync with it.
+  flatCapEllipsePath(ctx, cx, cy, rx, ry, GROUND_END_CAP_FRACTION, GROUND_CAP_ROUND_FRACTION);
+  ctx.fillStyle = "#0d2216";
   ctx.fill();
 
-  // Turf, inset from the boundary ring - same shape, scaled to the turf's
-  // own rx/ry so the two stay visually parallel.
-  flatCapEllipsePath(ctx, cx, cy, turfRx, turfRy, GROUND_END_CAP_FRACTION, GROUND_CAP_CORNER_RADIUS);
+  flatCapEllipsePath(ctx, cx, cy, turfRx, turfRy, GROUND_END_CAP_FRACTION, GROUND_CAP_ROUND_FRACTION);
   ctx.fillStyle = "#153d22";
   ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
 
   ctx.strokeStyle = "rgba(255,255,255,0.4)";
   ctx.lineWidth = 2;
@@ -251,9 +312,20 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // reads as a clean separation, not just-touching). In practice this lands
   // the square close to `turfRy * 0.33` - almost exactly the pre-round-4
   // size Tyler asked to return "more similarly to what it was before."
+  //
+  // Round 8 (Tyler, live testing: "shrink the size of the square by 10% as
+  // well" - on top of, not instead of, round 8's own ground-widening above,
+  // which by itself grows `maxSquareHalfForArc` and would otherwise let the
+  // square get *bigger*, not smaller, since this formula was already the
+  // binding (smaller) branch of the `Math.min` before this round's widening).
+  // Applied as a flat 0.9 multiplier on the already-clearance-safe result
+  // rather than hand-picking a new constant for either branch - shrinking a
+  // value that already provably clears the arc can only ever widen that
+  // clearance further, never violate it.
   const SQUARE_ARC_CLEARANCE = 5;
+  const SQUARE_SHRINK = 0.9;
   const maxSquareHalfForArc = cx - (leftArcX + arcRadius) - SQUARE_ARC_CLEARANCE;
-  const squareHalf = Math.min(turfRy * 0.37, maxSquareHalfForArc);
+  const squareHalf = Math.min(turfRy * 0.37, maxSquareHalfForArc) * SQUARE_SHRINK;
   ctx.strokeRect(cx - squareHalf, cy - squareHalf, squareHalf * 2, squareHalf * 2);
   const circleRadius = squareHalf * 0.32;
   ctx.beginPath();
@@ -287,7 +359,7 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // ellipse, so the arc is cut off by the *actual* drawn turf edge including
   // its flat caps, not a boundary that no longer matches what's on screen.
   ctx.save();
-  flatCapEllipsePath(ctx, cx, cy, turfRx, turfRy, GROUND_END_CAP_FRACTION, GROUND_CAP_CORNER_RADIUS);
+  flatCapEllipsePath(ctx, cx, cy, turfRx, turfRy, GROUND_END_CAP_FRACTION, GROUND_CAP_ROUND_FRACTION);
   ctx.clip();
   ctx.beginPath();
   ctx.arc(leftArcX, cy, arcRadius, -Math.PI / 2, Math.PI / 2);
@@ -317,14 +389,33 @@ function drawGround(ctx: CanvasRenderingContext2D) {
  * reference broadcast graphic shows posts poking out past the playing
  * surface itself.
  */
+/**
+ * Round 8 (Tyler, alongside the new white-boundary-line design: "the goal
+ * posts should still be easily and clearly visible and distinguishable"): a
+ * real, if small, risk the new design introduces on its own - posts are
+ * drawn right at `leftGoalLineX`/`rightGoalLineX`, which is exactly the turf
+ * edge the new boundary line now traces (see `drawGround`'s boundary-ring
+ * comment), so a plain white post could sit almost on top of the also-white
+ * line and read as merged rather than distinct. Fixed with a thin dark
+ * outline around each post - `strokeRect` over the same rect `fillRect`
+ * already draws - so every post keeps a crisp, self-contained edge against
+ * *any* of the three things that can now sit behind it (the white boundary
+ * line, the green exterior band, or the turf), rather than relying on
+ * colour contrast against one specific background.
+ */
 function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
   const offsets = [-1.5 * POST_SPACING, -0.5 * POST_SPACING, 0.5 * POST_SPACING, 1.5 * POST_SPACING];
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
   offsets.forEach((dy, i) => {
     const isGoalPost = i === 1 || i === 2;
     const w = isGoalPost ? 5 : 3.5;
     const h = isGoalPost ? 24 : 16;
-    ctx.fillRect(x - w / 2, cy + dy - h / 2, w, h);
+    const rx = x - w / 2;
+    const ry = cy + dy - h / 2;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillRect(rx, ry, w, h);
+    ctx.strokeStyle = "#0a0e14";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx, ry, w, h);
   });
 }
 

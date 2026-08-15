@@ -6,14 +6,16 @@ import { useTeamPlanStore } from "../store/useTeamPlanStore";
 import { getPlayersByClub } from "../data/loadPlayers";
 import { emptyLineup, isLineupComplete, lineupPlayerIds, lineupToMatchTeam } from "../engine/selection";
 import { pickBest22 } from "../engine/team";
+import { POSITIONS } from "../types/archetype";
 import { defaultTeamPlan } from "../engine/tactics";
 import { TeamPrep } from "./MatchPreparation";
 import { SelectionGround } from "./SelectionGround";
 import { SelectionPlayerList } from "./SelectionPlayerList";
 
 /**
- * Selection Committee — Configuration.md "Positions" (18 on-field slots + 4
- * interchange) with `suitabilityFor` guidance (built back in Phase 0).
+ * Selection Committee — Configuration.md "Positions" (18 on-field slots + 5
+ * interchange, the 2026 AFL rule change — see types/archetype.ts's
+ * `POSITIONS`) with `suitabilityFor` guidance (built back in Phase 0).
  *
  * Phase 7 Slice B (ROADMAP.md): the lineup editor is now the real
  * ground-diagram picker `selection.ts`'s own doc comment always named as
@@ -24,7 +26,8 @@ import { SelectionPlayerList } from "./SelectionPlayerList";
  * the list) — see those two files for the visual/interaction detail. The
  * underlying data is completely unchanged: still the same `Lineup` array
  * via `useSelectionStore`, still consumed identically by `lineupToMatchTeam`
- * and match.ts, which only ever cares who's in the 22, never which slot.
+ * and match.ts, which only ever cares who's in the squad, never which slot
+ * (beyond the on-ground/interchange split — see `MatchTeam.onGround`).
  *
  * Only edits the signed-in coach's own club (`useGameStore.myClub`) — see
  * LiveMatch.tsx for where a completed lineup actually feeds a Match-tab
@@ -68,10 +71,10 @@ export function SelectionCommittee() {
     }
   }
 
-  // The same 22 the Match/Season tabs would actually field for this club
-  // right now — the completed lineup once it's full, best-22-by-OVR before
-  // that — so the Standing Game Plan below is always editing tactics for
-  // whoever's really going to take the park.
+  // The same squad the Match/Season tabs would actually field for this club
+  // right now — the completed lineup once it's full, pickBest22's OVR-only
+  // stand-in before that — so the Standing Game Plan below is always editing
+  // tactics for whoever's really going to take the park.
   const myTeam = useMemo(
     () => (complete ? lineupToMatchTeam(myClub, lineup, players) : pickBest22(myClub, players)),
     [myClub, complete, lineup, players],
@@ -86,7 +89,7 @@ export function SelectionCommittee() {
         <div>
           <div className="font-display text-xl italic">{myClub} &mdash; Selection Committee</div>
           <div className="text-xs text-slate-400">
-            {filledCount}/22 slots filled {complete && <span className="text-accent-light">&middot; ready for kick-off</span>}
+            {filledCount}/{POSITIONS.length} slots filled {complete && <span className="text-accent-light">&middot; ready for kick-off</span>}
           </div>
         </div>
         <div className="ml-auto flex gap-2">
@@ -117,7 +120,7 @@ export function SelectionCommittee() {
         eligible for every slot; a slot's border colour shows how well the selected (or already
         placed) player suits it, per Configuration.md's suitability map. This lineup is only used
         when {myClub} is picked for a match on the Match or Season tab; anyone else still fields
-        the auto-picked best-22 by OVR.
+        the auto-picked best-{POSITIONS.length} by OVR.
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">

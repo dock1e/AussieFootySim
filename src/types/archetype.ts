@@ -49,7 +49,23 @@ export const ARCHETYPE_PRIMARY_ATTRIBUTES: Record<Archetype, readonly RatedAttri
   "Key Defender": ["strengthOverhead", "manMarking", "verticalLeap", "courage"],
 };
 
-/** The 18 on-field slots + 4 interchange — see Configuration.md "Positions". */
+/**
+ * The 18 on-field slots + 5 interchange — see Configuration.md "Positions".
+ *
+ * Aug 2026, round 8 (Tyler: "In 2026 the AFL increased the interchange to 5
+ * players on the bench, so we should also align to having 5 on the bench in
+ * SimAFL too"): a real rule change, confirmed this session, not just Tyler's
+ * recollection taken on faith — the AFL scrapped the substitute (the old
+ * "23rd player, only activated by taking someone off") and expanded the
+ * interchange bench from 4 to 5 in its place, so a real matchday squad is now
+ * 23 (18 on-field + 5 interchange), same total headcount as before but all 5
+ * bench spots are now live interchange rather than 4 interchange + 1
+ * sub-only. `INT` gained a 5th entry below to match. This is a data-model
+ * provision only — see `MatchTeam.onGround` (team.ts) for what it actually
+ * changes; no interchange *rotation strategy* exists yet, per Tyler's own
+ * words: "I am going to work on providing you more direction on the tactics
+ * and running patterns for the engine" first.
+ */
 export const POSITIONS = [
   "FB",
   "BP",
@@ -69,6 +85,7 @@ export const POSITIONS = [
   "FF",
   "FP",
   "FP",
+  "INT",
   "INT",
   "INT",
   "INT",

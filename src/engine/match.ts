@@ -4,7 +4,7 @@ import type { Rng } from "./rng.ts";
 import { computeContestRating, resolveContest, resolveThreshold } from "./contest.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
-import { bestByRating } from "./team.ts";
+import { bestByRating, onGroundPlayers } from "./team.ts";
 import { weightedPlayerChoice } from "./involvement.ts";
 import {
   tacticGroupFor,
@@ -247,8 +247,16 @@ export interface State {
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
-  const home = ctx.home.players;
-  const away = ctx.away.players;
+  // Aug 2026, round 8: reads through onGroundPlayers rather than the raw
+  // squad — a bench interchange player (see MatchTeam.onGround) shouldn't be
+  // eligible to contest a ruck tap or a clearance while sitting off the
+  // ground. In practice this rarely changes who wins either rep (a club's
+  // real assigned Ruck/clearance threats are already whoever's best-rated for
+  // it, which is exactly why they're on the ground in the first place) but
+  // it closes the gap for the less common case (a genuinely bench-quality
+  // ruck who happens to still rate highest on a thin list).
+  const home = onGroundPlayers(ctx.home);
+  const away = onGroundPlayers(ctx.away);
   const homePlan = ctx.homePlan;
   const awayPlan = ctx.awayPlan;
 

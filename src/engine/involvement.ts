@@ -4,6 +4,7 @@ import { suitabilityFor } from "../types/archetype.ts";
 import { SUITABILITY_RANK } from "./selection.ts";
 import { ZONE_FOR_POSITION, ownZone, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
+import { onGroundPlayers } from "./team.ts";
 import type { Rng } from "./rng.ts";
 
 /**
@@ -134,7 +135,22 @@ export function weightedChoice<T>(rng: Rng, items: readonly T[], weightOf: (item
   return items[items.length - 1]; // floating-point safety net (weights summing fractionally short of `total`)
 }
 
-/** Convenience wrapper for `match.ts`'s call sites: picks one of `team`'s 22 players, weighted by their involvement plausibility for `zone` (their real assigned position if `team.positions` has one for them, else their archetype's own implied zone). `side` is which side `team` is playing as *this match* — needed so the zone can be mirrored correctly for an away team (see `involvementWeight`'s doc comment). */
+/**
+ * Convenience wrapper for `match.ts`'s call sites: picks one of `team`'s
+ * on-the-ground players, weighted by their involvement plausibility for
+ * `zone` (their real assigned position if `team.positions` has one for them,
+ * else their archetype's own implied zone). `side` is which side `team` is
+ * playing as *this match* — needed so the zone can be mirrored correctly for
+ * an away team (see `involvementWeight`'s doc comment).
+ *
+ * Aug 2026, round 8: reads through `team.ts`'s `onGroundPlayers` rather than
+ * `team.players` directly, so an interchange player (see `MatchTeam.onGround`)
+ * can no longer be picked as a live contest participant while sitting on the
+ * bench — the same underlying gap behind Tyler's "interchange players are on
+ * the field the whole time" report, just the match-engine half of it rather
+ * than the rendering half (see MatchCanvas.tsx/ground.ts for that side).
+ */
 export function weightedPlayerChoice(rng: Rng, side: Side, team: MatchTeam, zone: Zone): Player {
-  return weightedChoice(rng, team.players, (p) => involvementWeight(side, p, zone, team.positions?.get(p.PlayerID)));
+  const pool = onGroundPlayers(team);
+  return weightedChoice(rng, pool, (p) => involvementWeight(side, p, zone, team.positions?.get(p.PlayerID)));
 }

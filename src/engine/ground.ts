@@ -4,6 +4,7 @@ import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import type { MatchEvent } from "./match.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
+import { ACTIVE_GROUND } from "../data/grounds.ts";
 import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
 
 /**
@@ -47,7 +48,17 @@ export const GROUND_WIDTH = 1000;
 // see LiveMatch.tsx) on one screen without scrolling, not a further
 // proportion correctness pass. Still comfortably inside a real oval's look,
 // just a little shorter so the page reads less tall.
-export const GROUND_HEIGHT = 702;
+//
+// Round 12 (Tyler: "go ahead with the per ground config", after round 11's
+// research answered whether supporting 7 real venues' shapes changes the
+// corner-smoothing approach — see src/data/grounds.ts and the vault's
+// "Ground Shapes - Multi-Stadium Design" note): this literal 702 moved to
+// `ACTIVE_GROUND.groundHeight` (currently always the "mcg" entry, which is
+// 702 unchanged — no ground selector exists yet, so this is a behaviour-
+// preserving refactor, not a visible change). Every other constant in this
+// file is still expressed as a fraction of GROUND_WIDTH/GROUND_HEIGHT, so
+// swapping which ground is active only ever needs to change this one value.
+export const GROUND_HEIGHT = ACTIVE_GROUND.groundHeight;
 // Split into X/Y Aug 2026, round 7 (Tyler, live testing: "stretch the length
 // of the ground... pull the edge of the ground close to the edge of the
 // canvas"): this used to be one shared margin for both axes. `MARGIN_X`
@@ -110,8 +121,14 @@ const MIN_HALF_HEIGHT = 70;
  * backwards from Tyler's literal ask (shrink `2*ry*sin(theta)` by exactly
  * 10%) rather than just knocking 10% off the old 0.065 directly, which would
  * have shortened the edge by a different, unstated amount.
+ *
+ * Round 12: moved to `ACTIVE_GROUND.capFraction` (src/data/grounds.ts) —
+ * still 0.0523 for every ground today, including this one, per round 11's
+ * finding that the corner construction doesn't need per-ground tuning to
+ * stay visually clean across all 7 target real-world ratios. See that file's
+ * own doc comment for the full reasoning.
  */
-export const GROUND_END_CAP_FRACTION = 0.0523;
+export const GROUND_END_CAP_FRACTION = ACTIVE_GROUND.capFraction;
 
 const ZONE_X_FRACTION: Record<Zone, number> = {
   0: 0.08,

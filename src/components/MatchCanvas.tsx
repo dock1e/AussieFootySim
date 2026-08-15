@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
 import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_END_CAP_FRACTION, type DotPosition, type BallTarget } from "../engine/ground";
+import { ACTIVE_GROUND } from "../data/grounds";
 
 /**
  * The signature feature — User Interface.md "Match simulation screen": a
@@ -230,7 +231,12 @@ function flatCapEllipsePath(
 // once displayed) - low enough to read as a clean, smooth corner rather than a distinct lobe, while
 // still softening the harsh vertex round 7's arcTo left behind. Still fully gap-free by
 // construction, just reaching back a much shorter distance into the curve to get there.
-const GROUND_CAP_ROUND_FRACTION = 0.08; // was 0.6 (round 8) - see round 9 note above
+// Round 12 (Tyler: "go ahead with the per ground config"): moved to
+// `ACTIVE_GROUND.roundFraction` (src/data/grounds.ts) - still 0.08 for every
+// ground today, including this one, per round 11's numeric finding that this
+// constant doesn't need per-ground tuning to stay visually clean across all
+// 7 real-world target ratios (see that file's doc comment for the sweep).
+const GROUND_CAP_ROUND_FRACTION = ACTIVE_GROUND.roundFraction; // was 0.6 (round 8), then a flat 0.08 (round 9) - see round 9 note above
 
 function drawGround(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, GROUND_WIDTH, GROUND_HEIGHT);
@@ -307,7 +313,9 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // square's own `maxSquareHalfForArc` clamp just below, since a smaller arc reaches less far
   // toward centre - the square's existing `Math.min(...)` already picks whichever bound is smaller,
   // so it adapts on its own with no separate fix needed here.
-  const ARC_RADIUS_PULLBACK = 0.93;
+  // Round 12: moved to `ACTIVE_GROUND.arcRadiusPullback` - still 0.93 for
+  // every ground today, unchanged from round 9 (see src/data/grounds.ts).
+  const ARC_RADIUS_PULLBACK = ACTIVE_GROUND.arcRadiusPullback;
   const arcRadius = turfRx * 0.7 * ARC_RADIUS_PULLBACK;
   const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
   const leftGoalLineX = cx - (turfRx - turfCapInset);

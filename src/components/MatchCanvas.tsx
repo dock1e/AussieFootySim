@@ -441,15 +441,34 @@ function drawGround(ctx: CanvasRenderingContext2D) {
  * mistaken for the ball or a player either.
  */
 const POST_COLOR = "#22e5e5";
+// Round 10 (Tyler: "increase the thickness of the posts... behind posts
+// should increase about 15% in thickness and the goal posts about 30%"):
+// named, traceable multipliers on the original round-1/round-3 base widths
+// rather than new hand-picked numbers, so the relationship to what was
+// actually asked for stays visible in the source, not just in a commit
+// message.
+const BEHIND_POST_WIDTH = 3.5 * 1.15;
+const GOAL_POST_WIDTH = 5 * 1.3;
 
 function drawGoalPosts(ctx: CanvasRenderingContext2D, x: number, cy: number) {
   const offsets = [-1.5 * POST_SPACING, -0.5 * POST_SPACING, 0.5 * POST_SPACING, 1.5 * POST_SPACING];
   offsets.forEach((dy, i) => {
     const isGoalPost = i === 1 || i === 2;
-    const w = isGoalPost ? 5 : 3.5;
+    const w = isGoalPost ? GOAL_POST_WIDTH : BEHIND_POST_WIDTH;
     const h = isGoalPost ? 24 : 16;
     const rx = x - w / 2;
-    const ry = cy + dy - h / 2;
+    // Round 10 (Tyler: "the goal square line starts halfway up the goal
+    // post... move the goal posts up so the bottom of the post aligns to the
+    // goal square lines"): only the two real goal posts sit at the same `dy`
+    // as a goal-square edge (`GOAL_SQUARE_HALF_WIDTH`, `drawGround`'s square)
+    // - the two behind posts have no square line to align to, so they keep
+    // their original vertical centering. For a goal post, `cy + dy` becomes
+    // one true edge of the rect (the edge nearer the square's interior)
+    // rather than the rect's midpoint, with the post's height extending
+    // outward, away from the square, from there - `dy < 0` and `dy > 0` are
+    // mirror images of each other around the centreline, so the sign of `dy`
+    // alone picks out which of the rect's two edges is the "near" one.
+    const ry = isGoalPost ? (dy < 0 ? cy + dy - h : cy + dy) : cy + dy - h / 2;
     ctx.fillStyle = POST_COLOR;
     ctx.fillRect(rx, ry, w, h);
     ctx.strokeStyle = "#0a0e14";

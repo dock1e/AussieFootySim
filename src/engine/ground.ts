@@ -92,7 +92,26 @@ const MIN_HALF_HEIGHT = 70;
  * as round 5's version of this comment, just pointed at a much smaller, more
  * localized effect this time.
  */
-export const GROUND_END_CAP_FRACTION = 0.065;
+/**
+ * Round 10 (Tyler, live testing against round 9's actual render: "It's still
+ * a noticeable bump, like a pimple... I think that the problem is the length
+ * of the vertical flat ends of the oval. If we shorten that vertical line by
+ * just a small amount, perhaps about 10% the line may join up to the end of
+ * the oval shape more smoothly"): a hand-computed sweep of the corner
+ * Bezier's own control points (mirroring `MatchCanvas.tsx`'s
+ * `flatCapEllipsePath`) confirmed the direction of Tyler's theory - the
+ * worst-case bulge past the true ellipse shrinks monotonically as the flat
+ * edge shortens (2.575px -> 2.277px at exactly 10% shorter, at round 9's
+ * `GROUND_CAP_ROUND_FRACTION`) - so this is a real, measured improvement,
+ * not just a guess taken on faith. `GROUND_END_CAP_FRACTION` doesn't map
+ * onto "flat edge length" directly (the edge's own length is
+ * `2 * ry * sin(theta)`, and `theta = acos(1 - GROUND_END_CAP_FRACTION)` -
+ * two `acos`/`sin` steps apart, not linear), so this value is solved
+ * backwards from Tyler's literal ask (shrink `2*ry*sin(theta)` by exactly
+ * 10%) rather than just knocking 10% off the old 0.065 directly, which would
+ * have shortened the edge by a different, unstated amount.
+ */
+export const GROUND_END_CAP_FRACTION = 0.0523;
 
 const ZONE_X_FRACTION: Record<Zone, number> = {
   0: 0.08,

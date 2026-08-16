@@ -282,10 +282,35 @@ export function runOffManDisposalMultiplier(carrierTactic: Tactic | undefined): 
   return carrierTactic === "Run off Man" ? 1.2 : 1;
 }
 
-/** Contest rating (markContested/groundBall) for whichever player is actually picked as the attacker/defender rep — Key forward Contested Marking "+20%"/Bring Ball to Ground "-25%"; Small/medium forward Crumbing "+20%" (ground balls only, "around forward-50 packs"); Ruck Aerial Target "+15% markContested weight around the ground"; Defender Defensive Shoulder "+15% spoil weight" (applied as the defender's markContested rating, its closest modelled equivalent). */
+/**
+ * Contest rating (markContested/markLead/groundBall) for whichever player is
+ * actually picked as the attacker/defender rep — Key forward Contested
+ * Marking "+20%"/Bring Ball to Ground "-25%"; Small/medium forward Crumbing
+ * "+20%" (ground balls only, "around forward-50 packs"); Ruck Aerial Target
+ * "+15% markContested weight around the ground"; Defender Defensive
+ * Shoulder "+15% spoil weight" (applied as the defender's markContested
+ * rating, its closest modelled equivalent).
+ *
+ * `markLead` branch added Aug 2026 (Tyler's heatmap pack cross-check,
+ * `AussieFootySim Match Tactics.pptx` — see [[Tactics and Positional Play]]):
+ * that ContestType existed in contestTypes.ts from the start but `match.ts`
+ * never actually rolled it before now (every forward-50 marking contest
+ * resolved as `markContested`, so a leading forward's own pptx-described
+ * pro/con never had anywhere to apply). Read straight off the pptx's own
+ * Full Forward/Forward Pocket/Half Forward Flank/Centre Half Forward tactic
+ * tables: "Leading Target... Con: If opponent has good speed or is playing
+ * in front the advantage is lost" (so its bonus is attacker-only, same shape
+ * as Contested Marking's own), and the defender side straight off the
+ * Full Back/Back Pocket/etc tables: "Defensive Shoulder... Con: Weak against
+ * faster opponents who mark on the lead" (a penalty) vs. "Play in front...
+ * Pro: Strongly defend against an opponent who is fast and good at marking
+ * on the lead" (a bonus) — Defensive Shoulder and Play in Front reading as
+ * direct opposites specifically on this axis, not just two unrelated
+ * defender options.
+ */
 export function contestRatingMultiplier(
   tactic: Tactic | undefined,
-  contestType: "markContested" | "groundBall",
+  contestType: "markContested" | "markLead" | "groundBall",
   role: "attacker" | "defender",
 ): number {
   if (contestType === "markContested") {
@@ -293,6 +318,10 @@ export function contestRatingMultiplier(
     if (tactic === "Bring Ball to Ground" && role === "attacker") return 0.75;
     if (tactic === "Aerial Target") return 1.15;
     if (tactic === "Defensive Shoulder" && role === "defender") return 1.15;
+  } else if (contestType === "markLead") {
+    if (tactic === "Leading Target" && role === "attacker") return 1.2;
+    if (tactic === "Defensive Shoulder" && role === "defender") return 0.85;
+    if (tactic === "Play in Front" && role === "defender") return 1.2;
   } else {
     if (tactic === "Crumbing") return 1.2;
   }

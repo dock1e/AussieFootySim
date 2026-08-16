@@ -60,6 +60,21 @@ function emptyLine(): BoxScoreLine {
     uncontestedPoss: 0,
     goals: 0,
     behinds: 0,
+    // Kept in sync with engine/match.ts's own emptyLine() — see that file's
+    // BoxScoreLine doc comment (Aug 2026 contest-stat fields). sumTeam()
+    // below sums every field generically, these included.
+    markLeadAttempts: 0,
+    markLeadWins: 0,
+    markContestedAttempts: 0,
+    markContestedWins: 0,
+    groundBallAttempts: 0,
+    groundBallWins: 0,
+    tackleAttempts: 0,
+    tackleWins: 0,
+    ruckAttempts: 0,
+    ruckWins: 0,
+    clearanceAttempts: 0,
+    clearanceWins: 0,
   };
 }
 

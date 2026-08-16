@@ -64,8 +64,11 @@ export default function App() {
             were still there. Splitting the row means nav can keep growing
             and wrapping freely without ever touching this row again. */}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="font-display text-3xl italic tracking-tight">
-            Sim<span className="text-accent">AFL</span>
+          <div className="flex items-center gap-2.5">
+            <Logo />
+            <div className="font-display text-3xl italic tracking-tight">
+              AussieFooty<span className="text-accent">Sim</span>
+            </div>
           </div>
           <SaveMenu />
         </div>
@@ -120,6 +123,32 @@ export default function App() {
         {screen === "positionSwitch" && <PositionSwitch />}
       </main>
     </div>
+  );
+}
+
+/**
+ * Header wordmark badge — Aug 2026 rebrand (SimAFL -> AussieFootySim, Tyler:
+ * "rebrand the logo in the top left... Use supercoach logo as a subtle (no
+ * copyright infringement) reference point as I want the platform to feel
+ * familiar to supercoach players"). A rounded-square green badge with a
+ * bold white monogram, next to the wordmark — the same *category* of mark
+ * SuperCoach's own logo uses (green badge + bold lettering next to a
+ * wordmark, visible in Tyler's own attached screenshots of the SC UI), not
+ * a copy of its actual shield artwork, palette, or typeface: original
+ * shape, this app's own `good` green (already the palette's green token,
+ * see tailwind.config.js) rather than SC's specific shade, and "AFS" —
+ * Tyler's own shorthand for AussieFootySim from this same message — rather
+ * than "SC". Kept as a small standalone component (not inlined in the
+ * header) so it's reusable if a favicon/app-icon ever wants the same mark.
+ */
+function Logo() {
+  return (
+    <svg width="40" height="40" viewBox="0 0 40 40" className="shrink-0" aria-hidden="true">
+      <rect x="1" y="1" width="38" height="38" rx="11" fill="#3fb950" stroke="#2b8a37" strokeWidth="1.5" />
+      <text x="20" y="26" textAnchor="middle" fontFamily="Arial, Helvetica, sans-serif" fontWeight="800" fontSize="14" fill="#ffffff" letterSpacing="0.5">
+        AFS
+      </text>
+    </svg>
   );
 }
 

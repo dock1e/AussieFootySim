@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CLUBS, clubByName } from "../types/club";
-import { playerFullName } from "../types/player";
+import { playerFullName, type Player } from "../types/player";
 import { getPlayersByClub } from "../data/loadPlayers";
 import type { MatchTeam } from "../engine/team";
 import { autoFillLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
@@ -13,13 +13,17 @@ import {
   matchResultSoFar,
   type MatchResult,
   type MatchInProgress,
+  type MatchEvent,
   type BoxScoreLine,
+  CONTEST_STAT_FIELDS,
 } from "../engine/match";
+import type { ContestType } from "../engine/contestTypes";
+import { ZONE_NAMES, ZONES, ownZone, type Side, type Zone } from "../engine/zones";
 import { mulberry32 } from "../engine/rng";
 import { fantasyPointsFor } from "../engine/ratings";
 import { setActiveGround } from "../engine/ground";
 import { groundForMatch } from "../data/clubGrounds";
-import type { TeamPlan, GameStyle } from "../engine/tactics";
+import { DEFAULT_GAME_STYLE, type TeamPlan, type GameStyle } from "../engine/tactics";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
@@ -51,6 +55,36 @@ export function LiveMatch() {
   const [matchInProgress, setMatchInProgress] = useState<MatchInProgress | null>(null);
   const [quartersSimulated, setQuartersSimulated] = useState(0);
   const [pendingCoachsCall, setPendingCoachsCall] = useState<{ side: "home" | "away"; quarterJustFinished: 1 | 2 | 3 } | null>(null);
+
+  /**
+   * Each side's current game style, kept in sync with whatever `kickOff`
+   * actually started the match with and whatever a Coach's Call changes it
+   * to mid-match — Aug 2026, feeds `MatchCanvas`'s new `homeStyle`/
+   * `awayStyle` props (see engine/ground.ts's `gameStyleAnchorBias`) so the
+   * ground rendering's positional shape actually reflects the chosen game
+   * style, not just its disposal/contest-rating effects. Deliberately local
+   * state here rather than reading back through `matchInProgress` (which
+   * only exists for an interactive match — see `getGameStyle`'s other call
+   * site below) so a non-interactive AI-vs-AI game (no `matchInProgress` at
+   * all) still renders its own fixed-for-the-whole-match style correctly.
+   */
+  const [homeStyle, setHomeStyle] = useState<GameStyle>(DEFAULT_GAME_STYLE);
+  const [awayStyle, setAwayStyle] = useState<GameStyle>(DEFAULT_GAME_STYLE);
+
+  /**
+   * Click-to-inspect player stats (Aug 2026, Tyler: "In the match sim and at
+   * half time I want to be able to click on a player and see their
+   * statistics and how they're influencing the game... so that as a coach we
+   * can make decisions on what to do next") — available any time `result`
+   * exists, which covers both cases in his ask without needing separate
+   * plumbing: mid-match is just this screen while playing/paused, and half
+   * time is just this same screen sitting on the Q2 Coach's Call. Holds the
+   * clicked `Player` plus which `side` they're on (needed to mirror the zone
+   * breakdown into *their own* attacking-direction terms — see
+   * `PlayerMatchStatsModal`'s own doc comment) rather than re-deriving side
+   * from `homeIds`/`awayIds` again on every render.
+   */
+  const [selectedPlayer, setSelectedPlayer] = useState<{ player: Player; side: Side } | null>(null);
 
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
@@ -97,6 +131,8 @@ export function LiveMatch() {
   function kickOff(homePlan: TeamPlan, awayPlan: TeamPlan) {
     const seed = Math.floor(Math.random() * 1_000_000_000);
     setLastSeed(seed);
+    setHomeStyle(homePlan.gameStyle);
+    setAwayStyle(awayPlan.gameStyle);
 
     if (!mySide) {
       // Neither side is the user's own club (e.g. watching two AI clubs
@@ -123,11 +159,15 @@ export function LiveMatch() {
     setMatchInProgress(null);
     setQuartersSimulated(0);
     setPendingCoachsCall(null);
+    setHomeStyle(DEFAULT_GAME_STYLE);
+    setAwayStyle(DEFAULT_GAME_STYLE);
   }
 
   function chooseCoachsCall(style: GameStyle) {
     if (!matchInProgress || !pendingCoachsCall) return;
     setGameStyle(matchInProgress, pendingCoachsCall.side, style);
+    if (pendingCoachsCall.side === "home") setHomeStyle(style);
+    else setAwayStyle(style);
     const nextQuarter = (quartersSimulated + 1) as 1 | 2 | 3 | 4;
     simulateQuarter(matchInProgress, nextQuarter);
     setQuartersSimulated(nextQuarter);
@@ -260,7 +300,11 @@ export function LiveMatch() {
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-[205px_minmax(0,1fr)_205px]">
-            <LivePlayerStats team={homeTeam} liveBoxScore={playback.liveBoxScore} />
+            <LivePlayerStats
+              team={homeTeam}
+              liveBoxScore={playback.liveBoxScore}
+              onSelectPlayer={(p) => setSelectedPlayer({ player: p, side: "home" })}
+            />
             <MatchCanvas
               home={homeTeam}
               away={awayTeam}
@@ -268,8 +312,14 @@ export function LiveMatch() {
               nextEvent={result.events[playback.currentIndex + 1] ?? null}
               liveBoxScore={playback.liveBoxScore}
               isPlaying={playback.isPlaying}
+              homeStyle={homeStyle}
+              awayStyle={awayStyle}
             />
-            <LivePlayerStats team={awayTeam} liveBoxScore={playback.liveBoxScore} />
+            <LivePlayerStats
+              team={awayTeam}
+              liveBoxScore={playback.liveBoxScore}
+              onSelectPlayer={(p) => setSelectedPlayer({ player: p, side: "away" })}
+            />
           </div>
 
           {pendingCoachsCall ? (
@@ -323,6 +373,16 @@ export function LiveMatch() {
             <TeamStatBars label={homeTeam.name} otherLabel={awayTeam.name} own={teamTotals(playback.liveBoxScore, homeIds)} other={teamTotals(playback.liveBoxScore, awayIds)} />
             <PlayByPlay events={result.events.slice(0, playback.currentIndex + 1)} />
           </div>
+
+          {selectedPlayer && (
+            <PlayerMatchStatsModal
+              player={selectedPlayer.player}
+              side={selectedPlayer.side}
+              line={playback.liveBoxScore[selectedPlayer.player.PlayerID]}
+              events={result.events.slice(0, playback.currentIndex + 1)}
+              onClose={() => setSelectedPlayer(null)}
+            />
+          )}
         </>
       )}
     </div>
@@ -371,8 +431,22 @@ function ScoreBlock({
  * safe to recompute live, every tick, from `liveBoxScore` alone. Sorted by
  * that live fantasy score, same "who's actually having a good game right
  * now" ordering footypig's own SC-sorted list uses.
+ *
+ * Rows are clickable (Aug 2026, Tyler's click-to-inspect ask, see
+ * `PlayerMatchStatsModal`) — `onSelectPlayer` is optional purely so this
+ * component doesn't need a dummy no-op handler at any future call site that
+ * genuinely doesn't want the feature; every current caller (both of
+ * LiveMatch's own sidebars) always passes one.
  */
-function LivePlayerStats({ team, liveBoxScore }: { team: MatchTeam; liveBoxScore: Record<number, BoxScoreLine> }) {
+function LivePlayerStats({
+  team,
+  liveBoxScore,
+  onSelectPlayer,
+}: {
+  team: MatchTeam;
+  liveBoxScore: Record<number, BoxScoreLine>;
+  onSelectPlayer?: (player: Player) => void;
+}) {
   const rows = team.players
     .map((p) => {
       const line = liveBoxScore[p.PlayerID];
@@ -415,7 +489,12 @@ function LivePlayerStats({ team, liveBoxScore }: { team: MatchTeam; liveBoxScore
           </thead>
           <tbody>
             {rows.map(({ player, line, sc }, i) => (
-              <tr key={player.PlayerID} className={i === 0 && sc > 0 ? "text-accent" : "text-slate-300"}>
+              <tr
+                key={player.PlayerID}
+                onClick={() => onSelectPlayer?.(player)}
+                className={`${i === 0 && sc > 0 ? "text-accent" : "text-slate-300"} ${onSelectPlayer ? "cursor-pointer hover:bg-base-700" : ""}`}
+                title={onSelectPlayer ? `Click for ${playerFullName(player)}'s match stats` : undefined}
+              >
                 <td className="max-w-[64px] truncate py-0.5" title={playerFullName(player)}>
                   {player.lname}
                 </td>
@@ -533,6 +612,167 @@ function PlayByPlay({ events }: { events: MatchResult["events"] }) {
             <span>{ev.description}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** Which contest types get their own row in the modal below, and in what order — every `ContestType` CONTEST_STAT_FIELDS knows about, in roughly the order a coach thinks about them (marking situations, then the ball-on-the-ground/tackling scrap, then stoppages). */
+const CONTEST_STAT_DISPLAY: { type: ContestType; label: string }[] = [
+  { type: "markContested", label: "Contested Marking" },
+  { type: "markLead", label: "Marking on a Lead" },
+  { type: "groundBall", label: "Hard Ball Gets" },
+  { type: "tackle", label: "Tackling" },
+  { type: "clearance", label: "Clearances" },
+  { type: "ruck", label: "Ruck Contests" },
+];
+
+/** Which BoxScoreLine fields count as this player actually getting a genuine touch of the ball, for the zone breakdown below — deliberately one entry per real *moment* (a kick disposal event sets both `disposals` and `kicks` in the same event; counted once, not twice). */
+const TOUCH_STATS = new Set<keyof BoxScoreLine>(["disposals", "marks", "tackles", "hitouts", "clearances"]);
+
+/** Buckets every event where `player` genuinely touched the ball into *their own* attacking-direction zone (`ownZone` — so "Forward 50" always means their forward 50, regardless of home/away or which raw zone the event was logged under). */
+function touchZoneCounts(player: Player, side: Side, events: MatchEvent[]): Partial<Record<Zone, number>> {
+  const counts: Partial<Record<Zone, number>> = {};
+  for (const ev of events) {
+    const touched = ev.statDeltas.some((d) => d.playerId === player.PlayerID && TOUCH_STATS.has(d.stat));
+    if (!touched) continue;
+    const z = ownZone(side, ev.zone);
+    counts[z] = (counts[z] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * Click-to-inspect match stats (Aug 2026, Tyler: "I want to be able to click
+ * on a player and see their statistics and how they're influencing the
+ * game — where they are getting their touches... what are their contest
+ * stats: ie, won 100% of contested marking situations, won 10% of marking
+ * on a lead, won 0% of hard ball get contests etc... so that as a coach we
+ * can make decisions on what to do next"). Deliberately a separate, smaller
+ * component from `PlayerDetailModal` rather than reusing it — that modal is
+ * a season-long player-profile view (attributes/contract/condition/
+ * scouting/season totals), none of which is what a coach needs mid-match;
+ * this one is entirely match-scoped: the live box score line plus the two
+ * new pieces of data this same round's engine changes made possible for the
+ * first time (per-contest-type win rates, and a zone breakdown of genuine
+ * touches — see `CONTEST_STAT_FIELDS`/`touchZoneCounts` above).
+ *
+ * `line` can be `undefined` (a player who hasn't been involved in a single
+ * statDelta yet, early in a quarter) — every read below falls back to 0/'—'
+ * rather than crashing.
+ */
+function PlayerMatchStatsModal({
+  player,
+  side,
+  line,
+  events,
+  onClose,
+}: {
+  player: Player;
+  side: Side;
+  line: BoxScoreLine | undefined;
+  events: MatchEvent[];
+  onClose: () => void;
+}) {
+  const zoneCounts = touchZoneCounts(player, side, events);
+  const maxZoneCount = Math.max(1, ...ZONES.map((z) => zoneCounts[z] ?? 0));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-card border border-base-600 bg-base-800 p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="font-display text-2xl italic">
+              #{player.jumperNumber} {playerFullName(player)}
+            </div>
+            <div className="text-xs text-slate-400">
+              {player.archetype} &middot; {player.Team}
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-lg bg-base-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-base-600" aria-label="Close">
+            Close
+          </button>
+        </div>
+
+        <div className="mt-4">
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Contest Stats</div>
+          <div className="space-y-1.5">
+            {CONTEST_STAT_DISPLAY.map(({ type, label }) => {
+              const fields = CONTEST_STAT_FIELDS[type];
+              const attempts = line?.[fields.attempts] ?? 0;
+              const wins = line?.[fields.wins] ?? 0;
+              const pct = attempts > 0 ? Math.round((wins / attempts) * 100) : null;
+              return (
+                <div key={type} className="flex items-center justify-between text-sm">
+                  <span className="text-slate-300">{label}</span>
+                  <span className="tabular-nums">
+                    {pct === null ? (
+                      <span className="text-slate-500">No attempts yet</span>
+                    ) : (
+                      <>
+                        <span className="font-semibold text-accent-light">{pct}%</span>{" "}
+                        <span className="text-slate-500">
+                          ({wins}/{attempts})
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-1.5 text-[11px] text-slate-500">Win rate for each contest type this player has actually contested so far this match.</div>
+        </div>
+
+        <div className="mt-4">
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Where They're Getting Touches</div>
+          <div className="space-y-1.5">
+            {ZONES.map((z) => {
+              const count = zoneCounts[z] ?? 0;
+              const pct = (count / maxZoneCount) * 100;
+              return (
+                <div key={z}>
+                  <div className="mb-0.5 flex items-center justify-between text-xs">
+                    <span className="text-slate-400">{ZONE_NAMES[z]}</span>
+                    <span className="tabular-nums font-semibold">{count}</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-base-700">
+                    <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-1.5 text-[11px] text-slate-500">
+            Zones shown in {player.Team}'s own attacking direction — "Forward 50" always means their forward 50.
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Match Totals</div>
+          <div className="grid grid-cols-4 gap-2 text-center text-xs">
+            {(
+              [
+                ["D", line?.disposals ?? 0],
+                ["M", line?.marks ?? 0],
+                ["T", line?.tackles ?? 0],
+                ["CLR", line?.clearances ?? 0],
+                ["HO", line?.hitouts ?? 0],
+                ["CP", line?.contestedPoss ?? 0],
+                ["G", line?.goals ?? 0],
+                ["B", line?.behinds ?? 0],
+              ] as const
+            ).map(([label, value]) => (
+              <div key={label} className="rounded-lg bg-base-900 py-1.5">
+                <div className="tabular-nums text-base font-semibold text-slate-200">{value}</div>
+                <div className="text-slate-500">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

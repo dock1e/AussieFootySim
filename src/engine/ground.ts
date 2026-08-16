@@ -6,6 +6,7 @@ import type { MatchEvent } from "./match.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 import { ACTIVE_GROUND, setActiveGroundConfig, type GroundConfig } from "../data/grounds.ts";
 import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
+import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
 
 /**
  * Ground-shape geometry and dot placement for the Canvas match renderer —
@@ -496,6 +497,120 @@ interface Anchor {
 }
 
 /**
+ * Game-style-driven static positional bias — Aug 2026 (Tyler: "start working
+ * on bringing these features to life" for Attack the Middle/Spread the
+ * Ground/Forward Press, cross-checked against `AussieFootySim Match
+ * Tactics.pptx`'s Balanced-vs-Defensive-Flood heatmap pack — see
+ * [[Tactics and Positional Play]]). Layered *underneath* `formationFor`'s
+ * existing per-tick `pressLineFor` shift below: this is a team-wide
+ * structural shape ("this team plays a flatter, wider defence"), not a
+ * moment-to-moment reaction to wherever the ball currently is — baked
+ * straight into each position's `Anchor` in `assignAnchors`, so every other
+ * per-tick dynamic (press, drift, individual nudges) still applies on top of
+ * it exactly as before.
+ *
+ * Two independent axes, matching how the two pptx game-style sections
+ * actually differ and how Tyler described the other two in this same
+ * message:
+ *
+ * - Depth (`zoneShift`, same 0-4 fractional-zone scale as `Anchor.homeZone`,
+ *   always in the *player's own* attacking-direction terms — positive always
+ *   means "push toward my own attacking end," regardless of home/away):
+ *   Defensive Flood's defensive-line heatmaps (FB/BP/HBF/CHB) visibly cover
+ *   more ground up the field than the same positions' Balanced heatmaps,
+ *   while its forward-line heatmaps (FF/FP/HFF/CHF) visibly contract
+ *   tighter/deeper (less leading) — read directly off the pptx's own images,
+ *   not invented. Forward Press mirrors that same shape onto the forward
+ *   positions instead — Tyler's own prediction ("I think this will be a
+ *   mirror of Defensive") ahead of drawing that pack's own heatmaps, so this
+ *   is provisional pending his real Forward Press reference images, same
+ *   "deliberately roughed in" status as every game-style number in
+ *   tactics.ts.
+ * - Width (`laneScale`, a multiplier on `Anchor.lane`): Attack the Middle
+ *   and Spread the Ground are pure lateral opposites per Tyler's own
+ *   framing this message — Wing/Flank (`W`, `HBF`, `HFF` — the three real
+ *   positions with "Wing" or "Flank" in their name) gravitate in toward the
+ *   centre corridor for Attack the Middle, or hold maximum width for Spread
+ *   the Ground; Centre/Ruck Rover/Rover deliberately untouched by either
+ *   (already centre-anchored at lane ~0, and Tyler's own words: they "stay
+ *   towards the middle" regardless of which of these two styles is active).
+ *
+ * `SPREAD_WIDE_SCALE`/`FLOOD_SPREAD_SCALE` are capped at 1.15, not higher:
+ * `formationFor`'s `y` already multiplies `lane` by `maxHalfHeightAt(x) *
+ * 0.85`, so a real dual-lane position already sitting at `lane = ±1` (every
+ * Wing/Flank/`BP`/`HBF`/`FP` slot) has exactly `1/0.85 ≈ 1.176` of headroom
+ * before a scaled-up lane pushes the dot outside the true boundary line —
+ * 1.15 stays inside that with a small margin, 1.3 (tried first) does not.
+ *
+ * Only ever applied to a real-position anchor, never the archetype-line
+ * fallback (a team with no Selection Committee lineup behind it) — Tyler's
+ * own description is phrased entirely in terms of real positions (Wing,
+ * Flank, Centre/Ruck Rover/Rover), so there's no equivalent instruction to
+ * infer for the coarser 4-line grouping. Same graceful-degradation shape
+ * `defaultTacticForPosition` (tactics.ts) already uses: falls through to
+ * "no bias" rather than guessing.
+ */
+const DEFENSIVE_LINE_POSITIONS: readonly Position[] = ["FB", "BP", "HBF", "CHB"];
+const FORWARD_LINE_POSITIONS: readonly Position[] = ["FF", "FP", "HFF", "CHF"];
+const WING_FLANK_POSITIONS: readonly Position[] = ["W", "HBF", "HFF"];
+
+const FLOOD_PUSH_ZONE = 0.4; // the flooding line reaches further up the ground
+const FLOOD_CONTRACT_ZONE = 0.3; // the other line sits deeper/tighter, closer to its own goal
+const FLOOD_SPREAD_SCALE = 1.15; // the flooding line covers more width — see headroom note above
+const FLOOD_CONTRACT_SCALE = 0.7; // the other line packs in tighter, less leading
+
+const MIDDLE_GRAVITY_SCALE = 0.5; // Attack the Middle: wing/flank pull in toward the corridor
+const SPREAD_WIDE_SCALE = 1.15; // Spread the Ground: wing/flank hold maximum width — see headroom note above
+
+interface AnchorBias {
+  zoneShift: number;
+  laneScale: number;
+}
+const NO_BIAS: AnchorBias = { zoneShift: 0, laneScale: 1 };
+
+function gameStyleAnchorBias(position: Position, style: GameStyle): AnchorBias {
+  switch (style) {
+    case "Defensive Flood":
+      // Defenders push toward centre (+, "cover more ground up the field").
+      // Forwards contract toward *their own* goal (also +, since a forward's
+      // own-terms zone is already near the 0-4 scale's top end — "deeper"
+      // for them means *higher* zone, not lower). BUG FIXED Aug 2026, round
+      // 15's own scratch-verify: this branch originally read `-FLOOD_
+      // CONTRACT_ZONE`, which actually pulled forwards *toward* centre —
+      // backwards from "contract tighter/deeper (less leading)," and the
+      // exact opposite of what the pptx heatmap comparison actually shows.
+      // Caught by the scratch script's FB/FF mirror-direction check, not
+      // visually — the sign error was invisible in the small live-Chrome
+      // sample checked before that script ran.
+      if (DEFENSIVE_LINE_POSITIONS.includes(position)) return { zoneShift: FLOOD_PUSH_ZONE, laneScale: FLOOD_SPREAD_SCALE };
+      if (FORWARD_LINE_POSITIONS.includes(position)) return { zoneShift: FLOOD_CONTRACT_ZONE, laneScale: FLOOD_CONTRACT_SCALE };
+      return NO_BIAS;
+    case "Forward Press":
+      // Provisional mirror of Defensive Flood onto the forward positions —
+      // see doc comment above. A true mirror swaps *which group* gets the
+      // "push toward centre" vs. "contract toward own goal" treatment while
+      // keeping each verb's own sign meaning for that group's zone — not a
+      // blanket sign flip of the Defensive Flood constants (same bug as
+      // above, same fix: forwards now push toward centre, which for a
+      // forward's own-terms zone is *negative* (down from ~4 toward ~2);
+      // defenders now contract toward their own goal, also negative (down
+      // toward 0) — both literally identical in shape to the Defensive
+      // Flood branch's signs, just with the two position lists swapped.
+      if (FORWARD_LINE_POSITIONS.includes(position)) return { zoneShift: -FLOOD_PUSH_ZONE, laneScale: FLOOD_SPREAD_SCALE };
+      if (DEFENSIVE_LINE_POSITIONS.includes(position)) return { zoneShift: -FLOOD_CONTRACT_ZONE, laneScale: FLOOD_CONTRACT_SCALE };
+      return NO_BIAS;
+    case "Attack the Middle":
+      if (WING_FLANK_POSITIONS.includes(position)) return { zoneShift: 0, laneScale: MIDDLE_GRAVITY_SCALE };
+      return NO_BIAS;
+    case "Spread the Ground":
+      if (WING_FLANK_POSITIONS.includes(position)) return { zoneShift: 0, laneScale: SPREAD_WIDE_SCALE };
+      return NO_BIAS;
+    default:
+      return NO_BIAS; // Balanced — no bias, byte-identical to before this feature existed
+  }
+}
+
+/**
  * Buckets a team's 22 into real-position anchors when the Selection
  * Committee (or an AI club's auto-fill, Phase 8) actually assigned one,
  * falling back to the old coarse archetype-line grouping for anyone it
@@ -503,8 +618,14 @@ interface Anchor {
  * positions (BP, HBF, W, HFF, FP) are split across their two lanes by
  * PlayerID order — arbitrary but stable, so a given match doesn't flicker
  * which lane a player's on frame to frame.
+ *
+ * `style` (Aug 2026) applies `gameStyleAnchorBias` above to every
+ * real-position anchor before it's stored — see that function's own doc
+ * comment. Defaults to Balanced (zero bias, byte-identical to before this
+ * param existed) so every caller written before this feature existed keeps
+ * working unchanged.
  */
-function assignAnchors(players: Player[], positions: Map<number, Position> | undefined): Map<number, Anchor> {
+function assignAnchors(players: Player[], positions: Map<number, Position> | undefined, style: GameStyle = DEFAULT_GAME_STYLE): Map<number, Anchor> {
   const out = new Map<number, Anchor>();
   const byPosition = new Map<Position, Player[]>();
   const fallback: Player[] = [];
@@ -524,10 +645,11 @@ function assignAnchors(players: Player[], positions: Map<number, Position> | und
     const lanes = POSITION_LANES[pos] ?? [0];
     const mobility = POSITION_MOBILITY[pos] ?? GENERAL_POSITION_MOBILITY;
     const laneNudge = pos === "R" || pos === "RR" || pos === "ROV" ? FOLLOWERS_LANE_NUDGE : (SPINE_LANE_NUDGE[pos] ?? 0);
+    const bias = gameStyleAnchorBias(pos, style);
     const sorted = [...group].sort((a, b) => a.PlayerID - b.PlayerID);
     sorted.forEach((p, i) => {
       const lane = lanes[i] ?? lanes[lanes.length - 1] ?? 0;
-      out.set(p.PlayerID, { homeZone: zone, lane, mobility, laneNudge });
+      out.set(p.PlayerID, { homeZone: zone + bias.zoneShift, lane: lane * bias.laneScale, mobility, laneNudge });
     });
   }
 
@@ -706,7 +828,7 @@ function individualZoneNudge(playerId: number): number {
  * for "positioning should update more frequently for players without the
  * ball too."
  */
-function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null): Map<number, DotPosition> {
+function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null, style: GameStyle = DEFAULT_GAME_STYLE): Map<number, DotPosition> {
   // Aug 2026, round 8 (Tyler: "the Interchange players are currently on the
   // field the whole time"): only the on-ground roster gets a formation anchor
   // at all — an interchange player (see MatchTeam.onGround) simply never
@@ -716,7 +838,7 @@ function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null): Ma
   // simulator, every pre-round-8 test), so this is a no-op change for any
   // caller that doesn't supply real Selection Committee lineup data.
   const roster = onGroundPlayers(team);
-  const anchors = assignAnchors(roster, team.positions);
+  const anchors = assignAnchors(roster, team.positions, style);
   const sideOffset = side === "home" ? 18 : -18;
   const press = pressLineFor(side, event);
   const out = new Map<number, DotPosition>();
@@ -804,9 +926,16 @@ function driftOffset(playerId: number, driftTime: number): { dx: number; dy: num
  * `src/engine/match.ts` are completely unaffected by anything in this file;
  * it only changes what a UI *renders*, never what actually happened.
  */
-export function computeDotPositions(home: MatchTeam, away: MatchTeam, event: MatchEvent | null, driftTime = 0): DotPosition[] {
-  const homeForm = formationFor(home, "home", event);
-  const awayForm = formationFor(away, "away", event);
+export function computeDotPositions(
+  home: MatchTeam,
+  away: MatchTeam,
+  event: MatchEvent | null,
+  driftTime = 0,
+  homeStyle: GameStyle = DEFAULT_GAME_STYLE,
+  awayStyle: GameStyle = DEFAULT_GAME_STYLE,
+): DotPosition[] {
+  const homeForm = formationFor(home, "home", event, homeStyle);
+  const awayForm = formationFor(away, "away", event, awayStyle);
   const all = new Map<number, DotPosition>([...homeForm, ...awayForm]);
 
   // BUG FIXED Aug 2026 (Tyler, live testing): this used to snap every

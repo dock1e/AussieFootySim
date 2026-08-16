@@ -2,6 +2,7 @@ import type { Player } from "../types/player.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
 import type { Rng } from "./rng.ts";
 import { computeContestRating, resolveContest, resolveThreshold } from "./contest.ts";
+import type { ContestType } from "./contestTypes.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
@@ -57,6 +58,33 @@ export interface BoxScoreLine {
   uncontestedPoss: number;
   goals: number;
   behinds: number;
+  // --- Per-contest-type attempts/wins, added Aug 2026 (Tyler: "won 100% of
+  // contested marking situations... won 10% of marking on a lead... won 0%
+  // of hard ball get contests" — a coach-facing win-rate stat none of the
+  // fields above can answer, since every one of them only ever credited the
+  // *winner* of a contest, so a loss was invisible and no rate was
+  // computable). Deliberately a second, parallel set of fields rather than a
+  // rework of the ones above: nothing here changes how marks/contestedMarks/
+  // tackles/clearances/hitouts/contestedPoss get incremented, so every
+  // existing reader of those (LivePlayerStats, FullTimeResult, ratings.ts's
+  // fantasyPointsFor) is byte-identical to before. See `CONTEST_STAT_FIELDS`/
+  // `recordContest` below for where these actually get written. `markLead`
+  // ("mark on a lead") and `tackle` are genuinely new signal — the
+  // `ContestType`s existed in contestTypes.ts from the start but neither was
+  // ever actually rolled anywhere in this file until this same round (see
+  // `runContest`'s markLead split and `runGeneralPlay`'s tackle tally below).
+  markLeadAttempts: number;
+  markLeadWins: number;
+  markContestedAttempts: number;
+  markContestedWins: number;
+  groundBallAttempts: number;
+  groundBallWins: number;
+  tackleAttempts: number;
+  tackleWins: number;
+  ruckAttempts: number;
+  ruckWins: number;
+  clearanceAttempts: number;
+  clearanceWins: number;
 }
 
 function emptyLine(): BoxScoreLine {
@@ -73,6 +101,18 @@ function emptyLine(): BoxScoreLine {
     uncontestedPoss: 0,
     goals: 0,
     behinds: 0,
+    markLeadAttempts: 0,
+    markLeadWins: 0,
+    markContestedAttempts: 0,
+    markContestedWins: 0,
+    groundBallAttempts: 0,
+    groundBallWins: 0,
+    tackleAttempts: 0,
+    tackleWins: 0,
+    ruckAttempts: 0,
+    ruckWins: 0,
+    clearanceAttempts: 0,
+    clearanceWins: 0,
   };
 }
 
@@ -153,6 +193,17 @@ const DEFAULT_TICKS_PER_QUARTER = 130;
 // scripts/simulate.ts, Engine.md "Balance simulator") exists to tune. ---
 const P_SHOT_WHEN_ENTERING_FORWARD_50 = 0.45;
 const P_DISPOSAL_BECOMES_CONTEST = 0.35;
+/**
+ * Of all forward-50 marking contests, the share that resolve as a leading
+ * mark (`markLead`) rather than a contested/pack mark (`markContested`) —
+ * Aug 2026, wiring in the `markLead` `ContestType` for real (see
+ * `runContest` below and `BoxScoreLine`'s own doc comment for why it never
+ * fired before this round despite existing in contestTypes.ts from the
+ * start). Same "deliberately roughed in" status as every other P_ constant
+ * here — no real split ratio is recorded anywhere in the vault, just a
+ * plausible middle value pending balance-simulator tuning.
+ */
+const P_FORWARD_MARK_IS_LEAD = 0.4;
 const P_KICK_VS_HANDBALL = 0.55;
 const P_SET_SHOT_VS_SNAP = 0.7;
 const P_GOAL_GIVEN_ON_TARGET = 0.58;
@@ -245,6 +296,39 @@ function log(
   ctx.events.push({ tick: ctx.tick, quarter: ctx.quarter, zone, possession, phase, description, playerIds, statDeltas });
 }
 
+/** Maps each `ContestType` onto its two new `BoxScoreLine` fields — see that interface's own doc comment. A lookup table rather than templated string keys (`` `${type}Attempts` ``) so TypeScript can actually check every field name against `keyof BoxScoreLine`. Exported so UI code (LiveMatch.tsx's click-to-inspect stats modal) can read the same fields without a second, driftable copy of this table. */
+export const CONTEST_STAT_FIELDS: Record<ContestType, { attempts: keyof BoxScoreLine; wins: keyof BoxScoreLine }> = {
+  markLead: { attempts: "markLeadAttempts", wins: "markLeadWins" },
+  markContested: { attempts: "markContestedAttempts", wins: "markContestedWins" },
+  groundBall: { attempts: "groundBallAttempts", wins: "groundBallWins" },
+  tackle: { attempts: "tackleAttempts", wins: "tackleWins" },
+  ruck: { attempts: "ruckAttempts", wins: "ruckWins" },
+  clearance: { attempts: "clearanceAttempts", wins: "clearanceWins" },
+};
+
+/**
+ * Records both sides of a `resolveContest()` roll into the new per-type
+ * attempts/wins tally (see `BoxScoreLine`'s own doc comment for why) — the
+ * winner gets +1 attempt and +1 win, the loser gets +1 attempt only. Returns
+ * `StatDelta`s so the caller can fold them into its own `log()` call
+ * alongside whatever hand-named fields (marks, clearances, hitouts...) that
+ * call site already tracks; doesn't call `log` itself since every call site
+ * already has its own description text and phase to log under.
+ */
+function recordContest(ctx: Ctx, type: ContestType, winner: Player, loser: Player): StatDelta[] {
+  const fields = CONTEST_STAT_FIELDS[type];
+  const winnerLine = lineFor(ctx, winner);
+  (winnerLine[fields.attempts] as number) += 1;
+  (winnerLine[fields.wins] as number) += 1;
+  const loserLine = lineFor(ctx, loser);
+  (loserLine[fields.attempts] as number) += 1;
+  return [
+    { playerId: winner.PlayerID, stat: fields.attempts, delta: 1 },
+    { playerId: winner.PlayerID, stat: fields.wins, delta: 1 },
+    { playerId: loser.PlayerID, stat: fields.attempts, delta: 1 },
+  ];
+}
+
 export interface State {
   phase: Phase;
   zone: Zone;
@@ -281,9 +365,11 @@ function runStoppage(ctx: Ctx, state: State): State {
     defenderMultiplier: awayRuckMult,
   });
   const ruckWinner = ruckResult.winner === "attacker" ? homeRuck : awayRuck;
+  const ruckLoser = ruckResult.winner === "attacker" ? awayRuck : homeRuck;
   lineFor(ctx, ruckWinner).hitouts += 1;
   log(ctx, state.zone, state.possession, "STOPPAGE", `${ruckWinner.lname} wins the hit-out`, [ruckWinner.PlayerID], [
     { playerId: ruckWinner.PlayerID, stat: "hitouts", delta: 1 },
+    ...recordContest(ctx, "ruck", ruckWinner, ruckLoser),
   ]);
 
   const homeClear = bestByRating(home, clearanceRating);
@@ -302,6 +388,7 @@ function runStoppage(ctx: Ctx, state: State): State {
   });
   const winningSide: Side = clearResult.winner === "attacker" ? "home" : "away";
   const clearWinner = winningSide === "home" ? homeClear : awayClear;
+  const clearLoser = winningSide === "home" ? awayClear : homeClear;
   lineFor(ctx, clearWinner).clearances += 1;
   log(
     ctx,
@@ -310,7 +397,7 @@ function runStoppage(ctx: Ctx, state: State): State {
     "STOPPAGE",
     `${clearWinner.lname} clears it for ${teamOf(ctx, winningSide).name}`,
     [clearWinner.PlayerID],
-    [{ playerId: clearWinner.PlayerID, stat: "clearances", delta: 1 }],
+    [{ playerId: clearWinner.PlayerID, stat: "clearances", delta: 1 }, ...recordContest(ctx, "clearance", clearWinner, clearLoser)],
   );
 
   return { phase: "GENERAL_PLAY", zone: MIDFIELD, possession: winningSide, carrier: clearWinner };
@@ -351,8 +438,20 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     conditionMultiplierFor(ctx, defendingSide, defender);
   const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
 
+  // Tackle attempts/wins tallied here rather than via `recordContest`
+  // (Aug 2026) — this disposal-under-pressure roll doesn't go through
+  // `resolveContest`/`CONTEST_CONFIG.tackle` at all (it uses its own
+  // disposalRating-vs-defenderRating threshold check, a deliberate pre-
+  // existing design, not something this round changes), but it's still
+  // exactly the "did the defender attempt/win a tackle" moment Tyler's
+  // contest-breakdown ask needs a rate for, so it's tallied directly against
+  // the same `tackleAttempts`/`tackleWins` fields `CONTEST_STAT_FIELDS`
+  // defines for consistency with every other contest type's naming.
   if (!result.success) {
-    lineFor(ctx, defender).tackles += 1;
+    const tacklerLine = lineFor(ctx, defender);
+    tacklerLine.tackles += 1;
+    tacklerLine.tackleAttempts += 1;
+    tacklerLine.tackleWins += 1;
     log(
       ctx,
       state.zone,
@@ -360,12 +459,17 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       "GENERAL_PLAY",
       `${defender.lname} tackles ${carrier.lname}`,
       [defender.PlayerID, carrier.PlayerID],
-      [{ playerId: defender.PlayerID, stat: "tackles", delta: 1 }],
+      [
+        { playerId: defender.PlayerID, stat: "tackles", delta: 1 },
+        { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
+        { playerId: defender.PlayerID, stat: "tackleWins", delta: 1 },
+      ],
     );
     const newSide = otherSide(state.possession);
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: defender };
   }
 
+  lineFor(ctx, defender).tackleAttempts += 1;
   const line = lineFor(ctx, carrier);
   line.disposals += 1;
   line.uncontestedPoss += 1;
@@ -385,6 +489,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
       { playerId: carrier.PlayerID, stat: "uncontestedPoss", delta: 1 },
       { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
+      { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
     ],
   );
 
@@ -402,6 +507,13 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier };
 }
 
+/** Prose label for `runContest`'s "X wins the ___" log line — a separate, sentence-shaped set of strings from `CONTEST_CONFIG[type].label` (contestTypes.ts), which is phrased for a menu/table context instead. */
+const CONTEST_WIN_LABEL: Record<"markContested" | "markLead" | "groundBall", string> = {
+  markContested: "contested mark",
+  markLead: "mark on the lead",
+  groundBall: "ground ball",
+};
+
 function runContest(ctx: Ctx, state: State): State {
   const attackingSide = state.possession;
   const defendingSide = otherSide(attackingSide);
@@ -410,7 +522,12 @@ function runContest(ctx: Ctx, state: State): State {
   const attackingPlan = planFor(ctx, attackingSide);
   const defendingPlan = planFor(ctx, defendingSide);
 
-  const contestType = isForward50(state.zone, attackingSide) ? "markContested" : "groundBall";
+  // markLead split Aug 2026 — see P_FORWARD_MARK_IS_LEAD's own doc comment.
+  const contestType: "markContested" | "markLead" | "groundBall" = isForward50(state.zone, attackingSide)
+    ? ctx.rng() < P_FORWARD_MARK_IS_LEAD
+      ? "markLead"
+      : "markContested"
+    : "groundBall";
   // Both reps weighted by involvement at the contest's own zone (see
   // engine/involvement.ts) rather than a uniform pick across all 22 — e.g. a
   // marking contest inside forward 50 now actually favours a Key Forward as
@@ -432,14 +549,20 @@ function runContest(ctx: Ctx, state: State): State {
 
   if (result.winner === "attacker") {
     const line = lineFor(ctx, attackerRep);
-    const deltas: StatDelta[] = [];
-    if (contestType === "markContested") {
+    const deltas: StatDelta[] = [...recordContest(ctx, contestType, attackerRep, defenderRep)];
+    if (contestType === "markContested" || contestType === "markLead") {
+      // A leading mark is still a mark — Aug 2026: previously only
+      // markContested wins ever touched `marks` at all, which would have
+      // under-counted a genuinely mark-heavy leading forward the moment
+      // markLead started actually firing (see P_FORWARD_MARK_IS_LEAD).
+      // `contestedMarks` stays markContested-only, correctly: a leading mark
+      // isn't a *contested* mark.
       line.marks += 1;
-      line.contestedMarks += 1;
-      deltas.push(
-        { playerId: attackerRep.PlayerID, stat: "marks", delta: 1 },
-        { playerId: attackerRep.PlayerID, stat: "contestedMarks", delta: 1 },
-      );
+      deltas.push({ playerId: attackerRep.PlayerID, stat: "marks", delta: 1 });
+      if (contestType === "markContested") {
+        line.contestedMarks += 1;
+        deltas.push({ playerId: attackerRep.PlayerID, stat: "contestedMarks", delta: 1 });
+      }
     } else {
       line.contestedPoss += 1;
       deltas.push({ playerId: attackerRep.PlayerID, stat: "contestedPoss", delta: 1 });
@@ -449,7 +572,7 @@ function runContest(ctx: Ctx, state: State): State {
       state.zone,
       attackingSide,
       "CONTEST",
-      `${attackerRep.lname} wins the ${contestType === "markContested" ? "contested mark" : "ground ball"}`,
+      `${attackerRep.lname} wins the ${CONTEST_WIN_LABEL[contestType]}`,
       [attackerRep.PlayerID, defenderRep.PlayerID],
       deltas,
     );
@@ -461,6 +584,10 @@ function runContest(ctx: Ctx, state: State): State {
 
   const line = lineFor(ctx, defenderRep);
   line.contestedPoss += 1;
+  const spoilDeltas: StatDelta[] = [
+    { playerId: defenderRep.PlayerID, stat: "contestedPoss", delta: 1 },
+    ...recordContest(ctx, contestType, defenderRep, attackerRep),
+  ];
   log(
     ctx,
     state.zone,
@@ -468,7 +595,7 @@ function runContest(ctx: Ctx, state: State): State {
     "CONTEST",
     `${defenderRep.lname} spoils it and takes control`,
     [defenderRep.PlayerID, attackerRep.PlayerID],
-    [{ playerId: defenderRep.PlayerID, stat: "contestedPoss", delta: 1 }],
+    spoilDeltas,
   );
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: defenderRep };
 }

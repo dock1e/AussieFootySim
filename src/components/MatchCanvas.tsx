@@ -4,6 +4,7 @@ import type { MatchTeam } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
 import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_END_CAP_FRACTION, type DotPosition, type BallTarget } from "../engine/ground";
 import { ACTIVE_GROUND } from "../data/grounds";
+import { DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
 
 /**
  * The signature feature — User Interface.md "Match simulation screen": a
@@ -556,9 +557,21 @@ export interface MatchCanvasProps {
   liveBoxScore?: Record<number, BoxScoreLine>;
   /** Freezes the continuous off-ball drift while paused, so "Pause" reads like a real pause rather than players still jiggling in place. Defaults true so every other current caller (there are none yet outside LiveMatch.tsx, but this keeps the prop genuinely optional) keeps animating. */
   isPlaying?: boolean;
+  /** Each side's current game style — Aug 2026, feeds `computeDotPositions`'s new static positional bias (see engine/ground.ts's `gameStyleAnchorBias`). Both default to Balanced (zero bias, byte-identical rendering to before this prop existed) so every caller that doesn't know or care about game style keeps working unchanged. */
+  homeStyle?: GameStyle;
+  awayStyle?: GameStyle;
 }
 
-export function MatchCanvas({ home, away, event, nextEvent = null, liveBoxScore, isPlaying = true }: MatchCanvasProps) {
+export function MatchCanvas({
+  home,
+  away,
+  event,
+  nextEvent = null,
+  liveBoxScore,
+  isPlaying = true,
+  homeStyle = DEFAULT_GAME_STYLE,
+  awayStyle = DEFAULT_GAME_STYLE,
+}: MatchCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<DotPosition | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -576,6 +589,10 @@ export function MatchCanvas({ home, away, event, nextEvent = null, liveBoxScore,
   nextEventRef.current = nextEvent;
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
+  const homeStyleRef = useRef(homeStyle);
+  homeStyleRef.current = homeStyle;
+  const awayStyleRef = useRef(awayStyle);
+  awayStyleRef.current = awayStyle;
 
   const renderedRef = useRef<Map<number, DotPosition>>(new Map());
   const lastDrawnDotsRef = useRef<DotPosition[]>([]); // what's actually on screen right now, for hover hit-testing
@@ -594,7 +611,9 @@ export function MatchCanvas({ home, away, event, nextEvent = null, liveBoxScore,
     const teamsKey = `${home.name}:${away.name}`;
     if (teamsKeyRef.current !== teamsKey) {
       teamsKeyRef.current = teamsKey;
-      renderedRef.current = new Map(computeDotPositions(home, away, eventRef.current).map((d) => [d.playerId, d]));
+      renderedRef.current = new Map(
+        computeDotPositions(home, away, eventRef.current, 0, homeStyleRef.current, awayStyleRef.current).map((d) => [d.playerId, d]),
+      );
     }
   }, [home, away]);
 
@@ -616,7 +635,14 @@ export function MatchCanvas({ home, away, event, nextEvent = null, liveBoxScore,
       const currentAway = awayRef.current;
       const currentEvent = eventRef.current;
       const currentNextEvent = nextEventRef.current;
-      const targets = computeDotPositions(currentHome, currentAway, currentEvent, driftElapsedRef.current);
+      const targets = computeDotPositions(
+        currentHome,
+        currentAway,
+        currentEvent,
+        driftElapsedRef.current,
+        homeStyleRef.current,
+        awayStyleRef.current,
+      );
       const smoothing = 1 - Math.pow(0.5, dt / SMOOTHING_HALF_LIFE_MS);
 
       const rendered = renderedRef.current;

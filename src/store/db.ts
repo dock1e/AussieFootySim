@@ -13,9 +13,20 @@ import type { SerializedSaveGame } from "../engine/saveGame";
  * raw Map-bearing `SaveGameData`), the same form the JSON export/import
  * path uses — one representation, see saveGame.ts's "Serialization" section
  * for why that's not just tidiness but avoids a real silent-data-loss trap.
+ *
+ * **`DB_NAME` renamed Aug 2026** (SimAFL -> AussieFootySim rebrand, round
+ * 15) — Tyler explicitly signed off on orphaning any existing browser save
+ * under the old `simafl-save` name rather than migrating it ("it's ok to
+ * orphan (delete) any current save files that exist"), so this is a genuine
+ * one-way break, not an oversight: anyone with an old save gets a fresh
+ * empty DB under the new name, the old IndexedDB database simply stops being
+ * opened (still physically present in the browser, just unreachable through
+ * this app — a real, if inert, "delete" would need `indexedDB.deleteDatabase`
+ * called against the *old* name specifically, not attempted here since
+ * nothing asked for that extra step).
  */
 
-const DB_NAME = "simafl-save";
+const DB_NAME = "aussiefootysim-save";
 const DB_VERSION = 1;
 const STORE_NAME = "saves";
 const SAVE_KEY = "current";

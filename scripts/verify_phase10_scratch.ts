@@ -231,7 +231,15 @@ console.log(outOfBounds === 0 ? "PASS: every dot stays within the new ground bou
 console.log("\n--- 5. Live per-player stat sidebar math ---");
 
 function emptyLine(): BoxScoreLine {
-  return { disposals: 0, kicks: 0, handballs: 0, marks: 0, contestedMarks: 0, tackles: 0, clearances: 0, hitouts: 0, contestedPoss: 0, uncontestedPoss: 0, goals: 0, behinds: 0 };
+  return {
+    disposals: 0, kicks: 0, handballs: 0, marks: 0, contestedMarks: 0, tackles: 0, clearances: 0, hitouts: 0,
+    contestedPoss: 0, uncontestedPoss: 0, goals: 0, behinds: 0,
+    // Round 15 (Aug 2026) additions - kept in sync with match.ts's own emptyLine();
+    // see that file's doc comment for what each pair means.
+    markLeadAttempts: 0, markLeadWins: 0, markContestedAttempts: 0, markContestedWins: 0,
+    groundBallAttempts: 0, groundBallWins: 0, tackleAttempts: 0, tackleWins: 0,
+    ruckAttempts: 0, ruckWins: 0, clearanceAttempts: 0, clearanceWins: 0,
+  };
 }
 
 const allIds = [...home.players, ...away.players].map((p) => p.PlayerID);

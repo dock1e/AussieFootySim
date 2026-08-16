@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fantasyPointsFor, computeSimAFLRatings } from "./ratings";
+import { fantasyPointsFor, computeAussieFootySimRatings } from "./ratings";
 import type { BoxScoreLine, MatchEvent, MatchResult, StatDelta } from "./match";
 import type { MatchTeam } from "./team";
 import type { Zone } from "./zones";
@@ -87,13 +87,13 @@ describe("fantasyPointsFor", () => {
   });
 });
 
-describe("computeSimAFLRatings", () => {
+describe("computeAussieFootySimRatings", () => {
   it("gives every selected player a line, zero for anyone the event log never credits", () => {
     const home = makeTeam("Home", [1, 2, 3]);
     const away = makeTeam("Away", [4, 5, 6]);
     const events = [ev({ tick: 1, zone: 4, phase: "SHOT", statDeltas: [{ playerId: 1, stat: "goals", delta: 1 }] })];
     const result = makeResult(events);
-    const ratings = computeSimAFLRatings(result, home, away);
+    const ratings = computeAussieFootySimRatings(result, home, away);
 
     expect(Object.keys(ratings)).toHaveLength(6);
     expect(ratings[1].rating).toBeGreaterThan(0);
@@ -106,7 +106,7 @@ describe("computeSimAFLRatings", () => {
   it("returns all-zero ratings for a match with no recorded events, without crashing", () => {
     const home = makeTeam("Home", [1, 2]);
     const away = makeTeam("Away", [3, 4]);
-    const ratings = computeSimAFLRatings(makeResult([]), home, away);
+    const ratings = computeAussieFootySimRatings(makeResult([]), home, away);
     for (const id of [1, 2, 3, 4]) {
       expect(ratings[id].rating).toBe(0);
       expect(Number.isFinite(ratings[id].rating)).toBe(true);
@@ -120,7 +120,7 @@ describe("computeSimAFLRatings", () => {
       ev({ tick: 1, zone: 4, phase: "SHOT", statDeltas: [{ playerId: 1, stat: "goals", delta: 1 }] }),
       ev({ tick: 2, zone: 4, phase: "SHOT", statDeltas: [{ playerId: 2, stat: "behinds", delta: 1 }] }),
     ];
-    const ratings = computeSimAFLRatings(makeResult(events), home, away);
+    const ratings = computeAussieFootySimRatings(makeResult(events), home, away);
     expect(ratings[1].rating).toBeGreaterThan(ratings[2].rating);
   });
 
@@ -131,7 +131,7 @@ describe("computeSimAFLRatings", () => {
       ev({ tick: 1, zone: 4, phase: "GENERAL_PLAY", statDeltas: [{ playerId: 1, stat: "tackles", delta: 1 }] }),
       ev({ tick: 2, zone: 2, phase: "GENERAL_PLAY", statDeltas: [{ playerId: 2, stat: "tackles", delta: 1 }] }),
     ];
-    const ratings = computeSimAFLRatings(makeResult(events), home, away);
+    const ratings = computeAussieFootySimRatings(makeResult(events), home, away);
     expect(ratings[1].rating).toBeGreaterThan(ratings[2].rating);
   });
 
@@ -144,7 +144,7 @@ describe("computeSimAFLRatings", () => {
       ev({ tick: 1, zone: 2, phase: "GENERAL_PLAY", statDeltas: [{ playerId: 1, stat: "tackles", delta: 1 }] }),
       ev({ tick: 99, zone: 2, phase: "GENERAL_PLAY", statDeltas: [{ playerId: 2, stat: "tackles", delta: 1 }] }),
     ];
-    const ratings = computeSimAFLRatings(makeResult(events, 100), home, away);
+    const ratings = computeAussieFootySimRatings(makeResult(events, 100), home, away);
     expect(ratings[2].rating).toBeGreaterThan(ratings[1].rating);
   });
 
@@ -161,8 +161,8 @@ describe("computeSimAFLRatings", () => {
       ev({ tick: 1, zone: 2, phase: "STOPPAGE", statDeltas: [{ playerId: 3, stat: "hitouts", delta: 1 }] }),
       ev({ tick: 1, zone: 2, phase: "STOPPAGE", statDeltas: [{ playerId: 1, stat: "clearances", delta: 1 }] }),
     ];
-    const ratingsAdvantage = computeSimAFLRatings(makeResult(advantage), home, away);
-    const ratingsSharked = computeSimAFLRatings(makeResult(sharked), home, away);
+    const ratingsAdvantage = computeAussieFootySimRatings(makeResult(advantage), home, away);
+    const ratingsSharked = computeAussieFootySimRatings(makeResult(sharked), home, away);
     // Each hitout-winner's own rating, in their own match's normalised pool —
     // "to advantage" should clearly outscore "sharked" for the hitout winner specifically.
     expect(ratingsAdvantage[1].rating).toBeGreaterThan(ratingsSharked[3].rating);
@@ -175,8 +175,8 @@ describe("computeSimAFLRatings", () => {
     const fiveTackles = makeResult(
       Array.from({ length: 5 }, (_, i) => ev({ tick: i + 1, zone: 2, phase: "GENERAL_PLAY", statDeltas: [{ playerId: 2, stat: "tackles", delta: 1 }] })),
     );
-    const a = computeSimAFLRatings(oneGoal, home, away);
-    const b = computeSimAFLRatings(fiveTackles, home, away);
+    const a = computeAussieFootySimRatings(oneGoal, home, away);
+    const b = computeAussieFootySimRatings(fiveTackles, home, away);
     // Each match has exactly one scoring player, so that player collects the whole pool in
     // both cases — the two totals should match despite wildly different raw point totals.
     expect(a[1].rating).toBeCloseTo(b[2].rating, 6);
@@ -189,7 +189,7 @@ describe("computeSimAFLRatings", () => {
       ev({ tick: 1, zone: 2, phase: "GENERAL_PLAY", statDeltas: [{ playerId: 1, stat: "tackles", delta: 1 }] }),
       ev({ tick: 99, zone: 2, phase: "GENERAL_PLAY", statDeltas: [{ playerId: 2, stat: "tackles", delta: 1 }] }),
     ];
-    const ratings = computeSimAFLRatings(makeResult(events, 100), home, away);
+    const ratings = computeAussieFootySimRatings(makeResult(events, 100), home, away);
     const totalClutch = Object.values(ratings).reduce((s, r) => s + r.clutch, 0);
     expect(totalClutch).toBeCloseTo(0, 6);
   });

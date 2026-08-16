@@ -1,6 +1,6 @@
-# SimAFL — app
+# AussieFootySim — app
 
-The coded implementation of the design in the vault one level up (`../SimAFL.md`,
+The coded implementation of the design in the vault one level up (`../AussieFootySim.md`,
 `../Engine.md`, `../User Interface.md`, `../Configuration.md`, `../Player Database/`).
 See `../ROADMAP.md` for what's built vs. what's next.
 

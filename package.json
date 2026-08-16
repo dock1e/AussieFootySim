@@ -1,8 +1,8 @@
 {
-  "name": "simafl",
+  "name": "aussiefootysim",
   "private": true,
   "version": "0.1.0",
-  "description": "SimAFL - a from-scratch recreation of Premiership Coach 11 (PC11). Match engine + club-management UI.",
+  "description": "AussieFootySim - a from-scratch recreation of Premiership Coach 11 (PC11). Match engine + club-management UI.",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -6,7 +6,7 @@ import type { BoxScoreLine, MatchResult } from "./match.ts";
  * rest of src/engine/. The old placeholder composite rating that used to
  * live here (disposals + 2*marks + 2*tackles + 2*clearances + 0.5*hitouts +
  * 6*goals) is gone — Best on Ground/Top Performers now use the real
- * event-weighted SimAFL Rating from ratings.ts (Phase 5), not a box-score
+ * event-weighted AussieFootySim Rating from ratings.ts (Phase 5), not a box-score
  * approximation.
  */
 

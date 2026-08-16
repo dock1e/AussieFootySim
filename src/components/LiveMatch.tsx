@@ -366,7 +366,7 @@ function ScoreBlock({
  * tracked per player, so CLG/DE/TOG are left out rather than faked. SC
  * (fantasy points) *is* real: `ratings.ts`'s `fantasyPointsFor` is a pure
  * function of `BoxScoreLine` totals with no whole-match normalisation step,
- * so — unlike `computeSimAFLRatings`, which rescales against the *entire*
+ * so — unlike `computeAussieFootySimRatings`, which rescales against the *entire*
  * match's final point pool and can't mean anything read mid-match — it's
  * safe to recompute live, every tick, from `liveBoxScore` alone. Sorted by
  * that live fantasy score, same "who's actually having a good game right

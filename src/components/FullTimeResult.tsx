@@ -3,7 +3,7 @@ import type { MatchResult, BoxScoreLine } from "../engine/match";
 import type { MatchTeam } from "../engine/team";
 import type { Player } from "../types/player";
 import { quarterlyPoints, sumTeam } from "../engine/summary";
-import { computeSimAFLRatings, fantasyPointsFor } from "../engine/ratings";
+import { computeAussieFootySimRatings, fantasyPointsFor } from "../engine/ratings";
 
 /**
  * Full-time result screen — User Interface.md "Full-time result": score,
@@ -14,10 +14,10 @@ import { computeSimAFLRatings, fantasyPointsFor } from "../engine/ratings";
  * simulator has no "my club"/save-game concept yet, so the VICTORY/DEFEAT-
  * framed recap card doesn't have a perspective to frame itself from — shown
  * neutrally instead. Best on Ground/Top Performers are now ranked by the
- * real event-weighted SimAFL Rating (Player Ratings.md, engine/ratings.ts,
+ * real event-weighted AussieFootySim Rating (Player Ratings.md, engine/ratings.ts,
  * Phase 5) rather than the old placeholder box-score composite — shown
  * alongside Fantasy Points as twin numbers per Player Ratings.md's own UI
- * research ("showing Fantasy Points and SimAFL Rating as twin columns makes
+ * research ("showing Fantasy Points and AussieFootySim Rating as twin columns makes
  * the difference between volume and quality visible at a glance").
  */
 
@@ -49,7 +49,7 @@ export function FullTimeResult({
   const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
 
   const quarters = useMemo(() => quarterlyPoints(result, homeIds, awayIds), [result, homeIds, awayIds]);
-  const simRatings = useMemo(() => computeSimAFLRatings(result, homeTeam, awayTeam), [result, homeTeam, awayTeam]);
+  const simRatings = useMemo(() => computeAussieFootySimRatings(result, homeTeam, awayTeam), [result, homeTeam, awayTeam]);
 
   const margin = result.home.points - result.away.points;
   const winner = margin > 0 ? homeTeam.name : margin < 0 ? awayTeam.name : null;
@@ -136,7 +136,7 @@ export function FullTimeResult({
               <div className="flex gap-3 border-l border-base-600 pl-4 text-center">
                 <div>
                   <div className="text-xl font-bold tabular-nums text-accent">{bestOnGround.rating.toFixed(0)}</div>
-                  <div className="text-[10px] uppercase tracking-wide text-slate-500">SimAFL Rating</div>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">AussieFootySim Rating</div>
                 </div>
                 <div>
                   <div className="text-xl font-semibold tabular-nums text-slate-300">{bestOnGround.fantasyPoints}</div>
@@ -273,7 +273,7 @@ function TopPerformers({
               <span className="text-slate-400" title="Fantasy Points">
                 {fantasyPoints}fp
               </span>
-              <span className="w-10 text-right font-bold text-accent" title="SimAFL Rating">
+              <span className="w-10 text-right font-bold text-accent" title="AussieFootySim Rating">
                 {rating.toFixed(0)}
               </span>
             </span>

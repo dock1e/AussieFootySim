@@ -3,7 +3,7 @@ import type { MatchTeam } from "./team.ts";
 import type { Side, Zone } from "./zones.ts";
 
 /**
- * Player Ratings.md "SimAFL's own scoring stack" — layers 2 and 3 of the
+ * Player Ratings.md "AussieFootySim's own scoring stack" — layers 2 and 3 of the
  * proposed four-layer stack (layer 1, the box score, already exists in
  * match.ts; layer 4, the recency-weighted Season Rating, needs the
  * persistent multi-match history this project doesn't have yet — see
@@ -47,7 +47,7 @@ export function fantasyPointsFor(line: BoxScoreLine): number {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 3: SimAFL Rating — "award points per resolved engine event... apply
+// Layer 3: AussieFootySim Rating — "award points per resolved engine event... apply
 // the zone multiplier... apply a live state-of-game multiplier... apply a
 // per-match normalisation pass." Every constant below is the same kind of
 // "deliberately roughed in, checked against real reference points, meant for
@@ -57,7 +57,7 @@ export function fantasyPointsFor(line: BoxScoreLine): number {
 // weights.
 // ---------------------------------------------------------------------------
 
-export interface SimAFLRatingLine {
+export interface AussieFootySimRatingLine {
   playerId: number;
   /** The headline number — event-weighted, zone- and state-of-game-adjusted, pool-normalised. */
   rating: number;
@@ -111,7 +111,7 @@ const STATE_CEILING = 2.0;
 const STATE_FLOOR = 0.5;
 
 /**
- * Target pool every match's *un-normalised* raw and adjusted SimAFL Rating
+ * Target pool every match's *un-normalised* raw and adjusted AussieFootySim Rating
  * totals get rescaled to — Player Ratings.md's own "3300 rule" equivalent,
  * "pick a target pool that reads well against our 1-99 attribute scale."
  *
@@ -222,7 +222,7 @@ function eventPoints(
 }
 
 /**
- * The full SimAFL Rating for every selected player in `result`, keyed by
+ * The full AussieFootySim Rating for every selected player in `result`, keyed by
  * PlayerID — every player on both `home`/`away` gets a line, zero if the
  * event log never credited them with anything, same "everyone gets a line"
  * convention match.ts's own boxScore uses.
@@ -233,11 +233,11 @@ function eventPoints(
  * simulator's 10,000-game mode) will produce all-zero lines here. Expected,
  * not a bug: the balance simulator doesn't call this function.
  */
-export function computeSimAFLRatings(
+export function computeAussieFootySimRatings(
   result: MatchResult,
   home: MatchTeam,
   away: MatchTeam,
-): Record<number, SimAFLRatingLine> {
+): Record<number, AussieFootySimRatingLine> {
   const sideOf = new Map<number, Side>();
   for (const p of home.players) sideOf.set(p.PlayerID, "home");
   for (const p of away.players) sideOf.set(p.PlayerID, "away");
@@ -284,7 +284,7 @@ export function computeSimAFLRatings(
   const scaleRaw = totalRaw > 0 ? TARGET_POOL / totalRaw : 0;
   const scaleAdjusted = totalAdjusted > 0 ? TARGET_POOL / totalAdjusted : 0;
 
-  const out: Record<number, SimAFLRatingLine> = {};
+  const out: Record<number, AussieFootySimRatingLine> = {};
   for (const p of [...home.players, ...away.players]) {
     const id = p.PlayerID;
     const normRaw = raw[id] * scaleRaw;

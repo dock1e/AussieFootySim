@@ -17,7 +17,7 @@ import { fitnessBand, moraleBand, NumberWithPill, StatusPill, type PillTone } fr
  * history no part of this app persists yet — see ROADMAP.md gap #35) and a
  * "Professionalism"/"Trend" scouting readout (not a modelled attribute
  * anywhere in Schema.md). Both are omitted with a short on-screen note
- * rather than invented. ATTRIBUTES shows all 20 of SimAFL's own rated
+ * rather than invented. ATTRIBUTES shows all 20 of AussieFootySim's own rated
  * attributes rather than the reference site's smaller curated set — a
  * deliberate "improved modern version" call, not an oversight.
  */

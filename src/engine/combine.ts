@@ -18,7 +18,7 @@ import { playerFullName } from "../types/player.ts";
  * one paragraph is genuinely everything given.) Engine.md separately notes
  * the reference site's Combine is "purely numeric... the strongest single
  * argument for the qualitative layer specced under National Draft" — this
- * file's `combineHeadlines` below is SimAFL's answer to that flagged gap, a
+ * file's `combineHeadlines` below is AussieFootySim's answer to that flagged gap, a
  * small one, not a big narrative-generation system.
  *
  * Framework-free and deterministic, same rule every other `engine/*.ts` file
@@ -321,7 +321,7 @@ export function computeCombineResults(fullPool: readonly Player[], invitees: rea
 }
 
 // ---------------------------------------------------------------------------
-// Riser/faller headlines — SimAFL's small answer to the vault's own flagged
+// Riser/faller headlines — AussieFootySim's small answer to the vault's own flagged
 // "purely numeric, zero narrative text" gap, not a big NLG system.
 // ---------------------------------------------------------------------------
 

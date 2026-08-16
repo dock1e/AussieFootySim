@@ -25,3 +25,14 @@ sim-results/
 npm-debug.log*
 .vscode/*
 !.vscode/extensions.json
+
+# disposable scratch/diagnostic scripts (Vitest can't run in the dev sandbox
+# this project was built in - see ROADMAP.md - so these stand in for the
+# test suite each round, then get left in place rather than deleted; never
+# meant to be part of the real commit history)
+*.throwaway
+*.superseded
+# a stray copy of one of the above, saved without the .throwaway suffix by
+# mistake and left un-deletable by a sandbox permissions quirk - inert, see
+# its own first line
+scripts/.verify_tactics_pptx_scratch.ts

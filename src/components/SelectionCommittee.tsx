@@ -3,6 +3,7 @@ import type { Player } from "../types/player";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
 import { useTeamPlanStore } from "../store/useTeamPlanStore";
+import { useSaveStore } from "../store/useSaveStore";
 import { getPlayersByClub } from "../data/loadPlayers";
 import { emptyLineup, isLineupComplete, lineupPlayerIds, lineupToMatchTeam } from "../engine/selection";
 import { pickBest22 } from "../engine/team";
@@ -138,7 +139,10 @@ export function SelectionCommittee() {
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs uppercase tracking-wide text-slate-400">Standing Game Plan</div>
+        <div className="flex items-center justify-between">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Standing Game Plan</div>
+          <SavedIndicator />
+        </div>
         <div className="card text-xs text-slate-400">
           Sets {myClub}'s default tactics and game style. The Match tab always lets you set tactics
           fresh in Match Preparation before kick-off, but the Season tab simulates rounds headlessly
@@ -156,5 +160,30 @@ export function SelectionCommittee() {
         />
       </div>
     </div>
+  );
+}
+
+/**
+ * Reuses App.tsx's SaveMenu "Saved HH:MM:SS" dot right next to the section
+ * being edited — Aug 2026, round 17, Tyler: "once I've done all these edits
+ * in my standing game plan I want a save button or some kind of visual
+ * reference to indicate that these changes will be remembered." There's
+ * deliberately no manual Save button anywhere in this app (see SaveMenu's
+ * own doc comment) — useTeamPlanStore is already one of the stores
+ * useSaveStore.ts auto-saves on every change (its `subscribed` block), so
+ * standing-plan edits were already being remembered; the actual gap was that
+ * nothing near this section said so. Reuses `useSaveStore`'s existing
+ * `lastSavedAt` signal rather than adding a second, competing save concept.
+ */
+function SavedIndicator() {
+  const lastSavedAt = useSaveStore((s) => s.lastSavedAt);
+  return (
+    <span
+      className="flex items-center gap-1.5 text-[11px] tabular-nums text-slate-500"
+      title="Saving is automatic — there's no manual Save button, this confirms your standing game plan changes are being remembered"
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${lastSavedAt ? "bg-good" : "bg-base-600"}`} />
+      {lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : "Not saved yet"}
+    </span>
   );
 }

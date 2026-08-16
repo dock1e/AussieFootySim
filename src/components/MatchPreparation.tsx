@@ -4,8 +4,11 @@ import type { Archetype, Position } from "../types/archetype";
 import { suitabilityFor } from "../types/archetype";
 import type { MatchTeam } from "../engine/team";
 import { benchPlayers } from "../engine/team";
+import { useGameStore } from "../store/useGameStore";
+import { useTeamPlanStore } from "../store/useTeamPlanStore";
 import {
   tacticGroupFor,
+  tacticGroupForSlot,
   tacticsFor,
   defaultTacticForPosition,
   GAME_STYLES,
@@ -74,10 +77,36 @@ export interface MatchPreparationProps {
 }
 
 export function MatchPreparation({ homeTeam, awayTeam, onBack, onKickOff }: MatchPreparationProps) {
-  const [homeStyle, setHomeStyle] = useState<GameStyle>("Balanced");
-  const [awayStyle, setAwayStyle] = useState<GameStyle>("Balanced");
-  const [homeTactics, setHomeTactics] = useState<Map<number, PlayerTactic>>(new Map());
-  const [awayTactics, setAwayTactics] = useState<Map<number, PlayerTactic>>(new Map());
+  const myClub = useGameStore((s) => s.myClub);
+
+  /**
+   * Standing Game Plan seed — Aug 2026, round 17, Tyler: "When I select my
+   * standing game plan, it should copy as the default game plan which
+   * applies in the Match tab. After setting my standard game plan I
+   * navigated to the Match tab and needed to reselect all the roles again."
+   * Whichever side is the coach's own club starts from their Standing Game
+   * Plan (useTeamPlanStore.ts, edited on the Selection tab) instead of
+   * always-blank defaults; the other side (an AI opponent, or neither side if
+   * this is a spectated AI-vs-AI friendly) is unaffected. Read once via
+   * `getState()` inside a lazy `useState` initialiser rather than a
+   * subscribed hook — this screen is freshly mounted every time LiveMatch
+   * enters "prep" stage and thrown away on Back/Kick Off, so it only ever
+   * needs a one-time editable *copy* of the standing plan, the same
+   * "snapshot, not a live binding" relationship Selection Committee's own
+   * lineup editor already has with the underlying store.
+   */
+  const [homeStyle, setHomeStyle] = useState<GameStyle>(() =>
+    homeTeam.name === myClub ? (useTeamPlanStore.getState().planFor(myClub)?.gameStyle ?? "Balanced") : "Balanced",
+  );
+  const [awayStyle, setAwayStyle] = useState<GameStyle>(() =>
+    awayTeam.name === myClub ? (useTeamPlanStore.getState().planFor(myClub)?.gameStyle ?? "Balanced") : "Balanced",
+  );
+  const [homeTactics, setHomeTactics] = useState<Map<number, PlayerTactic>>(
+    () => new Map(homeTeam.name === myClub ? useTeamPlanStore.getState().planFor(myClub)?.tactics : undefined),
+  );
+  const [awayTactics, setAwayTactics] = useState<Map<number, PlayerTactic>>(
+    () => new Map(awayTeam.name === myClub ? useTeamPlanStore.getState().planFor(myClub)?.tactics : undefined),
+  );
 
   function updateTactic(
     side: "home" | "away",
@@ -322,7 +351,12 @@ function PositionCell({
     );
   }
 
-  const group = tacticGroupFor(player.archetype as Archetype);
+  // Round 17, Tyler: "when I select Max Gawn at Full Forward the role
+  // options that present to me are based on Max Gawn as a Ruck... he should
+  // be asked to play the role of a full forward" — this cell always renders
+  // a real, known on-ground position (never INT), so `tacticGroupForSlot`
+  // always resolves via that position, not the player's raw archetype.
+  const group = tacticGroupForSlot(position, player.archetype as Archetype);
   const current = tactics.get(player.PlayerID)?.tactic ?? defaultTacticForPosition(position, group);
   const taggingTargetId = tactics.get(player.PlayerID)?.taggingTargetId;
   const suitability = suitabilityFor(player.archetype as Archetype, position);

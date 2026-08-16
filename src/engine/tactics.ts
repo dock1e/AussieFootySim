@@ -73,6 +73,58 @@ export function tacticGroupFor(archetype: Archetype): TacticGroup {
   return TACTIC_GROUP[archetype];
 }
 
+/**
+ * Position -> tactic group, for wherever a real Selection Committee/Match
+ * Preparation ground slot is known — Aug 2026, round 17, Tyler: "when I
+ * select Max Gawn at Full Forward the role options that present to me are
+ * based on Max Gawn as a Ruck. But if I am selecting him at Full Forward he
+ * should be asked to play the role of a full forward." Deliberately keyed on
+ * what the *job* at each position actually calls for, not which archetype
+ * usually fills it — RR and ROV read as "Midfield" (the on-ball rover/rover
+ * job, matching Tyler's own suitability corrections beside this file's
+ * SUITABILITY_MAP, none of which mention the Ruck archetype at RR/ROV), and
+ * FP/HFF read as "SmallForward" (crumbing/leading/pressing) even though a
+ * tall Key Forward or a resting Ruck can now be suitably parked there per
+ * that same round's Back Pocket/Forward Pocket corrections — being a good
+ * *fit* for a position and being asked to *play its role* are different
+ * questions, and this map only answers the second one. `INT` is
+ * deliberately absent (the interchange bench isn't a tactical role) and
+ * falls through to the archetype default in `tacticGroupForSlot` below, same
+ * as a genuinely unknown position.
+ */
+const POSITION_TACTIC_GROUP: Partial<Record<Position, TacticGroup>> = {
+  FB: "Defender",
+  BP: "Defender",
+  HBF: "Defender",
+  CHB: "Defender",
+  W: "Midfield",
+  C: "Midfield",
+  ROV: "Midfield",
+  RR: "Midfield",
+  R: "Ruck",
+  HFF: "SmallForward",
+  FP: "SmallForward",
+  CHF: "KeyForward",
+  FF: "KeyForward",
+};
+
+/**
+ * The effective tactic group a player should actually be offered: their real
+ * ground position when one is known (an on-field Selection Committee/Match
+ * Preparation slot — `INT` doesn't count), falling back to their own
+ * archetype's group otherwise — the same fallback shape
+ * `defaultTacticForPosition` already uses for the *default value*, now
+ * applied to the *options list and validity check* too (see `sanitizePlan`
+ * and `MatchPreparation.tsx`'s `PositionCell`, the two real call sites this
+ * was built for). A team with no completed lineup (no `positions` map at
+ * all — `FlatTacticList`'s case) degrades to exactly the old archetype-only
+ * behaviour, unchanged.
+ */
+export function tacticGroupForSlot(position: Position | undefined, archetype: Archetype): TacticGroup {
+  const positional = position && position !== "INT" ? POSITION_TACTIC_GROUP[position] : undefined;
+  return positional ?? tacticGroupFor(archetype);
+}
+
 const TACTICS_BY_GROUP: Record<TacticGroup, readonly Tactic[]> = {
   Midfield: MIDFIELD_TACTICS,
   KeyForward: KEY_FORWARD_TACTICS,
@@ -208,7 +260,14 @@ export function aiTeamPlan(clubPlayers: Player[], leagueAvgOvr: number): TeamPla
 export function sanitizePlan(players: readonly Player[], plan: TeamPlan, positions?: Map<number, Position>): TeamPlan {
   const tactics = new Map<number, PlayerTactic>();
   for (const p of players) {
-    const group = tacticGroupFor(p.archetype as Archetype);
+    // Round 17: position-driven when a real slot is known (see
+    // `tacticGroupForSlot`'s own doc comment) — otherwise this fix would be
+    // cosmetic only: the UI would *offer* Max Gawn Full-Forward tactics, but
+    // this validation pass (which every plan goes through before match.ts
+    // uses it — see this function's own doc comment above) would still
+    // silently discard his pick as "invalid for a Ruck" and reset him back
+    // to a Ruck default.
+    const group = tacticGroupForSlot(positions?.get(p.PlayerID), p.archetype as Archetype);
     const valid: readonly Tactic[] = tacticsFor(group);
     const existing = plan.tactics.get(p.PlayerID);
     const fallback = defaultTacticForPosition(positions?.get(p.PlayerID), group);

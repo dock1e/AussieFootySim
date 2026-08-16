@@ -8,7 +8,7 @@ import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
 import { weightedPlayerChoice } from "./involvement.ts";
 import {
-  tacticGroupFor,
+  tacticGroupForSlot,
   defaultTacticForPosition,
   ruckHitoutMultiplier,
   taggingClearanceMultiplier,
@@ -248,13 +248,20 @@ function planFor(ctx: Ctx, side: Side): TeamPlan | null {
  * all, otherwise their explicit choice or their default — their own
  * position's default (Aug 2026, e.g. a Back Pocket falls back to "General
  * Defender") when `positions` is supplied, otherwise their tactic group's
- * plain default, same as before `positions` threading existed.
+ * plain default, same as before `positions` threading existed. In practice
+ * `plan` here has always already been through `sanitizePlan` (see
+ * `startMatch` below), which fills every player in with a real `explicit`
+ * entry, so this fallback is defensive rather than load-bearing — kept
+ * position-aware (`tacticGroupForSlot`, round 17) anyway so it can't silently
+ * disagree with `sanitizePlan`'s own group if this is ever called with a raw
+ * plan some other way.
  */
 function tacticFor(plan: TeamPlan | null, player: Player, positions?: Map<number, Position>): Tactic | undefined {
   if (!plan) return undefined;
   const explicit = plan.tactics.get(player.PlayerID)?.tactic;
   if (explicit) return explicit;
-  return defaultTacticForPosition(positions?.get(player.PlayerID), tacticGroupFor(player.archetype as Archetype));
+  const position = positions?.get(player.PlayerID);
+  return defaultTacticForPosition(position, tacticGroupForSlot(position, player.archetype as Archetype));
 }
 
 function styleFor(plan: TeamPlan | null) {

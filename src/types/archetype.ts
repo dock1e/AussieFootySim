@@ -101,27 +101,48 @@ export type Suitability = "Very suitable" | "Somewhat suitable" | "Barely suitab
  * "Archetype -> position suitability (starting map)". Anything not listed
  * for a given archetype defaults to "Barely suitable"; a genuinely nonsense
  * pairing (e.g. a Ruck at BP) is "Not suitable" — see `suitabilityFor`.
+ *
+ * Aug 2026, round 17 — Tyler's real-AFL corrections (live-tested: "the Ruck
+ * Rover role is always yellow and never green"):
+ *   - Rover/Centre: Inside Mid and Outside Mid both primary (green); Hybrid
+ *     Mid Forward secondary (yellow) in either.
+ *   - Ruck Rover: Outside Mid, Inside Mid, and Hybrid Mid Forward all
+ *     primary; Half Back Flanker secondary — the actual bug fix, since
+ *     nothing was ever "very suitable" at RR before this.
+ *   - Wing: Outside Mid and Half Back Flanker both primary (Half Back
+ *     Flanker was only ever secondary before); Hybrid Mid Forward secondary
+ *     (already correct, kept as-is).
+ *   - Back Pocket: "dynamic and flexible... tall defenders playing 3rd man
+ *     up or on a 3rd tall/resting ruck... a general Medium defender or a
+ *     small lock down defender" — Key Defender promoted to primary,
+ *     joining Medium Defender and the Back Pocket archetype itself (both
+ *     already primary there).
+ *   - Forward Pocket: "dynamic and flexible... smalls, mediums, key
+ *     forwards or resting rucks" — Key Forward promoted to primary
+ *     (joining Small/Medium/Pressure Forward, already primary); Ruck gains
+ *     secondary suitability there for the first time (was "Not suitable" —
+ *     see NOT_SUITABLE_OVERRIDE below).
  */
 const SUITABILITY_MAP: Record<Archetype, { very: Position[]; somewhat: Position[] }> = {
-  "Inside Mid": { very: ["C", "ROV"], somewhat: ["RR", "W"] },
-  "Outside Mid": { very: ["W"], somewhat: ["C", "HBF", "HFF"] },
-  Ruck: { very: ["R"], somewhat: ["RR", "FF"] },
+  "Inside Mid": { very: ["C", "ROV", "RR"], somewhat: ["W"] },
+  "Outside Mid": { very: ["W", "C", "ROV", "RR"], somewhat: ["HBF", "HFF"] },
+  Ruck: { very: ["R"], somewhat: ["RR", "FF", "FP"] },
   "Hybrid Key Forward Ruck": { very: ["FF", "R"], somewhat: ["RR", "CHF"] },
-  "Key Forward": { very: ["FF", "CHF"], somewhat: ["HFF", "FP"] },
-  "Hybrid Mid Forward": { very: ["HFF", "ROV"], somewhat: ["CHF", "W"] },
+  "Key Forward": { very: ["FF", "CHF", "FP"], somewhat: ["HFF"] },
+  "Hybrid Mid Forward": { very: ["HFF", "RR"], somewhat: ["CHF", "W", "ROV", "C"] },
   "Medium Forward": { very: ["HFF", "FP"], somewhat: ["CHF"] },
   "Small Forward": { very: ["FP"], somewhat: ["HFF"] },
   "Pressure Forward": { very: ["FP", "HFF"], somewhat: ["FF"] },
-  "Key Defender": { very: ["FB", "CHB"], somewhat: ["BP"] },
+  "Key Defender": { very: ["FB", "CHB", "BP"], somewhat: [] },
   "Intercept Defender": { very: ["CHB", "BP"], somewhat: ["HBF"] },
   "Medium Defender": { very: ["BP", "HBF"], somewhat: ["CHB"] },
-  "Half Back Flanker": { very: ["HBF"], somewhat: ["W", "BP"] },
+  "Half Back Flanker": { very: ["HBF", "W"], somewhat: ["BP", "RR"] },
   "Back Pocket": { very: ["BP"], somewhat: ["FB"] },
 };
 
-/** Slots a completely mismatched archetype (e.g. a Ruck at BP) reads as "Not suitable" rather than merely "Barely". */
+/** Slots a completely mismatched archetype (e.g. a Ruck at BP) reads as "Not suitable" rather than merely "Barely". Round 17: "FP" dropped from Ruck's list — a resting ruck in the forward pocket is now a real, if secondary, selection (see SUITABILITY_MAP above), not a nonsense one. */
 const NOT_SUITABLE_OVERRIDE: Partial<Record<Archetype, Position[]>> = {
-  Ruck: ["BP", "FB", "FP", "HBF"],
+  Ruck: ["BP", "FB", "HBF"],
   "Key Forward": ["BP", "FB"],
   "Key Defender": ["FF", "FP"],
 };

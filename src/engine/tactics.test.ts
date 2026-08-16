@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   tacticGroupFor,
+  tacticGroupForSlot,
   tacticsFor,
   defaultTacticFor,
   defaultTacticForPosition,
@@ -30,7 +31,7 @@ import {
   aiTeamPlan,
   type TeamPlan,
 } from "./tactics";
-import { ARCHETYPES, type Archetype } from "../types/archetype";
+import { ARCHETYPES, POSITIONS, type Archetype } from "../types/archetype";
 import { makePlayer } from "../testUtils/makePlayer";
 import type { Player } from "../types/player";
 
@@ -97,6 +98,39 @@ describe("tacticGroupFor / tacticsFor / defaultTacticFor", () => {
   });
 });
 
+describe("tacticGroupForSlot (round 17 — position-driven, not archetype-driven)", () => {
+  it("falls back to the archetype's own group when no position is known", () => {
+    expect(tacticGroupForSlot(undefined, "Ruck")).toBe(tacticGroupFor("Ruck"));
+    expect(tacticGroupForSlot(undefined, "Half Back Flanker")).toBe(tacticGroupFor("Half Back Flanker"));
+  });
+
+  it("falls back to the archetype's own group for INT (the interchange bench isn't a tactical role)", () => {
+    expect(tacticGroupForSlot("INT", "Ruck")).toBe(tacticGroupFor("Ruck"));
+  });
+
+  it("a Ruck placed at Full Forward is offered KeyForward tactics, not Ruck tactics — Tyler's exact Max Gawn report", () => {
+    expect(tacticGroupForSlot("FF", "Ruck")).toBe("KeyForward");
+    expect(tacticGroupForSlot("FF", "Ruck")).not.toBe(tacticGroupFor("Ruck"));
+  });
+
+  it("a Ruck placed at Centre Half Forward is also offered KeyForward tactics", () => {
+    expect(tacticGroupForSlot("CHF", "Ruck")).toBe("KeyForward");
+  });
+
+  it("Ruck Rover and Rover read as Midfield regardless of archetype — the actual on-ball job", () => {
+    expect(tacticGroupForSlot("RR", "Half Back Flanker")).toBe("Midfield");
+    expect(tacticGroupForSlot("ROV", "Hybrid Mid Forward")).toBe("Midfield");
+  });
+
+  it("every real on-field position (all of POSITIONS except INT) resolves to one of the 5 groups", () => {
+    const groups = new Set(["Midfield", "KeyForward", "SmallForward", "Ruck", "Defender"]);
+    for (const position of POSITIONS) {
+      if (position === "INT") continue;
+      expect(groups.has(tacticGroupForSlot(position, "Ruck"))).toBe(true);
+    }
+  });
+});
+
 describe("sanitizePlan", () => {
   const players = [
     makePlayer({ PlayerID: 1, archetype: "Inside Mid" as Archetype }),
@@ -139,6 +173,30 @@ describe("sanitizePlan", () => {
     expect(cleaned.tactics.get(2)?.tactic).toBe("General Defender");
     // Players absent from the positions map still fall back to their group default.
     expect(cleaned.tactics.get(1)?.tactic).toBe("Run Two Ways");
+  });
+
+  it("round 17: a Ruck (PlayerID 3) positioned at Full Forward gets a KeyForward default and keeps a KeyForward tactic pick, not a Ruck one — Tyler's Max Gawn report", () => {
+    const positions = new Map([[3, "FF" as const]]);
+
+    // No explicit pick yet - should default to FF's own KeyForward default,
+    // not Ruck's "Follow the Ball".
+    const withNoPick = sanitizePlan(players, { gameStyle: "Balanced", tactics: new Map() }, positions);
+    expect(withNoPick.tactics.get(3)?.tactic).toBe("Contested Marking");
+
+    // The coach explicitly picks a genuine Full-Forward tactic - it must
+    // survive validation instead of being discarded as "not a Ruck tactic".
+    const withForwardPick = sanitizePlan(players, { gameStyle: "Balanced", tactics: new Map([[3, { tactic: "Leading Target" }]]) }, positions);
+    expect(withForwardPick.tactics.get(3)?.tactic).toBe("Leading Target");
+
+    // Conversely, a Ruck-only tactic is no longer valid for this player once
+    // they're actually playing Full Forward, and gets reset.
+    const withStaleRuckPick = sanitizePlan(players, { gameStyle: "Balanced", tactics: new Map([[3, { tactic: "Aerial Target" }]]) }, positions);
+    expect(withStaleRuckPick.tactics.get(3)?.tactic).toBe("Contested Marking");
+  });
+
+  it("without a positions map, the same Ruck still validates against Ruck tactics as before (no regression for teams with no lineup)", () => {
+    const cleaned = sanitizePlan(players, { gameStyle: "Balanced", tactics: new Map([[3, { tactic: "Aerial Target" }]]) });
+    expect(cleaned.tactics.get(3)?.tactic).toBe("Aerial Target");
   });
 });
 

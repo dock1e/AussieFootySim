@@ -143,7 +143,7 @@ export function TradePeriod() {
         </div>
         <button
           onClick={() => simulateTradeDay()}
-          className="ml-auto rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
+          className="ml-auto rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
           title="Simulates one more day of AI-vs-AI background trading, plus a fresh batch of inbound offers"
         >
           Simulate a Day
@@ -238,7 +238,7 @@ export function TradePeriod() {
           <button
             disabled={giveIds.length === 0 || getIds.length === 0 || !listSizeOk}
             onClick={() => setConfirming(true)}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-40"
           >
             Confirm Offer
           </button>
@@ -285,7 +285,7 @@ export function TradePeriod() {
               <button onClick={() => setConfirming(false)} className="rounded-lg bg-base-700 px-4 py-2 text-sm text-slate-300 hover:bg-base-600">
                 Cancel
               </button>
-              <button onClick={handleConfirm} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+              <button onClick={handleConfirm} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
                 Confirm
               </button>
             </div>
@@ -361,7 +361,7 @@ function TradeSidePanel({
               setCandidateId("");
             }
           }}
-          className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
+          className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-40"
         >
           Add
         </button>
@@ -426,7 +426,7 @@ function InboxOfferCard({
       )}
 
       <div className="flex gap-2">
-        <button onClick={onAccept} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-dark">
+        <button onClick={onAccept} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
           Accept
         </button>
         <button onClick={onReject} className="rounded-lg bg-base-800 px-3 py-1.5 text-xs text-slate-400 hover:bg-base-600">

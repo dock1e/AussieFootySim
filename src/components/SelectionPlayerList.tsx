@@ -97,6 +97,16 @@ export function SelectionPlayerList({ players, lineup, selectedPlayerId, onSelec
               <tr
                 key={p.PlayerID}
                 onClick={() => onSelect(p)}
+                draggable
+                onDragStart={(e) => {
+                  // Round 16 (Aug 2026), Tyler: "click and drag" — a second,
+                  // additive way to place a player alongside the existing
+                  // click-then-click flow (onSelect above), not a
+                  // replacement for it. SelectionGround.tsx's own Slot reads
+                  // this same "text/plain" PlayerID back out on drop.
+                  e.dataTransfer.setData("text/plain", String(p.PlayerID));
+                  e.dataTransfer.effectAllowed = "move";
+                }}
                 className={`cursor-pointer border-b border-base-700/60 last:border-0 ${
                   selected ? "bg-accent/20" : "hover:bg-base-700/40"
                 }`}

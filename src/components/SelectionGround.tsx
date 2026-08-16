@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Player } from "../types/player";
 import type { Archetype, Position, Suitability } from "../types/archetype";
 import { suitabilityFor, POSITIONS } from "../types/archetype";
@@ -24,7 +25,8 @@ import type { Lineup } from "../engine/selection";
  * directly). The two screens serve different purposes and don't need to
  * share one.
  */
-const GROUND_ROWS: { label: string; slots: readonly number[] }[] = [
+/** Exported (round 16, Aug 2026) so MatchPreparation.tsx's own ground-diagram view can lay players out in the exact same broadcast team-sheet row order — one shared layout, not two independently-maintained copies that could drift apart. */
+export const GROUND_ROWS: { label: string; slots: readonly number[] }[] = [
   { label: "Forward", slots: [16, 15, 17] }, // FP, FF, FP
   { label: "Half-Forward", slots: [12, 14, 13] }, // HFF, CHF, HFF
   { label: "Followers", slots: [11, 9, 10] }, // ROV, R, RR
@@ -32,6 +34,13 @@ const GROUND_ROWS: { label: string; slots: readonly number[] }[] = [
   { label: "Half-Back", slots: [3, 5, 4] }, // HBF, CHB, HBF
   { label: "Back", slots: [1, 0, 2] }, // BP, FB, BP
 ];
+
+/** Same rows as `GROUND_ROWS`, as `Position` labels rather than slot indices — for any consumer working from a `MatchTeam.positions` map (player -> position) instead of a slot-indexed `Lineup` array (slot -> player). Round 16, Aug 2026, added for MatchPreparation.tsx. */
+export const GROUND_ROW_POSITIONS: { label: string; positions: readonly Position[] }[] = GROUND_ROWS.map((row) => ({
+  label: row.label,
+  positions: row.slots.map((i) => POSITIONS[i]),
+}));
+
 // Aug 2026, round 8: derived from POSITIONS itself (every index whose slot
 // is "INT") rather than a hardcoded [18,19,20,21] — that literal array is
 // exactly what silently capped this screen at 4 interchange slots even after
@@ -56,9 +65,20 @@ export interface SelectionGroundProps {
   /** The player currently selected in the player list, if any — empty slots preview how well they'd suit that slot, per Configuration.md's suitability map. */
   previewPlayer: Player | null;
   onSlotClick: (slotIndex: number) => void;
+  /**
+   * Round 16 (Aug 2026), Tyler: "click and drag" — a second, additive way to
+   * place a player, alongside the existing click-then-click flow above.
+   * `SelectionPlayerList.tsx`'s rows are draggable; a `Slot` here reads the
+   * dropped PlayerID straight off the drag event rather than needing the
+   * click flow's `selectedPlayerId` state at all, so the two interaction
+   * styles can be freely mixed mid-session. Reuses the exact same
+   * `setSlot` store action either way — see `SelectionCommittee.tsx`'s
+   * wiring — so there's no second, parallel placement rule to keep in sync.
+   */
+  onDropPlayer: (slotIndex: number, playerId: number) => void;
 }
 
-export function SelectionGround({ lineup, playerById, previewPlayer, onSlotClick }: SelectionGroundProps) {
+export function SelectionGround({ lineup, playerById, previewPlayer, onSlotClick, onDropPlayer }: SelectionGroundProps) {
   function occupantAt(slotIndex: number): Player | undefined {
     const id = lineup[slotIndex];
     return id !== null ? playerById.get(id) : undefined;
@@ -75,6 +95,7 @@ export function SelectionGround({ lineup, playerById, previewPlayer, onSlotClick
               occupant={occupantAt(slotIndex)}
               previewPlayer={previewPlayer}
               onClick={() => onSlotClick(slotIndex)}
+              onDropPlayer={(playerId) => onDropPlayer(slotIndex, playerId)}
             />
           )),
         )}
@@ -89,6 +110,7 @@ export function SelectionGround({ lineup, playerById, previewPlayer, onSlotClick
               occupant={occupantAt(slotIndex)}
               previewPlayer={previewPlayer}
               onClick={() => onSlotClick(slotIndex)}
+              onDropPlayer={(playerId) => onDropPlayer(slotIndex, playerId)}
             />
           ))}
         </div>
@@ -102,12 +124,15 @@ function Slot({
   occupant,
   previewPlayer,
   onClick,
+  onDropPlayer,
 }: {
   position: Position;
   occupant: Player | undefined;
   previewPlayer: Player | null;
   onClick: () => void;
+  onDropPlayer: (playerId: number) => void;
 }) {
+  const [dragOver, setDragOver] = useState(false);
   const ownSuitability = occupant ? suitabilityFor(occupant.archetype as Archetype, position) : null;
   const previewSuitability = !occupant && previewPlayer ? suitabilityFor(previewPlayer.archetype as Archetype, position) : null;
   const suitability = ownSuitability ?? previewSuitability;
@@ -116,17 +141,31 @@ function Slot({
   const bgClass = occupant ? "bg-base-800/90 hover:bg-base-700" : "bg-black/20 hover:bg-black/10";
 
   const title = occupant
-    ? `${position} — ${occupant.fname} ${occupant.lname} (${ownSuitability}) — click to send back to the list`
+    ? `${position} — ${occupant.fname} ${occupant.lname} (${ownSuitability}) — click, or drag a new player here, to replace`
     : previewSuitability
       ? `${position} — ${previewPlayer!.fname} ${previewPlayer!.lname} would be ${previewSuitability} here`
-      : `${position} — empty`;
+      : `${position} — empty — click a player then this slot, or drag them here`;
 
   return (
     <button
       type="button"
       onClick={onClick}
+      onDragOver={(e) => {
+        e.preventDefault(); // required for onDrop to ever fire at all
+        e.dataTransfer.dropEffect = "move";
+      }}
+      onDragEnter={() => setDragOver(true)}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const id = Number(e.dataTransfer.getData("text/plain"));
+        if (Number.isFinite(id) && id > 0) onDropPlayer(id);
+      }}
       title={title}
-      className={`flex h-16 flex-col items-center justify-center rounded-lg border-2 px-1 text-center transition-colors ${borderClass} ${bgClass}`}
+      className={`flex h-16 flex-col items-center justify-center rounded-lg border-2 px-1 text-center transition-colors ${borderClass} ${bgClass} ${
+        dragOver ? "ring-2 ring-primary ring-offset-1 ring-offset-[#0f2a1a]" : ""
+      }`}
     >
       <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">{position}</span>
       {occupant ? (

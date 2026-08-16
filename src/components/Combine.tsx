@@ -54,7 +54,7 @@ export function Combine() {
           Invites the top {`80`} draft-eligible prospects to 5 physical tests (20m sprint, beep test, agility, vertical leap, kicking
           efficiency) and re-ranks them off a composite score — a real athletic gut-check ahead of the {currentYear} National Draft.
         </p>
-        <button onClick={runCombine} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+        <button onClick={runCombine} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
           Run the {currentYear} National Combine
         </button>
       </div>
@@ -108,7 +108,7 @@ export function Combine() {
               <button
                 key={line}
                 onClick={() => setLineFilter(line)}
-                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${lineFilter === line ? "bg-accent text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${lineFilter === line ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
               >
                 {line}
               </button>

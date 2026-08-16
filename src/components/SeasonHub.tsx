@@ -86,7 +86,7 @@ export function SeasonHub() {
         </p>
         <button
           onClick={() => startNewSeason()}
-          className="rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark"
+          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-dark"
         >
           Start {year} Season
         </button>
@@ -122,7 +122,7 @@ export function SeasonHub() {
             <>
               <button
                 onClick={simulateNextRound}
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
               >
                 Simulate Round {upNext}
               </button>
@@ -137,7 +137,7 @@ export function SeasonHub() {
           {complete && !season.finals && (
             <button
               onClick={playFinals}
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
             >
               Run Finals Series
             </button>
@@ -146,7 +146,7 @@ export function SeasonHub() {
             <button
               onClick={handleOffSeason}
               disabled={runningOffSeason}
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-50"
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-50"
               title="Ages every player a year (see ROADMAP.md's persistence writeup), then opens up a fresh pre-season."
             >
               {runningOffSeason ? "Running Off-Season…" : `Start ${year + 1} Off-Season`}

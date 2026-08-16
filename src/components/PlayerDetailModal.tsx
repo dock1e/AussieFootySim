@@ -84,7 +84,7 @@ function AttrBar({ label, value }: { label: string; value: number }) {
         <span className="tabular-nums font-semibold">{value}</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-base-700">
-        <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
       </div>
     </div>
   );

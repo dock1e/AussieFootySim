@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
+import { benchPlayers } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
 import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_END_CAP_FRACTION, type DotPosition, type BallTarget } from "../engine/ground";
 import { ACTIVE_GROUND } from "../data/grounds";
@@ -547,6 +548,84 @@ function drawBall(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }) 
   ctx.stroke();
 }
 
+/**
+ * Interchange bench — Round 16 (Aug 2026), Tyler: "we need to visually
+ * represent our players on the interchange in the sim screen... the benches
+ * are typically located on the wing and players interchange on and off the
+ * field from that common point. so having our players on the bench sitting
+ * there while they wait to come on." A real spatial position (bench players
+ * genuinely appearing at pixel coordinates just outside the boundary, near
+ * the wing) turns out not to fit in this canvas's actual geometry: the turf
+ * ellipse is tallest at its own centre-x (see `maxHalfHeightAt`, biggest
+ * right where "the wing" would be), which is exactly where the canvas has
+ * the *least* spare vertical room between the turf edge and the canvas's own
+ * boundary — there are only ~14-16px there today, nowhere near enough for a
+ * legible row of dots without either shrinking the carefully-tuned oval
+ * (seven-plus rounds of corner/arc/margin fixes in this file's own history)
+ * or overlapping it.
+ *
+ * Rendered as a plain HTML strip directly under the canvas instead —
+ * visually attached to the same card, reusing the exact dot styling
+ * (HOME_COLOR/AWAY_COLOR, jumper number) so it reads as "part of the same
+ * picture" rather than a detached list, without touching any of
+ * `engine/ground.ts`'s anchor math or this file's own pixel-perfect ground
+ * drawing. `benchPlayers` returns `[]` for any team with no real on-ground/
+ * bench distinction (AI auto-fill via `pickBest22`, every pre-round-8 test),
+ * so this renders nothing at all for those — no behaviour change for anyone
+ * not using a real Selection Committee lineup.
+ */
+function BenchStrip({ home, away }: { home: MatchTeam; away: MatchTeam }) {
+  const homeBench = benchPlayers(home);
+  const awayBench = benchPlayers(away);
+  if (homeBench.length === 0 && awayBench.length === 0) return null;
+
+  return (
+    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+      <BenchSide label={`${home.name} bench`} players={homeBench} color={HOME_COLOR} align="left" />
+      <BenchSide label={`${away.name} bench`} players={awayBench} color={AWAY_COLOR} align="right" />
+    </div>
+  );
+}
+
+function BenchSide({
+  label,
+  players,
+  color,
+  align,
+}: {
+  label: string;
+  players: MatchTeam["players"];
+  color: string;
+  align: "left" | "right";
+}) {
+  return (
+    <div className={align === "right" ? "text-right" : ""}>
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`flex flex-wrap gap-1.5 ${align === "right" ? "justify-end" : ""}`}>
+        {players.length === 0 ? (
+          <span className="text-slate-600">&mdash;</span>
+        ) : (
+          players.map((p) => (
+            <span
+              key={p.PlayerID}
+              className="inline-flex items-center gap-1 rounded-full bg-base-800 py-0.5 pl-0.5 pr-2 text-slate-300"
+              title={`${p.fname} ${p.lname} — on the interchange`}
+            >
+              <span
+                className="flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                style={{ backgroundColor: color, opacity: 0.72 }}
+              >
+                {p.jumperNumber}
+              </span>
+              {p.lname}
+            </span>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 export interface MatchCanvasProps {
   home: MatchTeam;
   away: MatchTeam;
@@ -750,6 +829,7 @@ export function MatchCanvas({
           )}
         </div>
       )}
+      <BenchStrip home={home} away={away} />
     </div>
   );
 }

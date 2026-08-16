@@ -91,7 +91,7 @@ export function Dashboard() {
                   </span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-base-700">
-                  <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                  <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
                 </div>
               </div>
             );

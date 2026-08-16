@@ -258,7 +258,7 @@ export function LiveMatch() {
           <button
             onClick={() => setStage("prep")}
             disabled={homeClub === awayClub}
-            className="ml-auto rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-40"
+            className="ml-auto rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40"
           >
             Continue to Match Preparation
           </button>
@@ -335,7 +335,7 @@ export function LiveMatch() {
                   Pause
                 </button>
               ) : (
-                <button onClick={playback.play} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+                <button onClick={playback.play} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
                   {playback.currentIndex < 0 ? "Play" : "Resume"}
                 </button>
               )}
@@ -345,7 +345,7 @@ export function LiveMatch() {
                     key={s}
                     onClick={() => playback.setSpeed(s)}
                     className={`rounded-lg px-3 py-2 text-xs font-medium ${
-                      playback.speed === s ? "bg-accent text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
+                      playback.speed === s ? "bg-primary text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
                     }`}
                   >
                     {s}x
@@ -554,7 +554,7 @@ function TeamStatBars({
                 <span>{other[key]}</span>
               </div>
               <div className="flex h-1.5 overflow-hidden rounded-full bg-base-700">
-                <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+                <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                 <div className="h-full bg-info" style={{ width: `${100 - pct}%` }} />
               </div>
             </div>
@@ -627,15 +627,44 @@ const CONTEST_STAT_DISPLAY: { type: ContestType; label: string }[] = [
   { type: "ruck", label: "Ruck Contests" },
 ];
 
-/** Which BoxScoreLine fields count as this player actually getting a genuine touch of the ball, for the zone breakdown below — deliberately one entry per real *moment* (a kick disposal event sets both `disposals` and `kicks` in the same event; counted once, not twice). */
-const TOUCH_STATS = new Set<keyof BoxScoreLine>(["disposals", "marks", "tackles", "hitouts", "clearances"]);
+/**
+ * Aug 2026 (Tyler, live testing against a real Daicos screenshot): the
+ * original single `TOUCH_STATS` set — disposals+marks+tackles+hitouts+
+ * clearances all lumped together under "Where They're Getting Touches" —
+ * summed to 13 for a match line reading 7 disposals, when only 7 of those 13
+ * were actually the player *having the ball*. His diagnosis was exactly
+ * right: a tackle is you stopping the *opponent* who has the ball, and a
+ * hitout is a ruckman tapping it away, not retaining it — neither is a
+ * "touch" in the sense the label claimed, even though both are genuinely
+ * useful to know the location of. Rather than drop that information (Tyler:
+ * "certainly we want to know where this player is involved in the
+ * contests"), split it into two correctly-scoped, separately-labelled sets
+ * instead of one misleading combined one:
+ *
+ * `POSSESSION_STATS` — the player genuinely had the ball: a disposal (kick
+ * or handball out), a mark (caught it), or a clearance (won it clean from a
+ * stoppage). Clearances and disposals never fire on the same statDelta event
+ * (`match.ts`'s `runStoppage` credits a clearance at the stoppage itself;
+ * any later kick/handball is always a separate, later event), so summing
+ * these three's *event* count (via `.some()`, not adding the three numbers)
+ * never double-counts one moment as two.
+ *
+ * `CONTEST_ONLY_STATS` — the player was genuinely involved but didn't come
+ * away with the ball: a tackle (brought the opponent down) or a hitout (tapped
+ * it, didn't retain it). Disjoint from `POSSESSION_STATS` by definition (an
+ * event is either "I've got it" or "I don't, but I'm still part of this
+ * contest") — the two zone charts below never share an event, so their totals
+ * add back up to the original combined number with nothing lost.
+ */
+const POSSESSION_STATS = new Set<keyof BoxScoreLine>(["disposals", "marks", "clearances"]);
+const CONTEST_ONLY_STATS = new Set<keyof BoxScoreLine>(["tackles", "hitouts"]);
 
-/** Buckets every event where `player` genuinely touched the ball into *their own* attacking-direction zone (`ownZone` — so "Forward 50" always means their forward 50, regardless of home/away or which raw zone the event was logged under). */
-function touchZoneCounts(player: Player, side: Side, events: MatchEvent[]): Partial<Record<Zone, number>> {
+/** Buckets every event where any of `statSet` fired for `player` into *their own* attacking-direction zone (`ownZone` — so "Forward 50" always means their forward 50, regardless of home/away or which raw zone the event was logged under). Shared by both the possession and contest-only charts below — same counting rule, different input set. */
+function zoneCountsFor(player: Player, side: Side, events: MatchEvent[], statSet: Set<keyof BoxScoreLine>): Partial<Record<Zone, number>> {
   const counts: Partial<Record<Zone, number>> = {};
   for (const ev of events) {
-    const touched = ev.statDeltas.some((d) => d.playerId === player.PlayerID && TOUCH_STATS.has(d.stat));
-    if (!touched) continue;
+    const matched = ev.statDeltas.some((d) => d.playerId === player.PlayerID && statSet.has(d.stat));
+    if (!matched) continue;
     const z = ownZone(side, ev.zone);
     counts[z] = (counts[z] ?? 0) + 1;
   }
@@ -674,8 +703,11 @@ function PlayerMatchStatsModal({
   events: MatchEvent[];
   onClose: () => void;
 }) {
-  const zoneCounts = touchZoneCounts(player, side, events);
-  const maxZoneCount = Math.max(1, ...ZONES.map((z) => zoneCounts[z] ?? 0));
+  const possessionZoneCounts = zoneCountsFor(player, side, events, POSSESSION_STATS);
+  const contestOnlyZoneCounts = zoneCountsFor(player, side, events, CONTEST_ONLY_STATS);
+  const maxPossessionZoneCount = Math.max(1, ...ZONES.map((z) => possessionZoneCounts[z] ?? 0));
+  const maxContestOnlyZoneCount = Math.max(1, ...ZONES.map((z) => contestOnlyZoneCounts[z] ?? 0));
+  const hasContestOnlyActivity = ZONES.some((z) => (contestOnlyZoneCounts[z] ?? 0) > 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -713,7 +745,13 @@ function PlayerMatchStatsModal({
                       <span className="text-slate-500">No attempts yet</span>
                     ) : (
                       <>
-                        <span className="font-semibold text-accent-light">{pct}%</span>{" "}
+                        {/* Round 16 (Aug 2026), Tyler: red should highlight "players or stats of
+                            interest where players are excelling," not colour every number
+                            regardless of value — this used to be text-accent-light unconditionally,
+                            even for a 0% win rate. Now only a genuinely strong win rate (>=65%,
+                            i.e. clearly winning more often than not) gets the highlight colour;
+                            anything else reads as a plain, neutral number. */}
+                        <span className={`font-semibold ${pct >= 65 ? "text-accent-light" : "text-slate-200"}`}>{pct}%</span>{" "}
                         <span className="text-slate-500">
                           ({wins}/{attempts})
                         </span>
@@ -728,11 +766,11 @@ function PlayerMatchStatsModal({
         </div>
 
         <div className="mt-4">
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Where They're Getting Touches</div>
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Where They're Winning the Ball</div>
           <div className="space-y-1.5">
             {ZONES.map((z) => {
-              const count = zoneCounts[z] ?? 0;
-              const pct = (count / maxZoneCount) * 100;
+              const count = possessionZoneCounts[z] ?? 0;
+              const pct = (count / maxPossessionZoneCount) * 100;
               return (
                 <div key={z}>
                   <div className="mb-0.5 flex items-center justify-between text-xs">
@@ -740,16 +778,42 @@ function PlayerMatchStatsModal({
                     <span className="tabular-nums font-semibold">{count}</span>
                   </div>
                   <div className="h-1.5 overflow-hidden rounded-full bg-base-700">
-                    <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
                   </div>
                 </div>
               );
             })}
           </div>
           <div className="mt-1.5 text-[11px] text-slate-500">
-            Zones shown in {player.Team}'s own attacking direction — "Forward 50" always means their forward 50.
+            Genuine possessions only (disposals, marks, clearances), in {player.Team}'s own attacking direction — "Forward 50" always means their forward 50.
           </div>
         </div>
+
+        {hasContestOnlyActivity && (
+          <div className="mt-4">
+            <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Where They're Involved (Tackles &amp; Hitouts)</div>
+            <div className="space-y-1.5">
+              {ZONES.map((z) => {
+                const count = contestOnlyZoneCounts[z] ?? 0;
+                const pct = (count / maxContestOnlyZoneCount) * 100;
+                return (
+                  <div key={z}>
+                    <div className="mb-0.5 flex items-center justify-between text-xs">
+                      <span className="text-slate-400">{ZONE_NAMES[z]}</span>
+                      <span className="tabular-nums font-semibold">{count}</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-base-700">
+                      <div className="h-full rounded-full bg-slate-500" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-1.5 text-[11px] text-slate-500">
+              Contests this player was part of without necessarily coming away with the ball — a tackle stops the opponent who has it, a hitout taps it rather than retains it.
+            </div>
+          </div>
+        )}
 
         <div className="mt-4">
           <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Match Totals</div>

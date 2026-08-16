@@ -58,6 +58,24 @@ export function onGroundPlayers(team: MatchTeam): Player[] {
 }
 
 /**
+ * The mirror image of `onGroundPlayers` — whoever's on the interchange bench
+ * right now. Round 16 (Aug 2026), Tyler: "having our players on the bench
+ * sitting there while they wait to come on" — until now `onGround`'s
+ * complement was never actually read anywhere; a bench player simply never
+ * appeared in `formationFor`'s output and there was no way to ask "who's
+ * out" as a positive list. Returns `[]` (not the full squad) whenever
+ * `onGround` is unset — for a team with no real on-ground/bench distinction
+ * (`pickBest22`, the balance simulator, every pre-round-8 test) there's no
+ * meaningful "bench" to show, and an empty list is exactly what a caller
+ * building a UI strip wants: nothing rendered rather than every player
+ * doubly listed as both on-ground *and* benched.
+ */
+export function benchPlayers(team: MatchTeam): Player[] {
+  if (!team.onGround) return [];
+  return team.players.filter((p) => !team.onGround!.has(p.PlayerID));
+}
+
+/**
  * There's no Selection Committee / lineup system yet (see ROADMAP.md Phase
  * 3), so match simulation needs *some* way to turn a ~35-46 player club
  * list into a 22-player match squad. This is a deliberately simple stand-in

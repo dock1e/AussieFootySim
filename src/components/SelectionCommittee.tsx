@@ -98,7 +98,7 @@ export function SelectionCommittee() {
               autoFill(myClub, players);
               setSelectedPlayerId(null);
             }}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
           >
             Auto-fill
           </button>
@@ -115,17 +115,26 @@ export function SelectionCommittee() {
       </div>
 
       <div className="card text-xs text-slate-400">
-        Click a player on the left, then click a position on the ground to place them there — click
-        a filled slot on its own to send that player back to the list. Every club player is
-        eligible for every slot; a slot's border colour shows how well the selected (or already
-        placed) player suits it, per Configuration.md's suitability map. This lineup is only used
-        when {myClub} is picked for a match on the Match or Season tab; anyone else still fields
+        Drag a player onto a position to place them there, or click a player then click a position
+        instead — click a filled slot on its own to send that player back to the list. Every club
+        player is eligible for every slot; a slot's border colour shows how well the selected (or
+        already placed) player suits it, per Configuration.md's suitability map. This lineup is only
+        used when {myClub} is picked for a match on the Match or Season tab; anyone else still fields
         the auto-picked best-{POSITIONS.length} by OVR.
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
         <SelectionPlayerList players={players} lineup={lineup} selectedPlayerId={selectedPlayerId} onSelect={handleSelectPlayer} />
-        <SelectionGround lineup={lineup} playerById={playerById} previewPlayer={selectedPlayer} onSlotClick={handleSlotClick} />
+        <SelectionGround
+          lineup={lineup}
+          playerById={playerById}
+          previewPlayer={selectedPlayer}
+          onSlotClick={handleSlotClick}
+          onDropPlayer={(slotIndex, playerId) => {
+            setSlot(myClub, slotIndex, playerId);
+            setSelectedPlayerId(null);
+          }}
+        />
       </div>
 
       <div className="space-y-2">

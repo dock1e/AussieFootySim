@@ -77,7 +77,7 @@ export function ListNeeds({
                 </span>
               </div>
               <div className="mb-3 h-2 overflow-hidden rounded-full bg-base-700">
-                <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
               </div>
 
               <div className="mb-3 grid grid-cols-3 gap-2 text-center text-xs">
@@ -170,22 +170,22 @@ export function ListNeeds({
       <div className="flex flex-col items-center gap-2 text-center text-xs text-slate-500">
         <div className="flex flex-wrap justify-center gap-2">
           {onGoToCombine && (
-            <button onClick={onGoToCombine} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+            <button onClick={onGoToCombine} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
               Go to the Combine
             </button>
           )}
           {onGoToContracts && (
-            <button onClick={onGoToContracts} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+            <button onClick={onGoToContracts} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
               Go to Contracts
             </button>
           )}
           {onGoToTrade && (
-            <button onClick={onGoToTrade} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+            <button onClick={onGoToTrade} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
               Go to Trade Period
             </button>
           )}
           {onGoToDraft && (
-            <button onClick={onGoToDraft} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+            <button onClick={onGoToDraft} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
               Go to the Draft
             </button>
           )}

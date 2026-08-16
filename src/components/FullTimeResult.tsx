@@ -166,7 +166,7 @@ export function FullTimeResult({
                   <span>{a}</span>
                 </div>
                 <div className="flex h-1.5 overflow-hidden rounded-full bg-base-700">
-                  <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+                  <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                   <div className="h-full bg-info" style={{ width: `${100 - pct}%` }} />
                 </div>
               </div>
@@ -180,7 +180,7 @@ export function FullTimeResult({
         <TopPerformers title={`${awayTeam.name} top performers`} rows={topAway} />
       </div>
 
-      <button onClick={onNewMatch} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+      <button onClick={onNewMatch} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
         {closeLabel}
       </button>
     </div>

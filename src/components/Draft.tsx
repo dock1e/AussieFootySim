@@ -124,7 +124,7 @@ export function Draft() {
             ? "Draft order is set from this season's final ladder — last place picks first, 5 rounds, 90 picks total."
             : "No season's been completed yet, so draft order falls back to a fixed club order for now — play a season first if you want a real reverse-ladder order."}
         </p>
-        <button onClick={startDraft} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+        <button onClick={startDraft} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
           Start the {currentYear} National Draft
         </button>
       </div>
@@ -167,7 +167,7 @@ export function Draft() {
               </button>
             )}
             {!isMyTurn && (
-              <button onClick={skipToMyPick} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-dark">
+              <button onClick={skipToMyPick} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
                 Skip to My Pick
               </button>
             )}
@@ -195,7 +195,7 @@ export function Draft() {
                   <button
                     onClick={() => setCombineOnly((v) => !v)}
                     title="Show only this year's National Combine invitees"
-                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${combineOnly ? "bg-accent text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${combineOnly ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
                   >
                     COMBINE ONLY
                   </button>
@@ -204,7 +204,7 @@ export function Draft() {
                   <button
                     key={line}
                     onClick={() => setLineFilter(line)}
-                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${lineFilter === line ? "bg-accent text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${lineFilter === line ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
                   >
                     {line}
                   </button>
@@ -438,7 +438,7 @@ function ProspectProfile({
       </div>
 
       {onDraft && (
-        <button onClick={onDraft} className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+        <button onClick={onDraft} className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
           Draft {playerFullName(prospect)}
         </button>
       )}

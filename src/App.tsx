@@ -92,7 +92,7 @@ export default function App() {
               key={key}
               onClick={() => setScreen(key)}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                screen === key ? "bg-accent text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
+                screen === key ? "bg-primary text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
               }`}
             >
               {label}

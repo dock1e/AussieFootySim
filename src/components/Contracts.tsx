@@ -114,7 +114,7 @@ export function Contracts() {
         )}
         <button
           onClick={() => letAssistantManage()}
-          className="ml-auto rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
+          className="ml-auto rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
           title="Simulates one more day of every rival club's contract activity"
         >
           Let Assistant Manage
@@ -304,7 +304,7 @@ function FreeAgentList({
                 {showInterest && interest && <span className="text-xs tabular-nums text-accent-light">Interest {interest.score >= 0 ? "+" : ""}{interest.score}</span>}
                 {comp && <span className="text-[10px] text-slate-500">Losing them: {comp} comp pick (notional)</span>}
                 <div className="ml-auto flex gap-1.5">
-                  <button onClick={() => onAction(p)} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-dark">
+                  <button onClick={() => onAction(p)} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
                     {actionLabel}
                   </button>
                   {onDelist && (
@@ -401,7 +401,7 @@ function NegotiationModal({
               {playerFullName(player)} counters at <span className="tabular-nums font-semibold">{money(outcome.counterSalaryPerYear)}/yr</span>.
             </div>
             <div className="flex gap-2">
-              <button onClick={() => acceptCounter(outcome.counterSalaryPerYear)} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-dark">
+              <button onClick={() => acceptCounter(outcome.counterSalaryPerYear)} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
                 Accept Counter
               </button>
               <button
@@ -428,7 +428,7 @@ function NegotiationModal({
             {outcome?.result === "rejected" || outcome === null ? "Cancel" : "Close"}
           </button>
           {outcome?.result !== "countered" && offersLeft > 0 && (
-            <button onClick={submitOffer} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark">
+            <button onClick={submitOffer} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
               Submit Offer
             </button>
           )}

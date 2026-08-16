@@ -121,7 +121,7 @@ export function PositionSwitch() {
           onClick={applySelected}
           disabled={selectedCount === 0}
           className={`rounded-lg px-4 py-2 text-sm font-semibold text-white ${
-            selectedCount === 0 ? "cursor-not-allowed bg-base-700 text-slate-500" : "bg-accent hover:bg-accent-dark"
+            selectedCount === 0 ? "cursor-not-allowed bg-base-700 text-slate-500" : "bg-primary hover:bg-primary-dark"
           }`}
         >
           Apply Selected ({selectedCount})

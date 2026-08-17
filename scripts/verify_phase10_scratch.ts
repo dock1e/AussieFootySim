@@ -239,6 +239,8 @@ function emptyLine(): BoxScoreLine {
     markLeadAttempts: 0, markLeadWins: 0, markContestedAttempts: 0, markContestedWins: 0,
     groundBallAttempts: 0, groundBallWins: 0, tackleAttempts: 0, tackleWins: 0,
     ruckAttempts: 0, ruckWins: 0, clearanceAttempts: 0, clearanceWins: 0,
+    // Round 19 (Aug 2026) addition - kept in sync with match.ts's own emptyLine().
+    freeKicksFor: 0, freeKicksAgainst: 0,
   };
 }
 

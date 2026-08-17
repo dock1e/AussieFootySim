@@ -60,6 +60,8 @@ function emptyLine(): BoxScoreLine {
     ruckWins: 0,
     clearanceAttempts: 0,
     clearanceWins: 0,
+    freeKicksFor: 0,
+    freeKicksAgainst: 0,
   };
 }
 

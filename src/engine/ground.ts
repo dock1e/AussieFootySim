@@ -969,6 +969,27 @@ export function computeDotPositions(
     const ballX = zoneToX(event.zone);
     const primary = all.get(event.playerIds[0]);
     const baseY = primary ? primary.y : CENTER_Y;
+    // Aug 2026 round 19 (Tyler, live testing: "Long is tackling Fritsch, yet
+    // they are 30 meters apart... it needs to look like it in the
+    // simulation"). For 2+ named players this event's own anchor point below
+    // used to be each player's *own* natural formation spot blended toward
+    // the ball *independently* — fine for one player, but for a genuine
+    // physical pairing (a tackle, a mark contest/spoil, a free kick call, a
+    // boundary-throw-in ruck contest) two players whose own anchors happen
+    // to sit far apart (e.g. a naturally wing-based defender and a naturally
+    // forward-pocket carrier) each only close *half* the gap to the ball,
+    // not to *each other* — leaving them each still meaningfully anchored to
+    // two different natural spots, exactly Tyler's screenshot. Every
+    // involved player now blends toward one shared meeting point (the
+    // *group's own average* anchor, not each one's individually) instead —
+    // the same "pull them together, not just each toward the ball" fix
+    // round 18 already gave the centre-bounce case specifically, generalised
+    // here to every other multi-player event now that this round's own new
+    // events (a pressured disposal naming its defender, a free kick naming
+    // both sides) make that pairing far more common than it used to be.
+    const involvedAnchors = event.playerIds.map((id) => all.get(id)).filter((d): d is DotPosition => d !== undefined);
+    const avgAnchorX = involvedAnchors.length > 0 ? involvedAnchors.reduce((s, d) => s + d.x, 0) / involvedAnchors.length : ballX;
+    const avgAnchorY = involvedAnchors.length > 0 ? involvedAnchors.reduce((s, d) => s + d.y, 0) / involvedAnchors.length : baseY;
     event.playerIds.forEach((id, i) => {
       const existing = all.get(id);
       if (!existing) return;
@@ -982,7 +1003,8 @@ export function computeDotPositions(
         all.set(id, { ...existing, x: ballX + spread * 0.5 + tieBreak * 4, y: CENTER_Y + spread + tieBreak * 4, involved: true });
         return;
       }
-      const x = existing.x * 0.5 + ballX * 0.5;
+      const groupX = event.playerIds.length > 1 ? avgAnchorX : existing.x;
+      const x = groupX * 0.5 + ballX * 0.5;
       // BUG FIXED Aug 2026, round 3: found by this round's own scratch-script
       // sweep, not reported by Tyler directly, but the same underlying
       // symptom class - an *involved* player's blended x/y is a genuinely
@@ -1035,7 +1057,12 @@ export function computeDotPositions(
       // than keep chasing individual coincidences with an ever-bigger nudge.
       // (`tieBreak` itself is now computed once, above, before the
       // `isCentreBounce` branch — round 18 — since that branch needs it too.)
-      all.set(id, { ...existing, x: x + tieBreak * 8, y: baseY + spread + tieBreak * 6, involved: true });
+      // Round 19: `baseY` (the primary player's own anchor Y) replaced with
+      // `avgAnchorY` — for a single-player event they're identical (the
+      // "average" of one player's own Y is just that Y), so this is a
+      // strict generalisation, not a behaviour change, for every event this
+      // file already handled correctly.
+      all.set(id, { ...existing, x: x + tieBreak * 8, y: avgAnchorY + spread + tieBreak * 6, involved: true });
     });
   }
 

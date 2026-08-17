@@ -23,10 +23,13 @@ import { computeAussieFootySimRatings, fantasyPointsFor } from "../engine/rating
 
 const STAT_ROWS: { key: keyof BoxScoreLine; label: string }[] = [
   { key: "disposals", label: "Disposals" },
+  { key: "kicks", label: "Kicks" },
+  { key: "handballs", label: "Handballs" },
   { key: "marks", label: "Marks" },
   { key: "tackles", label: "Tackles" },
   { key: "clearances", label: "Clearances" },
   { key: "hitouts", label: "Hitouts" },
+  { key: "freeKicksFor", label: "Free Kicks" }, // Aug 2026 round 19 — a team's "freeKicksFor" total is, by construction, exactly the other team's "freeKicksAgainst" total, so one row (not a for/against pair) reads cleanly as a genuine team-vs-team comparison, same as every other row here.
   { key: "goals", label: "Goals" },
   { key: "behinds", label: "Behinds" },
 ];

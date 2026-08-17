@@ -821,11 +821,15 @@ function PlayerMatchStatsModal({
             {(
               [
                 ["D", line?.disposals ?? 0],
+                ["K", line?.kicks ?? 0],
+                ["HB", line?.handballs ?? 0],
                 ["M", line?.marks ?? 0],
                 ["T", line?.tackles ?? 0],
                 ["CLR", line?.clearances ?? 0],
                 ["HO", line?.hitouts ?? 0],
                 ["CP", line?.contestedPoss ?? 0],
+                ["FF", line?.freeKicksFor ?? 0],
+                ["FA", line?.freeKicksAgainst ?? 0],
                 ["G", line?.goals ?? 0],
                 ["B", line?.behinds ?? 0],
               ] as const

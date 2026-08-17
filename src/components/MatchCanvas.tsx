@@ -45,6 +45,56 @@ const INVOLVED_DOT_RADIUS = 13;
 // tick, so movement reads as smooth-but-responsive rather than floaty. A UX
 // feel constant, same status as `useMatchPlayback.ts`'s `BASE_TICK_MS`.
 const SMOOTHING_HALF_LIFE_MS = 150;
+/**
+ * Aug 2026 round 19 (Tyler, live testing, three concrete complaints that are
+ * all the same root cause): "Long is tackling Fritsch, yet they are 30
+ * meters apart... Players seem to snap from position to position... Fritsch
+ * has snapped back to his forward pocket position a single tick after being
+ * tackled and the ball has moved from Fritsch to the center of the ground in
+ * one single tick"; "How did Quaynor suddenly transport from half back to
+ * be tackled in the forward 50?"
+ *
+ * The exponential smoothing above has no real distance cap — `1 -
+ * 0.5^(dt/150)` closes ~87.5% of *any* distance within one 450ms tick,
+ * whether the target moved 5px or 500px, because a target itself has no
+ * memory of a player's *own* trajectory: it's recomputed fresh every frame
+ * purely from the current event + formation anchor (see
+ * `engine/ground.ts`'s `computeDotPositions`). A player who's uninvolved one
+ * tick and suddenly named in a forward-50 tackle the next doesn't have a
+ * "was running there" history to draw on — their target just jumps, and the
+ * old smoothing closed that jump in well under a second regardless of how
+ * far it actually was. That's the literal mechanism behind all three
+ * complaints above.
+ *
+ * Real fix: cap the *speed* a dot can close ground at, not just the
+ * fraction of remaining distance per unit time. Below this speed, behaviour
+ * is unchanged (the exponential ease still governs — a nearby target is
+ * still reached smoothly, not at a robotic constant crawl). Above it, a dot
+ * that needs to cover real ground now visibly takes proportionally longer,
+ * so a genuine end-to-end recompute (Quaynor's case) reads as a hustle back
+ * into position over the next second or two, not a jump-cut. Loosely
+ * grounded in a real hard-running speed (not a literal km/h conversion —
+ * this file has no established real-world metres-per-pixel scale, see
+ * ROADMAP.md gap #77, and a tick's own real-world duration is itself
+ * already an acknowledged fiction, gap #7 — "quarters run on a fixed
+ * 130-tick budget, not a modelled clock") but chosen and tuned the same way
+ * every other constant in this file is: for what reads clearly at normal
+ * (1x) playback speed. 200px/sec means a dot can cross roughly a fifth of
+ * the ground's own width in one second — visibly sprinting, not floating,
+ * and not instant.
+ */
+const MAX_DOT_SPEED_PX_PER_SEC = 200;
+/** Same fix, for the ball — a kicked/handballed ball genuinely travels faster than a running player, so its own cap is higher; still combined with (not replacing) the existing kick-vs-handball `speedMultiplier` below, which keeps a kick reading as slower/floatier than a handball for any *given* distance — this cap only bites for a jump big enough that even the slower exponential ease would otherwise have closed it in one tick. */
+const MAX_BALL_SPEED_PX_PER_SEC = 350;
+
+/** Moves `prev` toward `target` by the exponential-ease step, but never further than `maxStep` in a straight line — the shared fix behind `MAX_DOT_SPEED_PX_PER_SEC`/`MAX_BALL_SPEED_PX_PER_SEC` above. Below the cap this is byte-identical to the plain exponential formula every caller used before this round. */
+function stepToward(prev: { x: number; y: number }, target: { x: number; y: number }, smoothing: number, maxStep: number): { x: number; y: number } {
+  const dx = (target.x - prev.x) * smoothing;
+  const dy = (target.y - prev.y) * smoothing;
+  const dist = Math.hypot(dx, dy);
+  const scale = dist > maxStep && dist > 0 ? maxStep / dist : 1;
+  return { x: prev.x + dx * scale, y: prev.y + dy * scale };
+}
 
 /**
  * Ground background — Aug 2026 redesign (Tyler attached two reference
@@ -723,14 +773,13 @@ export function MatchCanvas({
         awayStyleRef.current,
       );
       const smoothing = 1 - Math.pow(0.5, dt / SMOOTHING_HALF_LIFE_MS);
+      const maxDotStep = MAX_DOT_SPEED_PX_PER_SEC * (dt / 1000);
 
       const rendered = renderedRef.current;
       const drawn: DotPosition[] = [];
       for (const target of targets) {
         const prev = rendered.get(target.playerId);
-        const next: DotPosition = prev
-          ? { ...target, x: prev.x + (target.x - prev.x) * smoothing, y: prev.y + (target.y - prev.y) * smoothing }
-          : target;
+        const next: DotPosition = prev ? { ...target, ...stepToward(prev, target, smoothing, maxDotStep) } : target;
         rendered.set(target.playerId, next);
         drawn.push(next);
       }
@@ -742,15 +791,14 @@ export function MatchCanvas({
       // dependent rate — a kick's target has speedMultiplier 3, so its
       // half-life is 3x longer and it visibly takes longer to arrive than a
       // handball's, independent of how fast the player dots themselves ease
-      // into place.
+      // into place. Both the ease *and* the speed cap below scale with it,
+      // so a long kick still reads as slower to arrive than a short one, not
+      // just capped at the same flat speed regardless of shot type.
       const ballTarget: BallTarget = ballTargetFor(targets, currentEvent, currentNextEvent);
       const ballHalfLife = SMOOTHING_HALF_LIFE_MS * ballTarget.speedMultiplier;
       const ballSmoothing = 1 - Math.pow(0.5, dt / ballHalfLife);
-      const prevBall = ballRenderedRef.current;
-      ballRenderedRef.current = {
-        x: prevBall.x + (ballTarget.x - prevBall.x) * ballSmoothing,
-        y: prevBall.y + (ballTarget.y - prevBall.y) * ballSmoothing,
-      };
+      const maxBallStep = (MAX_BALL_SPEED_PX_PER_SEC / ballTarget.speedMultiplier) * (dt / 1000);
+      ballRenderedRef.current = stepToward(ballRenderedRef.current, ballTarget, ballSmoothing, maxBallStep);
 
       const ctx = canvasRef.current?.getContext("2d");
       if (ctx) {

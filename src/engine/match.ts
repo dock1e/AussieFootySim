@@ -85,6 +85,9 @@ export interface BoxScoreLine {
   ruckWins: number;
   clearanceAttempts: number;
   clearanceWins: number;
+  /** Real Free Kick logic, Aug 2026 round 19 — see P_HIGH_CONTACT_FREE_KICK/P_KICK_GOES_OUT_ON_FULL's own doc comment for exactly which real categories these currently cover. Standard AFL box-score pairing (FF/FA), same convention as every other paired stat above. */
+  freeKicksFor: number;
+  freeKicksAgainst: number;
 }
 
 function emptyLine(): BoxScoreLine {
@@ -113,6 +116,8 @@ function emptyLine(): BoxScoreLine {
     ruckWins: 0,
     clearanceAttempts: 0,
     clearanceWins: 0,
+    freeKicksFor: 0,
+    freeKicksAgainst: 0,
   };
 }
 
@@ -213,6 +218,40 @@ const SHOT_DIFFICULTY_RANGE = 30;
 const FAVOURED_SIDE_CLEARANCE_BONUS = 1.3;
 /** See its own use in `runShot` — the share of a shot that "misses everything" (not a behind) that goes out of bounds for a throw-in, gap #73. */
 const P_MISS_BECOMES_THROW_IN = 0.5;
+/**
+ * Real Free Kick logic, Aug 2026 round 19 (Tyler: "Let's develop the Free
+ * Kick logic into the game, these should be included in the statistics").
+ * Grounded in the AFL's own free-kick categories (Wikipedia, "Free kick
+ * (Australian rules football)") — deliberately only the two that hook
+ * cleanly onto a roll this engine already makes, rather than inventing new
+ * unrelated mechanics to support the rest:
+ *
+ * - High Contact: "when any other player... makes contact above another
+ *   player's shoulders... usually a high tackle." A small, independent
+ *   chance that ANY tackle attempt (win or lose) is itself illegal, flipping
+ *   the outcome to a free kick FOR the carrier's side regardless of how the
+ *   clean disposal-vs-tackle roll would have gone.
+ * - Out on the Full: "when the ball is kicked and travels over the boundary
+ *   line before bouncing or being touched by another player." A small
+ *   chance a genuine open-play kick (not a handball — a handball can't
+ *   literally sail out on the full the same way) goes out untouched, free
+ *   kick to the defending side. Distinct from the existing missed-shot
+ *   throw-in mechanic above, and closes the specific gap #73 scope note
+ *   left open in round 18 (a general open-play kick sent out of bounds
+ *   mid-ground, not just a missed shot at goal).
+ *
+ * Deliberately NOT built this round, and left as real gaps rather than
+ * faked: Holding the Ball as its own distinct category (the existing
+ * tackle-win/turnover branch already models the same real-world moment —
+ * carrier held, doesn't get it away — relabelling it "Holding the Ball"
+ * specifically would overclaim precision this engine doesn't track, like
+ * whether the carrier had genuine "prior opportunity"); In the Back (a
+ * marking-contest infringement); Deliberate Out of Bounds (needs a real
+ * notion of "kicked toward the boundary specifically to escape pressure,"
+ * which the engine doesn't model). See ROADMAP.md.
+ */
+const P_HIGH_CONTACT_FREE_KICK = 0.04;
+const P_KICK_GOES_OUT_ON_FULL = 0.03;
 
 function ruckRating(p: Player): number {
   return computeContestRating(p, ["strengthOverhead", "verticalLeap"]);
@@ -541,6 +580,31 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const defenderTactic = tacticFor(defendingPlan, defender, defendingTeam.positions);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
 
+  // High Contact free kick — Aug 2026 round 19, see P_HIGH_CONTACT_FREE_KICK's
+  // own doc comment. An independent roll ahead of the clean disposal-vs-
+  // tackle contest below: real high contact is a foul by the tackler, not a
+  // fair outcome of a hard-fought disposal battle, so it pre-empts that
+  // contest entirely (no disposalRating/defenderRating computed at all)
+  // rather than being folded into the win/lose split.
+  if (ctx.rng() < P_HIGH_CONTACT_FREE_KICK) {
+    lineFor(ctx, carrier).freeKicksFor += 1;
+    lineFor(ctx, defender).freeKicksAgainst += 1;
+    log(
+      ctx,
+      state.zone,
+      state.possession,
+      "GENERAL_PLAY",
+      `High contact! Free kick to ${carrier.lname} against ${defender.lname}`,
+      [carrier.PlayerID, defender.PlayerID],
+      [
+        ...gatherDeltas,
+        { playerId: carrier.PlayerID, stat: "freeKicksFor", delta: 1 },
+        { playerId: defender.PlayerID, stat: "freeKicksAgainst", delta: 1 },
+      ],
+    );
+    return { phase: "GENERAL_PLAY", zone: state.zone, possession: state.possession, carrier, carrierUncontested: true };
+  }
+
   const disposalRating =
     computeContestRating(carrier, ["skill", "positioning"]) *
     carrierDisposalMultiplier(carrierTactic) *
@@ -604,13 +668,45 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // Kicks alone advance the zone; a handball keeps play, and the receiver
   // pool below, right where it already was.
   const newZone = isKick ? advanceZone(state.zone, state.possession) : state.zone;
+
+  // Out on the Full — Aug 2026 round 19, see P_KICK_GOES_OUT_ON_FULL's own
+  // doc comment. Only a kick can literally sail out on the full; the
+  // disposal/kick stat still counts (it happened — real AFL box scores don't
+  // erase it either), but instead of finding a receiver it turns into a free
+  // kick for the defending side, taken from roughly where it crossed the
+  // line (approximated here as the kick's own intended destination zone,
+  // the finest spot granularity this engine has).
+  if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
+    const newSide = otherSide(state.possession);
+    lineFor(ctx, carrier).freeKicksAgainst += 1;
+    const freeKickTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), newZone);
+    lineFor(ctx, freeKickTaker).freeKicksFor += 1;
+    log(
+      ctx,
+      newZone,
+      state.possession,
+      "GENERAL_PLAY",
+      `${carrier.lname}'s kick goes out of bounds on the full — free kick to ${freeKickTaker.lname}`,
+      [carrier.PlayerID, freeKickTaker.PlayerID],
+      [
+        ...gatherDeltas,
+        { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "kicks", delta: 1 },
+        { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "freeKicksAgainst", delta: 1 },
+        { playerId: freeKickTaker.PlayerID, stat: "freeKicksFor", delta: 1 },
+      ],
+    );
+    return { phase: "GENERAL_PLAY", zone: newZone, possession: newSide, carrier: freeKickTaker, carrierUncontested: true };
+  }
+
   log(
     ctx,
     newZone,
     state.possession,
     "GENERAL_PLAY",
-    `${carrier.lname} finds space with a${isKick ? " kick" : " handball"}`,
-    [carrier.PlayerID],
+    `${carrier.lname} finds space with a${isKick ? " kick" : " handball"} under pressure from ${defender.lname}`,
+    [carrier.PlayerID, defender.PlayerID],
     [
       ...gatherDeltas,
       { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },

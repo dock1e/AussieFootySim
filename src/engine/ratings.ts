@@ -19,28 +19,29 @@ import type { Side, Zone } from "./zones.ts";
 // Fantasy Classic formula. Implemented literally, straight off the box
 // score, zero ambiguity.
 //
-// Two honest, pre-existing box-score simplifications this formula inherits
-// (not new to this file — see ROADMAP.md known gaps):
-// - `FreeFor`/`FreeAgainst` are always 0 — match.ts has no free-kick concept
-//   at all (no 50m penalties, no free-kick-for-holding-the-ball etc.), so
-//   this term of the real formula never contributes here.
+// One remaining honest, pre-existing box-score simplification this formula
+// inherits (not new to this file — see ROADMAP.md known gaps):
 // - `line.marks` only ever counts *contested* marks (match.ts's only mark
 //   event is the forward-50 CONTEST phase win) — an uncontested "mark on a
 //   lead" isn't modelled as its own event, so Fantasy Points will read
 //   somewhat low relative to a real AFL box score for high-mark players.
+//
+// `FreeFor`/`FreeAgainst` used to be hardcoded to 0 here — "match.ts has no
+// free-kick concept at all" — until Aug 2026 round 19 built one (see
+// `BoxScoreLine.freeKicksFor`/`freeKicksAgainst`, `P_HIGH_CONTACT_FREE_KICK`/
+// `P_KICK_GOES_OUT_ON_FULL` in match.ts). Wired into the real, verified
+// formula's actual term now rather than left as a permanent zero.
 // ---------------------------------------------------------------------------
 
 export function fantasyPointsFor(line: BoxScoreLine): number {
-  const freeFor = 0;
-  const freeAgainst = 0;
   return (
     3 * line.kicks +
     2 * line.handballs +
     3 * line.marks +
     4 * line.tackles +
     1 * line.hitouts +
-    1 * freeFor -
-    3 * freeAgainst +
+    1 * line.freeKicksFor -
+    3 * line.freeKicksAgainst +
     6 * line.goals +
     1 * line.behinds
   );
@@ -91,6 +92,7 @@ const CONTESTED_MARK = 6; // disclosed: "Contested mark" — not the higher "Int
 const CONTESTED_POSS_GROUND = 4.5; // disclosed: "Contested poss. at ground level" *and* "Intercept possession" both land on 4.5 in the table — match.ts scores an attacking ground-ball win and a defensive spoil-and-retain identically, so there's no need to tell them apart here either
 const GOAL = 8; // disclosed: "Goal"
 const BEHIND = 1; // disclosed: "Behind"
+const FREE_KICK_WON = 4; // disclosed: "Free kick" — Aug 2026 round 19, see BoxScoreLine.freeKicksFor's own doc comment for what now actually produces this event. The conceding player isn't separately docked here (-4, "Free against") — same convention every other contest-loser in this file already follows (a tackled/spoiled/beaten player has no separate negative eventPoints entry either, just the absence of the positive one).
 
 // "actions inside defensive-50 or forward-50 score ~20% more than the same action in the
 // midfield." Applies uniformly to every event type including goals/behinds — a shot can only
@@ -202,6 +204,14 @@ function eventPoints(
     if (kick) return { playerId: kick.playerId, base: EFFECTIVE_KICK };
     const handball = findDelta(ev.statDeltas, "handballs");
     if (handball) return { playerId: handball.playerId, base: EFFECTIVE_HANDBALL };
+    // Aug 2026 round 19: a free kick with no accompanying kick/handball delta
+    // on the same event (the High Contact branch — the carrier keeps the
+    // ball uncontested rather than immediately disposing; the Out on the
+    // Full branch already matches the `kick` check above instead, since that
+    // event's own carrier still genuinely kicked it). Checked last, after
+    // the three more specific stat types above, so it never shadows them.
+    const freeKick = findDelta(ev.statDeltas, "freeKicksFor");
+    if (freeKick) return { playerId: freeKick.playerId, base: FREE_KICK_WON };
   }
 
   if (ev.phase === "CONTEST") {

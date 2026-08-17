@@ -252,6 +252,50 @@ const P_MISS_BECOMES_THROW_IN = 0.5;
  */
 const P_HIGH_CONTACT_FREE_KICK = 0.04;
 const P_KICK_GOES_OUT_ON_FULL = 0.03;
+/**
+ * Run and Carry — Aug 2026 round 20 (Tyler: "We also need to include a
+ * player who is in space being able to 'Run and Carry' the ball and taking
+ * bounces along the way"). Fires only for a carrier who's genuinely
+ * uncontested right now (`State.carrierUncontested`/`State.runTicks` — see
+ * their own doc comments) and isn't already in their attacking 50 (shot
+ * territory instead — see the existing shot-chance branch in
+ * `runGeneralPlay`). The chance is weighted by the carrier's own
+ * `speed`+`agility` relative to a rough league-average baseline, so a
+ * quick/evasive carrier visibly elects to run more often than a lumbering
+ * one — Tyler's own repeated emphasis that attributes should visibly matter
+ * in the simulation, not just in a hidden formula.
+ *
+ * Deliberately scoped narrow, not the full off-ball chase-AI rewrite (see
+ * ROADMAP.md backlog #18): a run advances the zone by the same single
+ * discrete step a kick uses (the finest granularity this engine's 5-zone
+ * model has — same disclosed approximation `P_KICK_GOES_OUT_ON_FULL` above
+ * already leans on), the SAME carrier keeps the ball rather than a new one
+ * being picked, and `MAX_CONSECUTIVE_RUN_TICKS` caps how many ticks in a row
+ * one carrier can keep running before this engine forces the normal
+ * disposal-vs-tackle resolution — a coarse stand-in for a defender
+ * eventually converging, not yet a genuine pursuit model (that's the still-
+ * open Slice A of backlog #18).
+ *
+ * Doesn't touch any `BoxScoreLine` field: real AFL box scores (and the
+ * verified AFL Fantasy formula this project's own Fantasy Points is fit
+ * against — `ratings.ts`) have no public "bounces" or "metres gained on
+ * foot" stat either, so crediting nothing here is consistent with the real,
+ * cited formula, not an oversight.
+ *
+ * Also multiplied by `gameStyleDisposalMultiplier` — a real, pre-existing tie-
+ * in found live, not invented for this feature: the Coach's Call quarter-
+ * break screen already offers a "Run & Carry" option (`CoachsCall.tsx`,
+ * label only — it maps onto the real `GameStyle` "Spread the Ground"),
+ * described as "More uncontested chains and run-and-carry footy," and
+ * `tactics.ts`'s own doc comments for that style already say "+uncontested-
+ * possession chains" / "-reliance on contested footy." Until this round
+ * there was no literal run-and-carry event for that promise to amplify —
+ * this closes that gap using the exact multiplier the style already drives
+ * for disposal comfort, rather than inventing a second, parallel one.
+ */
+const P_RUN_AND_CARRY_BASE = 0.14;
+const RUN_AND_CARRY_BASELINE_RATING = 55; // a plausible league-average speed+agility composite — same "deliberately roughed in, pending the balance simulator" status as every other constant here
+const MAX_CONSECUTIVE_RUN_TICKS = 2;
 
 function ruckRating(p: Player): number {
   return computeContestRating(p, ["strengthOverhead", "verticalLeap"]);
@@ -407,6 +451,22 @@ export interface State {
    * itself.
    */
   carrierUncontested?: boolean;
+  /**
+   * Aug 2026 round 20 — how many *consecutive* Run and Carry ticks this same
+   * carrier has already taken (see `P_RUN_AND_CARRY_BASE`'s own doc
+   * comment), `undefined`/0 outside of one. Deliberately a *separate* field
+   * from `carrierUncontested` rather than reusing it: `carrierUncontested`
+   * means "just genuinely gained the ball this tick" and drives a one-time
+   * `uncontestedPoss` credit at the top of `runGeneralPlay` — a carrier
+   * mid-run hasn't gained the ball again on tick 2, so reusing that flag to
+   * also mean "still has space" would silently inflate `uncontestedPoss` by
+   * one extra phantom credit per continued run tick. `runTicks` carries the
+   * "still eligible to keep running" signal instead, and every *other*
+   * return path in this file simply omits it, which is exactly what resets
+   * a chase back to zero the instant anything else happens (a tackle, a
+   * free kick, a shot, a contest roll, a normal disposal hand-off).
+   */
+  runTicks?: number;
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
@@ -566,6 +626,28 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   if (state.carrierUncontested) {
     lineFor(ctx, carrier).uncontestedPoss += 1;
     gatherDeltas.push({ playerId: carrier.PlayerID, stat: "uncontestedPoss", delta: 1 });
+  }
+
+  // Run and Carry — Aug 2026 round 20, see P_RUN_AND_CARRY_BASE's own doc
+  // comment. Eligible either fresh off a genuine uncontested gather this
+  // tick, or already mid-run from a previous tick (`runTicks` — a separate
+  // signal from `carrierUncontested` on purpose, see State.runTicks); not
+  // eligible once already in the attacking 50 (shot territory instead) or
+  // past the consecutive-tick cap.
+  const runTicksSoFar = state.runTicks ?? 0;
+  const eligibleToRun = (state.carrierUncontested || runTicksSoFar > 0) && !isForward50(state.zone, state.possession);
+  if (eligibleToRun && runTicksSoFar < MAX_CONSECUTIVE_RUN_TICKS) {
+    const runRating = computeContestRating(carrier, ["speed", "agility"]);
+    const runChance = Math.min(
+      0.35,
+      P_RUN_AND_CARRY_BASE * (runRating / RUN_AND_CARRY_BASELINE_RATING) * gameStyleDisposalMultiplier(styleFor(possessingPlan)),
+    );
+    if (ctx.rng() < runChance) {
+      const newZone = advanceZone(state.zone, state.possession);
+      const verb = runTicksSoFar === 0 ? "finds space and runs it forward, bouncing along the way" : "keeps running, another bounce";
+      log(ctx, newZone, state.possession, "GENERAL_PLAY", `${carrier.lname} ${verb}`, [carrier.PlayerID], gatherDeltas);
+      return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier, carrierUncontested: false, runTicks: runTicksSoFar + 1 };
+    }
   }
 
   const carrierTactic = tacticFor(possessingPlan, carrier, possessingTeam.positions);

@@ -952,6 +952,19 @@ export function computeDotPositions(
   // of a flat centre line — so a kick to Kade Chandler at Half Forward Flank
   // now visibly arrives out near where a real HFF stands, not wherever the
   // last unrelated contest happened to render.
+  // Aug 2026, round 18 (Tyler, live testing): "Gawn won the hitout, but Gawn
+  // is standing outside the center circle. The hitout should have been a
+  // contest between Cameron and Gawn inside that center circle." A genuine
+  // centre bounce (STOPPAGE phase, ball at MIDFIELD) is the one moment on the
+  // ground with a real, specific physical marker every broadcast graphic
+  // shows — both contesting rucks belong dead inside it, not wherever their
+  // own general Slice C formation anchor happens to sit (which can be
+  // meaningfully off-centre: the archetype-fallback path alone nudges a
+  // fallback Ruck to lane ~0.71, not 0 — see `FALLBACK_RUCK_LANE_NUDGE`).
+  // `match.ts`'s `runStoppage` now logs *both* rucks in `playerIds` (not just
+  // the winner) specifically so this branch can pull them both in together.
+  const isCentreBounce = event?.phase === "STOPPAGE" && event.zone === MIDFIELD;
+
   if (event) {
     const ballX = zoneToX(event.zone);
     const primary = all.get(event.playerIds[0]);
@@ -960,6 +973,15 @@ export function computeDotPositions(
       const existing = all.get(id);
       if (!existing) return;
       const spread = event.playerIds.length > 1 ? (i === 0 ? -14 : 14) : 0;
+      const tieBreak = hashPlayer(id, 4) - 0.5; // +-0.5
+      if (isCentreBounce) {
+        // Overrides the player's own formation anchor entirely, rather than
+        // the generic involved-player blend below (which only ever pulls
+        // *toward* ballX/baseY — not far enough when a player's own anchor
+        // starts meaningfully off-centre, exactly Gawn's case above).
+        all.set(id, { ...existing, x: ballX + spread * 0.5 + tieBreak * 4, y: CENTER_Y + spread + tieBreak * 4, involved: true });
+        return;
+      }
       const x = existing.x * 0.5 + ballX * 0.5;
       // BUG FIXED Aug 2026, round 3: found by this round's own scratch-script
       // sweep, not reported by Tyler directly, but the same underlying
@@ -1011,7 +1033,8 @@ export function computeDotPositions(
       // back (round 6) the original motivating problem is gone, so this
       // reverts cleanly to the simpler, originally-shipped formula rather
       // than keep chasing individual coincidences with an ever-bigger nudge.
-      const tieBreak = hashPlayer(id, 4) - 0.5; // +-0.5
+      // (`tieBreak` itself is now computed once, above, before the
+      // `isCentreBounce` branch — round 18 — since that branch needs it too.)
       all.set(id, { ...existing, x: x + tieBreak * 8, y: baseY + spread + tieBreak * 6, involved: true });
     });
   }

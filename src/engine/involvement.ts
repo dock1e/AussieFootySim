@@ -154,3 +154,74 @@ export function weightedPlayerChoice(rng: Rng, side: Side, team: MatchTeam, zone
   const pool = onGroundPlayers(team);
   return weightedChoice(rng, pool, (p) => involvementWeight(side, p, zone, team.positions?.get(p.PlayerID)));
 }
+
+/**
+ * Left(-1)/centre(0)/right(+1) — real pitch width, not mirrored by side the
+ * way `Zone` is (which flank a player stands on doesn't depend on which way
+ * they're attacking). Aug 2026, round 18: added for `weightedHandballTarget`
+ * below, Tyler's direct report that a handball travelled a full lane's width
+ * across the ground ("Lindsay... has handballed it - but found May who is
+ * about 30 meters away on the top side of the ground... A handball is only
+ * designed to be quick, short distance exchanges of the ball").
+ */
+export type Lane = -1 | 0 | 1;
+
+/**
+ * The five real positions with two on-field slots this match — mirrors
+ * `ground.ts`'s own `POSITION_LANES` at gameplay-appropriate (not
+ * pixel-perfect) granularity, kept as an independent, small definition here
+ * rather than imported: `ground.ts` already imports `match.ts` (for the
+ * `MatchEvent` type), and `match.ts` imports this file, so the reverse import
+ * would be circular.
+ */
+const DUAL_LANE_POSITIONS: ReadonlySet<Position> = new Set(["BP", "HBF", "W", "HFF", "FP"]);
+
+/**
+ * Which side of the ground `playerId` is actually on, purely from real
+ * assigned position data. Every centre-anchored position (FB/CHB/C/CHF/FF/R/
+ * RR/ROV) is always lane 0. A dual-lane position splits its two real
+ * occupants left(-1)/right(+1) by PlayerID order — the same convention
+ * `ground.ts`'s own `assignAnchors` already uses to decide which literal dot
+ * renders on which flank, arrived at independently here rather than shared,
+ * for the circular-import reason above; both sides making the same
+ * PlayerID-order call means the two can't visibly disagree even though
+ * they're not the same function. No real position at all (fallback/`INT`)
+ * reads as lane 0 — a neutral middle ground rather than a guess.
+ */
+export function laneFor(playerId: number, position: Position | null | undefined, teamPositions: Map<number, Position> | undefined): Lane {
+  if (!position || !DUAL_LANE_POSITIONS.has(position) || !teamPositions) return 0;
+  const sameSlot = [...teamPositions.entries()]
+    .filter(([, pos]) => pos === position)
+    .map(([id]) => id)
+    .sort((a, b) => a - b);
+  const idx = sameSlot.indexOf(playerId);
+  return idx <= 0 ? -1 : 1;
+}
+
+const SAME_LANE_FACTOR = 1;
+const ADJACENT_LANE_FACTOR = 0.35; // one side (a flank) vs the centre
+const OPPOSITE_LANE_FACTOR = 0.08; // left flank vs right flank — rare, not impossible, a real handball across the body does happen
+
+/**
+ * A handball's real receiver pool — same archetype/zone weighting as
+ * `weightedPlayerChoice`, additionally discounted by real lane distance from
+ * `disposer`, so a short, local exchange (the real "Triangle Handball"
+ * pattern — [[Tactics and Positional Play]] Part 3) is what actually comes
+ * out the other end, not a teammate on the opposite flank who merely shares
+ * the ball's coarse zone. Excludes `disposer` themselves from the pool (they
+ * can't handball to themselves). See `match.ts`'s `runGeneralPlay` — kicks
+ * still go through the plain `weightedPlayerChoice`, unrestricted by lane,
+ * since a kick can genuinely find a target clear across the ground.
+ */
+export function weightedHandballTarget(rng: Rng, side: Side, team: MatchTeam, zone: Zone, disposer: Player): Player {
+  const disposerLane = laneFor(disposer.PlayerID, team.positions?.get(disposer.PlayerID), team.positions);
+  const pool = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
+  if (pool.length === 0) return disposer; // defensive only — a real on-ground side always has teammates
+  return weightedChoice(rng, pool, (p) => {
+    const base = involvementWeight(side, p, zone, team.positions?.get(p.PlayerID));
+    const lane = laneFor(p.PlayerID, team.positions?.get(p.PlayerID), team.positions);
+    const laneGap = Math.abs(lane - disposerLane); // 0 same, 1 adjacent (flank<->centre), 2 opposite flanks
+    const laneFactor = laneGap === 0 ? SAME_LANE_FACTOR : laneGap === 1 ? ADJACENT_LANE_FACTOR : OPPOSITE_LANE_FACTOR;
+    return base * laneFactor;
+  });
+}

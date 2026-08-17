@@ -6,7 +6,7 @@ import type { ContestType } from "./contestTypes.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
-import { weightedPlayerChoice } from "./involvement.ts";
+import { weightedPlayerChoice, weightedHandballTarget } from "./involvement.ts";
 import {
   tacticGroupForSlot,
   defaultTacticForPosition,
@@ -209,6 +209,10 @@ const P_SET_SHOT_VS_SNAP = 0.7;
 const P_GOAL_GIVEN_ON_TARGET = 0.58;
 const SHOT_DIFFICULTY_MIN = 40;
 const SHOT_DIFFICULTY_RANGE = 30;
+/** See its own use in `runStoppage` — a real, cited correlation (AFL.com.au: ruckmen tap to a favoured side 75-80% of the time), expressed as a rating bonus since tap *direction* itself isn't modelled. */
+const FAVOURED_SIDE_CLEARANCE_BONUS = 1.3;
+/** See its own use in `runShot` — the share of a shot that "misses everything" (not a behind) that goes out of bounds for a throw-in, gap #73. */
+const P_MISS_BECOMES_THROW_IN = 0.5;
 
 function ruckRating(p: Player): number {
   return computeContestRating(p, ["strengthOverhead", "verticalLeap"]);
@@ -341,32 +345,94 @@ export interface State {
   zone: Zone;
   possession: Side;
   carrier: Player | null;
+  /**
+   * True when `carrier` just gained the ball via a clean, uncontested pickup
+   * (a weighted reception after a successful disposal, or a free kick-in) —
+   * false/omitted whenever they won it instead (a hitout, a stoppage
+   * clearance, or a genuine `CONTEST` roll), since those already credit
+   * `contestedPoss`/`contestedMarks`/`marks` directly at the point they're
+   * won (see `runStoppage`/`runContest`). `runGeneralPlay` reads this once,
+   * at its own top, to credit the *receiving* player's `uncontestedPoss` at
+   * the moment they actually gained it.
+   *
+   * Aug 2026 fix: this stat used to be credited unconditionally to whoever
+   * was *disposing* of the ball on a successful disposal — a different
+   * player, at a different moment, regardless of how *they* had gained it a
+   * tick earlier. Direct report from Tyler, watching a real match: "how did
+   * Daicos gather the ball, was it a contested hard ball get or an
+   * uncontested loose ball get?" — the honest previous answer was that
+   * neither stat existed for that moment at all; the 35%-of-the-time forced
+   * `CONTEST` roll (`P_DISPOSAL_BECOMES_CONTEST`) was already real and
+   * logged, but the other 65% of the time a new carrier was silently
+   * assigned with no roll, no log line, and no stat credit for the gain
+   * itself.
+   */
+  carrierUncontested?: boolean;
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
-  // Aug 2026, round 8: reads through onGroundPlayers rather than the raw
-  // squad — a bench interchange player (see MatchTeam.onGround) shouldn't be
-  // eligible to contest a ruck tap or a clearance while sitting off the
-  // ground. In practice this rarely changes who wins either rep (a club's
-  // real assigned Ruck/clearance threats are already whoever's best-rated for
-  // it, which is exactly why they're on the ground in the first place) but
-  // it closes the gap for the less common case (a genuinely bench-quality
-  // ruck who happens to still rate highest on a thin list).
+  return resolveStoppage(ctx, state.zone, state.possession, false);
+}
+
+/**
+ * Out of Bounds / Throw-In — Aug 2026, gap #73 closed. Tyler, watching a real
+ * match: "If Cameron has handballed the ball out of bounds (missed
+ * everything) then it should have been a boundary throw in at that point.
+ * The two ruckmen should have contested the ruck (depending on if their role
+ * is follow the ball or attacking/defending) otherwise the secondary ruck
+ * (tallest player in Forward 50 / Defensive 50) should contest the ruck at
+ * the boundary throw in." `zone` stays wherever the ball actually went out —
+ * unlike a centre bounce this never resets to MIDFIELD — and
+ * `useSecondaryRuck` kicks in automatically at either end (zone 0/4), per
+ * `resolveStoppage`'s own doc comment below. See `runShot` for the real
+ * trigger (a fraction of shots that miss everything).
+ */
+function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
+  return resolveStoppage(ctx, zone, displaySide, zone === 0 || zone === 4);
+}
+
+/**
+ * Shared ruck-then-clearance contest shape for both a centre bounce
+ * (`runStoppage`, always MIDFIELD) and a boundary throw-in (`runThrowIn`,
+ * wherever the ball actually went out) — Aug 2026, round 18.
+ *
+ * Aug 2026, round 8: reads through onGroundPlayers rather than the raw
+ * squad — a bench interchange player (see MatchTeam.onGround) shouldn't be
+ * eligible to contest a ruck tap or a clearance while sitting off the
+ * ground. In practice this rarely changes who wins either rep (a club's
+ * real assigned Ruck/clearance threats are already whoever's best-rated for
+ * it, which is exactly why they're on the ground in the first place) but
+ * it closes the gap for the less common case (a genuinely bench-quality
+ * ruck who happens to still rate highest on a thin list).
+ *
+ * `useSecondaryRuck` swaps each side's contest rep from their nominated
+ * best-rated Ruck to their tallest on-ground player — Tyler's own throw-in
+ * spec above: deep near an end, a primary Ruck often genuinely hasn't run all
+ * the way there, so the contest realistically falls to whoever tall happens
+ * to be nearby instead. A genuine Ruck who *has* followed the ball that far
+ * still tends to win anyway (a tall, well-rated Ruck is usually also the
+ * tallest on-ground player) — this only changes who's nominated, not who's
+ * eligible.
+ */
+function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean): State {
   const home = onGroundPlayers(ctx.home);
   const away = onGroundPlayers(ctx.away);
   const homePlan = ctx.homePlan;
   const awayPlan = ctx.awayPlan;
 
-  const homeRuck = bestByRating(home, ruckRating);
-  const awayRuck = bestByRating(away, ruckRating);
-  const homeRuckMult =
-    ruckHitoutMultiplier(tacticFor(homePlan, homeRuck, ctx.home.positions)) *
-    thirdManUpRuckMultiplier(teamHasTactic(homePlan, "Third Man Up")) *
-    conditionMultiplierFor(ctx, "home", homeRuck);
-  const awayRuckMult =
-    ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck, ctx.away.positions)) *
-    thirdManUpRuckMultiplier(teamHasTactic(awayPlan, "Third Man Up")) *
-    conditionMultiplierFor(ctx, "away", awayRuck);
+  const repRating: (p: Player) => number = useSecondaryRuck ? (p) => p.height : ruckRating;
+  const homeRuck = bestByRating(home, repRating);
+  const awayRuck = bestByRating(away, repRating);
+  const homeRuckMult = useSecondaryRuck
+    ? conditionMultiplierFor(ctx, "home", homeRuck)
+    : ruckHitoutMultiplier(tacticFor(homePlan, homeRuck, ctx.home.positions)) *
+      thirdManUpRuckMultiplier(teamHasTactic(homePlan, "Third Man Up")) *
+      conditionMultiplierFor(ctx, "home", homeRuck);
+  const awayRuckMult = useSecondaryRuck
+    ? conditionMultiplierFor(ctx, "away", awayRuck)
+    : ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck, ctx.away.positions)) *
+      thirdManUpRuckMultiplier(teamHasTactic(awayPlan, "Third Man Up")) *
+      conditionMultiplierFor(ctx, "away", awayRuck);
   const ruckResult = resolveContest(homeRuck, awayRuck, "ruck", ctx.rng, {
     attackerMultiplier: homeRuckMult,
     defenderMultiplier: awayRuckMult,
@@ -374,21 +440,50 @@ function runStoppage(ctx: Ctx, state: State): State {
   const ruckWinner = ruckResult.winner === "attacker" ? homeRuck : awayRuck;
   const ruckLoser = ruckResult.winner === "attacker" ? awayRuck : homeRuck;
   lineFor(ctx, ruckWinner).hitouts += 1;
-  log(ctx, state.zone, state.possession, "STOPPAGE", `${ruckWinner.lname} wins the hit-out`, [ruckWinner.PlayerID], [
+  // Both rucks logged as involved (not just the winner) — Aug 2026, Tyler:
+  // "Gawn won the hitout, but Gawn is standing outside the center circle...
+  // it should have been a contest between Cameron and Gawn inside that
+  // center circle." Purely a rendering hook: `ground.ts`'s `computeDotPositions`
+  // pulls every `playerIds` entry toward the ball for a STOPPAGE event, and a
+  // new phase-aware override there (round 18) anchors both of them dead
+  // centre for a real centre bounce specifically (not a throw-in — there's no
+  // real "centre circle" to snap to anywhere else on the ground). No
+  // stat/gameplay effect — `statDeltas`, not `playerIds`, drives every
+  // box-score change.
+  const hitoutLabel = useSecondaryRuck
+    ? `Boundary throw-in — ${ruckWinner.lname} taps it on as the makeshift ruck`
+    : `${ruckWinner.lname} wins the hit-out`;
+  log(ctx, zone, displaySide, "STOPPAGE", hitoutLabel, [ruckWinner.PlayerID, ruckLoser.PlayerID], [
     { playerId: ruckWinner.PlayerID, stat: "hitouts", delta: 1 },
     ...recordContest(ctx, "ruck", ruckWinner, ruckLoser),
   ]);
 
   const homeClear = bestByRating(home, clearanceRating);
   const awayClear = bestByRating(away, clearanceRating);
+  // Favoured-side tap bonus, Aug 2026 — a real, cited correlation, not an
+  // invented number: AFL.com.au's centre-bounce breakdown ([[Tactics and
+  // Positional Play]] Part 3) found ruckmen tap to a favoured side 75-80% of
+  // the time, and clubs are "OK with the opposition knowing that." The engine
+  // doesn't model tap *direction* (no x/y target for the palm itself), so
+  // this is expressed as a rating bonus on the clearance roll for whichever
+  // side just won the hitout — before this round the two contests were fully
+  // independent (a team could win the tap and still be no more likely to win
+  // the clearance), which understates how strongly a clean, controlled tap
+  // really helps. Same "deliberately roughed in, pending the balance
+  // simulator" status as every other placeholder constant in this file.
+  // Applied at a throw-in too — a makeshift tap still tends to favour its own
+  // side, just from a scrappier contest.
+  const homeWonHitout = ruckResult.winner === "attacker"; // attacker == home in resolveContest(homeRuck, awayRuck, ...) above
   const homeClearMult =
     taggingClearanceMultiplier(teamHasTactic(homePlan, "Tagging")) *
     gameStyleClearanceMultiplier(styleFor(homePlan)) *
-    conditionMultiplierFor(ctx, "home", homeClear);
+    conditionMultiplierFor(ctx, "home", homeClear) *
+    (homeWonHitout ? FAVOURED_SIDE_CLEARANCE_BONUS : 1);
   const awayClearMult =
     taggingClearanceMultiplier(teamHasTactic(awayPlan, "Tagging")) *
     gameStyleClearanceMultiplier(styleFor(awayPlan)) *
-    conditionMultiplierFor(ctx, "away", awayClear);
+    conditionMultiplierFor(ctx, "away", awayClear) *
+    (homeWonHitout ? 1 : FAVOURED_SIDE_CLEARANCE_BONUS);
   const clearResult = resolveContest(homeClear, awayClear, "clearance", ctx.rng, {
     attackerMultiplier: homeClearMult,
     defenderMultiplier: awayClearMult,
@@ -397,17 +492,26 @@ function runStoppage(ctx: Ctx, state: State): State {
   const clearWinner = winningSide === "home" ? homeClear : awayClear;
   const clearLoser = winningSide === "home" ? awayClear : homeClear;
   lineFor(ctx, clearWinner).clearances += 1;
+  // Aug 2026: a clearance win off a stoppage is, by definition, a contested
+  // possession (Tyler: "was it a contested hard ball get or an uncontested
+  // loose ball get?") — it went through `resolveContest` against a named
+  // opponent, but never actually touched `contestedPoss` before this round.
+  lineFor(ctx, clearWinner).contestedPoss += 1;
   log(
     ctx,
-    MIDFIELD,
+    zone,
     winningSide,
     "STOPPAGE",
     `${clearWinner.lname} clears it for ${teamOf(ctx, winningSide).name}`,
     [clearWinner.PlayerID],
-    [{ playerId: clearWinner.PlayerID, stat: "clearances", delta: 1 }, ...recordContest(ctx, "clearance", clearWinner, clearLoser)],
+    [
+      { playerId: clearWinner.PlayerID, stat: "clearances", delta: 1 },
+      { playerId: clearWinner.PlayerID, stat: "contestedPoss", delta: 1 },
+      ...recordContest(ctx, "clearance", clearWinner, clearLoser),
+    ],
   );
 
-  return { phase: "GENERAL_PLAY", zone: MIDFIELD, possession: winningSide, carrier: clearWinner };
+  return { phase: "GENERAL_PLAY", zone, possession: winningSide, carrier: clearWinner };
 }
 
 function runGeneralPlay(ctx: Ctx, state: State): State {
@@ -417,6 +521,13 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const defendingTeam = teamOf(ctx, defendingSide);
   const possessingPlan = planFor(ctx, state.possession);
   const defendingPlan = planFor(ctx, defendingSide);
+
+  // Aug 2026: credit the *gather*, not the disposal — see State.carrierUncontested's own doc comment.
+  const gatherDeltas: StatDelta[] = [];
+  if (state.carrierUncontested) {
+    lineFor(ctx, carrier).uncontestedPoss += 1;
+    gatherDeltas.push({ playerId: carrier.PlayerID, stat: "uncontestedPoss", delta: 1 });
+  }
 
   const carrierTactic = tacticFor(possessingPlan, carrier, possessingTeam.positions);
   const tag = defendingPlan ? resolveTagger(defendingPlan, carrier.PlayerID) : null;
@@ -467,6 +578,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       `${defender.lname} tackles ${carrier.lname}`,
       [defender.PlayerID, carrier.PlayerID],
       [
+        ...gatherDeltas,
         { playerId: defender.PlayerID, stat: "tackles", delta: 1 },
         { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
         { playerId: defender.PlayerID, stat: "tackleWins", delta: 1 },
@@ -479,12 +591,19 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   lineFor(ctx, defender).tackleAttempts += 1;
   const line = lineFor(ctx, carrier);
   line.disposals += 1;
-  line.uncontestedPoss += 1;
   const isKick = ctx.rng() < P_KICK_VS_HANDBALL;
   if (isKick) line.kicks += 1;
   else line.handballs += 1;
 
-  const newZone = advanceZone(state.zone, state.possession);
+  // Aug 2026: only a kick genuinely covers ground — a handball is a short,
+  // local exchange (Tyler, watching a real match: "A handball is only
+  // designed to be quick, short distance exchanges of the ball," reported
+  // after one travelled a full lane's width across the ground). See also the
+  // real "Triangle Handball" pattern, [[Tactics and Positional Play]] Part 3
+  // — controlled ball movement *out of trouble*, not a ground-gaining play.
+  // Kicks alone advance the zone; a handball keeps play, and the receiver
+  // pool below, right where it already was.
+  const newZone = isKick ? advanceZone(state.zone, state.possession) : state.zone;
   log(
     ctx,
     newZone,
@@ -493,25 +612,49 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     `${carrier.lname} finds space with a${isKick ? " kick" : " handball"}`,
     [carrier.PlayerID],
     [
+      ...gatherDeltas,
       { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
-      { playerId: carrier.PlayerID, stat: "uncontestedPoss", delta: 1 },
       { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
       { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
     ],
   );
 
+  // Aug 2026: a shot can only ever come off a kick (Tyler: "A shot on goal
+  // can only be a kick, players cannot handball it at goal") — and the
+  // player who just *disposed* of the ball isn't the one who ends up
+  // shooting. The kick has to actually find a genuine leading target inside
+  // 50 first, weighted the same way as every other reception, who marks it
+  // and *then* shoots — not the disposer teleporting straight into a shot off
+  // their own kick.
   const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
-  if (isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
-    return { phase: "SHOT", zone: newZone, possession: state.possession, carrier };
+  if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
+    const receiver = weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone);
+    const receiverLine = lineFor(ctx, receiver);
+    receiverLine.marks += 1;
+    log(
+      ctx,
+      newZone,
+      state.possession,
+      "GENERAL_PLAY",
+      `${receiver.lname} marks it deep in attack`,
+      [receiver.PlayerID],
+      [{ playerId: receiver.PlayerID, stat: "marks", delta: 1 }],
+    );
+    return { phase: "SHOT", zone: newZone, possession: state.possession, carrier: receiver };
   }
   const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
   if (ctx.rng() < contestChance) {
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   // Weighted by involvement at the zone the ball just advanced *to* — see
-  // engine/involvement.ts.
-  const newCarrier = weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone);
-  return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier };
+  // engine/involvement.ts. A handball's receiver pool is additionally
+  // constrained by real lane distance from the disposer (weightedHandballTarget)
+  // rather than the plain zone-only weighting a kick uses — see that
+  // function's own doc comment.
+  const newCarrier = isKick
+    ? weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone)
+    : weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, carrier);
+  return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier, carrierUncontested: true };
 }
 
 /** Prose label for `runContest`'s "X wins the ___" log line — a separate, sentence-shaped set of strings from `CONTEST_CONFIG[type].label` (contestTypes.ts), which is phrased for a menu/table context instead. */
@@ -652,6 +795,23 @@ function runShot(ctx: Ctx, state: State): State {
     );
   } else {
     log(ctx, state.zone, state.possession, "SHOT", `${shooter.lname}'s shot misses everything`, [shooter.PlayerID]);
+    // Aug 2026, gap #73 closed — Tyler: "If Cameron has handballed the ball
+    // out of bounds (missed everything) then it should have been a boundary
+    // throw in at that point." A shot that misses everything sailing out of
+    // bounds is the single most concrete, literal trigger he named. Real AFL
+    // has two different outcomes here depending on whether it's touched
+    // first (a throw-in, contested) or goes out "on the full" (a free kick to
+    // the defending side, from where it crossed the line) — this engine has
+    // no free-kick event at all yet (gap #76, a separate, disclosed
+    // limitation), so every miss that goes out is modelled as the throw-in
+    // case, not a 50/50 split against a mechanic that doesn't exist. Not
+    // *every* miss goes out of bounds (plenty sail through for a behind or
+    // get smothered short) — P_MISS_BECOMES_THROW_IN is the disclosed,
+    // roughed-in share that does, same status as every other placeholder
+    // probability in this file.
+    if (ctx.rng() < P_MISS_BECOMES_THROW_IN) {
+      return runThrowIn(ctx, state.zone, state.possession);
+    }
   }
 
   // Behind or miss -> kick-in for the defending side, from the same zone
@@ -660,7 +820,7 @@ function runShot(ctx: Ctx, state: State): State {
   // actually the likely kick-in taker, not any of the 22 equally.
   const newSide = otherSide(state.possession);
   const kickInTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), state.zone);
-  return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: kickInTaker };
+  return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: kickInTaker, carrierUncontested: true };
 }
 
 /**

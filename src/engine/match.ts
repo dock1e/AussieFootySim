@@ -326,6 +326,33 @@ const MAX_CONSECUTIVE_RUN_TICKS = 2;
  */
 const TACKLE_ATTEMPT_HANDICAP = 37;
 
+/**
+ * Contest execution roll — Aug 2026 round 22, Tyler's process-map diagram
+ * (Rows 1/3: "Roll: Gather the ball"/"Roll: Mark the ball", ~99% success /
+ * 1% fail). Once `resolveContest` has already decided who wins the
+ * *position* to attempt a ground-ball gather or a mark (see `runContest`'s
+ * own doc comment on that roll — genuinely unchanged this round, same
+ * attributes/multipliers/win-curve as before), actually executing cleanly
+ * is a near-certainty, not a fair fight — the diagram's whole point is that
+ * "who gets to contest" and "do they succeed once they're there" are two
+ * different questions with two very different odds. Also used by
+ * `resolveStoppage`'s ruck tap, per Tyler's own closing instruction ("This
+ * same process model should be adapted and then used for... ruck tap
+ * outs").
+ *
+ * A flat difficulty figure rather than a second named opponent — nobody is
+ * "defending" against a clean take once position is already won, so this
+ * uses `resolveThreshold`'s rating-vs-difficulty shape (same as `runShot`'s
+ * own solo skill check) rather than `resolveContest`'s two-player duel.
+ * Calibrated so a player at `RUN_AND_CARRY_BASELINE_RATING`'s own "plausible
+ * league-average" reference (55) succeeds ~99% of the time at this file's
+ * `resolveThreshold` default steepness (`contest.ts`'s `DEFAULT_K = 0.06`):
+ * winProbability(55, -22) ≈ 0.99. Checked empirically in
+ * `scripts/verify_round22_scratch.ts`, not just derived on paper — same
+ * discipline as `TACKLE_ATTEMPT_HANDICAP`.
+ */
+const CONTEST_EXECUTION_DIFFICULTY = -22;
+
 function ruckRating(p: Player): number {
   return computeContestRating(p, ["strengthOverhead", "verticalLeap"]);
 }
@@ -568,6 +595,23 @@ function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRu
   const ruckWinner = ruckResult.winner === "attacker" ? homeRuck : awayRuck;
   const ruckLoser = ruckResult.winner === "attacker" ? awayRuck : homeRuck;
   lineFor(ctx, ruckWinner).hitouts += 1;
+  // Execution roll — Aug 2026 round 22, same pattern as runContest's new
+  // gather/mark execution check (see CONTEST_EXECUTION_DIFFICULTY's own doc
+  // comment), adapted to a ruck tap per Tyler's own closing instruction:
+  // "This same process model should be adapted and then used for... ruck
+  // tap outs." `hitouts` is still credited unconditionally just above —
+  // real AFL credits a hitout for any legal touch away from a contest,
+  // clean or scrappy, so that stat doesn't depend on this roll. What DOES
+  // depend on it is whether the tap actually reaches a teammate with real
+  // advantage (the existing FAVOURED_SIDE_CLEARANCE_BONUS below still
+  // applies) or is just a scrappy deflection up for grabs (a neutral
+  // clearance contest instead, bonus to neither side) — same
+  // strengthOverhead/verticalLeap the ruck's own positioning roll already
+  // uses, since a clean controlled tap and a strong contested one draw on
+  // the same underlying skill.
+  const ruckWinnerSide: Side = ruckResult.winner === "attacker" ? "home" : "away";
+  const tapExecutionRating = computeContestRating(ruckWinner, ["strengthOverhead", "verticalLeap"]) * conditionMultiplierFor(ctx, ruckWinnerSide, ruckWinner);
+  const tapWentToHand = resolveThreshold(tapExecutionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success;
   // Both rucks logged as involved (not just the winner) — Aug 2026, Tyler:
   // "Gawn won the hitout, but Gawn is standing outside the center circle...
   // it should have been a contest between Cameron and Gawn inside that
@@ -580,7 +624,9 @@ function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRu
   // box-score change.
   const hitoutLabel = useSecondaryRuck
     ? `Boundary throw-in — ${ruckWinner.lname} taps it on as the makeshift ruck`
-    : `${ruckWinner.lname} wins the hit-out`;
+    : tapWentToHand
+      ? `${ruckWinner.lname} wins the hit-out`
+      : `${ruckWinner.lname} taps it out, but it's scrappy`;
   log(ctx, zone, displaySide, "STOPPAGE", hitoutLabel, [ruckWinner.PlayerID, ruckLoser.PlayerID], [
     { playerId: ruckWinner.PlayerID, stat: "hitouts", delta: 1 },
     ...recordContest(ctx, "ruck", ruckWinner, ruckLoser),
@@ -601,17 +647,21 @@ function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRu
   // simulator" status as every other placeholder constant in this file.
   // Applied at a throw-in too — a makeshift tap still tends to favour its own
   // side, just from a scrappier contest.
-  const homeWonHitout = ruckResult.winner === "attacker"; // attacker == home in resolveContest(homeRuck, awayRuck, ...) above
+  const homeWonHitout = ruckWinnerSide === "home"; // attacker == home in resolveContest(homeRuck, awayRuck, ...) above
+  // Aug 2026 round 22: the favoured-side bonus now also requires the tap to
+  // have actually gone to hand cleanly (`tapWentToHand`, see the execution
+  // roll above) — a scrappy tap doesn't hand either side a real advantage,
+  // so neither clearance multiplier gets the bonus that tick.
   const homeClearMult =
     taggingClearanceMultiplier(teamHasTactic(homePlan, "Tagging")) *
     gameStyleClearanceMultiplier(styleFor(homePlan)) *
     conditionMultiplierFor(ctx, "home", homeClear) *
-    (homeWonHitout ? FAVOURED_SIDE_CLEARANCE_BONUS : 1);
+    (homeWonHitout && tapWentToHand ? FAVOURED_SIDE_CLEARANCE_BONUS : 1);
   const awayClearMult =
     taggingClearanceMultiplier(teamHasTactic(awayPlan, "Tagging")) *
     gameStyleClearanceMultiplier(styleFor(awayPlan)) *
     conditionMultiplierFor(ctx, "away", awayClear) *
-    (homeWonHitout ? 1 : FAVOURED_SIDE_CLEARANCE_BONUS);
+    (!homeWonHitout && tapWentToHand ? FAVOURED_SIDE_CLEARANCE_BONUS : 1);
   const clearResult = resolveContest(homeClear, awayClear, "clearance", ctx.rng, {
     attackerMultiplier: homeClearMult,
     defenderMultiplier: awayClearMult,
@@ -946,12 +996,67 @@ function runContest(ctx: Ctx, state: State): State {
     contestRatingMultiplier(tacticFor(defendingPlan, defenderRep, defendingTeam.positions), contestType, "defender") *
     gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
     conditionMultiplierFor(ctx, defendingSide, defenderRep);
+  // This roll now decides who wins POSITION to attempt the play — Aug 2026
+  // round 22, see CONTEST_EXECUTION_DIFFICULTY's own doc comment. Left
+  // completely unchanged from before this round: same attributes, same
+  // multiplier hooks, same win-probability curve. What changes is what
+  // winning it *means* — it used to directly hand over marks/contestedPoss;
+  // now it only wins the *attempt*, gated by a new execution roll below.
   const result = resolveContest(attackerRep, defenderRep, contestType, ctx.rng, {
     attackerMultiplier: attackerMult,
     defenderMultiplier: defenderMult,
   });
 
   if (result.winner === "attacker") {
+    // Execution roll — Tyler's process-map diagram (Rows 1/3: "Roll: Gather
+    // the ball"/"Roll: Mark the ball", ~99%/1%). groundBall executes on
+    // Skill/Agility/Read Play — the diagram's own listed attributes for
+    // Loose/Hard Ball Get, genuinely different from the strengthGroundLevel/
+    // agility/courage that decided *position* above (winning the scramble
+    // vs cleanly securing it are different skills). markContested/markLead
+    // execute on the SAME manMarking/strengthOverhead/verticalLeap the
+    // diagram lists for both — winning the position battle for a mark and
+    // actually taking it clean draw on the same core marking skill, unlike
+    // a scrambled ground-ball pickup.
+    const executionRating =
+      computeContestRating(
+        attackerRep,
+        contestType === "groundBall" ? ["skill", "agility", "readPlay"] : ["manMarking", "strengthOverhead", "verticalLeap"],
+      ) * conditionMultiplierFor(ctx, attackingSide, attackerRep);
+    const executionSucceeded = resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success;
+    const fields = CONTEST_STAT_FIELDS[contestType];
+
+    if (!executionSucceeded) {
+      // Won position, fumbled the execution — a genuine loose-ball spill,
+      // not a clean win for either side. Both get the *attempt* they
+      // genuinely made (recordContest's own attempts-to-both shape,
+      // applied by hand since neither side actually "won" this one); no
+      // marks/contestedMarks/contestedPoss to anyone — real AFL doesn't
+      // credit a mark for a spilled contested grab either. The other rep
+      // scoops up the spill, mirroring the "spoils it and takes control"
+      // shape just below for a lost position battle.
+      const fumbleLabel = contestType === "groundBall" ? "can't hang onto the ground ball" : "spills the mark";
+      // Deltas below are a parallel ledger for the event log, not the source
+      // of truth — ctx.box must be mutated directly too (recordContest's own
+      // pattern), or fold-verification of events against the final box score
+      // mismatches by exactly one attempt per player per fumble.
+      (lineFor(ctx, attackerRep)[fields.attempts] as number) += 1;
+      (lineFor(ctx, defenderRep)[fields.attempts] as number) += 1;
+      log(
+        ctx,
+        state.zone,
+        defendingSide,
+        "CONTEST",
+        `${attackerRep.lname} ${fumbleLabel} — ${defenderRep.lname} scoops up the loose ball`,
+        [attackerRep.PlayerID, defenderRep.PlayerID],
+        [
+          { playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 },
+          { playerId: defenderRep.PlayerID, stat: fields.attempts, delta: 1 },
+        ],
+      );
+      return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: defenderRep };
+    }
+
     const line = lineFor(ctx, attackerRep);
     const deltas: StatDelta[] = [...recordContest(ctx, contestType, attackerRep, defenderRep)];
     if (contestType === "markContested" || contestType === "markLead") {

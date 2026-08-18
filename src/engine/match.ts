@@ -297,6 +297,35 @@ const P_RUN_AND_CARRY_BASE = 0.14;
 const RUN_AND_CARRY_BASELINE_RATING = 55; // a plausible league-average speed+agility composite — same "deliberately roughed in, pending the balance simulator" status as every other constant here
 const MAX_CONSECUTIVE_RUN_TICKS = 2;
 
+/**
+ * Tackle attempt — Aug 2026 round 21. Tyler's own process-map diagram (「AFS
+ * Process Map」: Pressure ball carrier -> identify contestants in range ->
+ * distance/numbers advantage -> "Roll: Contest ball carrier" -> roughly a
+ * 10%/90% Tackled/Evades split) plus a real reported bug: tagging Ned Long
+ * onto Clayton Oliver produced "13 tackles in the first quarter alone... he
+ * seemed to have a 100% tackling success rate." Root cause, precise: until
+ * this round, whether a tackle *landed* was never its own roll at all — it
+ * was read straight off the result of the disposal-quality roll in
+ * `runGeneralPlay` (whenever the defender won THAT roll, tackleAttempts and
+ * tackleWins were credited together, unconditionally, every single time —
+ * see that function's own doc comment on the new tackle-attempt block for
+ * the full before/after).
+ *
+ * `TACKLE_ATTEMPT_HANDICAP` is a flat rating-point handicap folded onto the
+ * *evader's* side of the roll (see `resolveThreshold(tacklerRating,
+ * evasionRating + TACKLE_ATTEMPT_HANDICAP, ...)`), calibrated so two players
+ * with equal underlying attribute averages land a tackle only around Tyler's
+ * own stated ballpark (~10%), not a fair 50/50 contest — most pressure
+ * should read as "evades the tackle," same as his diagram. At this file's
+ * `resolveThreshold` default logistic steepness (contest.ts's `DEFAULT_K =
+ * 0.06`), a 37-point handicap works out to 1/(1+exp(0.06*37)) ≈ 9.8% at
+ * equal ratings — checked empirically against real club data in
+ * `scripts/verify_round21_scratch.ts`, not just derived on paper. Exactly
+ * the kind of number Engine.md's own balance simulator exists to retune
+ * later, same disclosed status as every other constant in this file.
+ */
+const TACKLE_ATTEMPT_HANDICAP = 37;
+
 function ruckRating(p: Player): number {
   return computeContestRating(p, ["strengthOverhead", "verticalLeap"]);
 }
@@ -687,34 +716,47 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: state.possession, carrier, carrierUncontested: true };
   }
 
-  const disposalRating =
-    computeContestRating(carrier, ["skill", "positioning"]) *
-    carrierDisposalMultiplier(carrierTactic) *
-    runOffManDisposalMultiplier(carrierTactic) *
-    taggerDisposalMultiplier(carrierTactic === "Tagging") *
-    gameStyleDisposalMultiplier(styleFor(possessingPlan)) *
-    conditionMultiplierFor(ctx, state.possession, carrier) *
-    (tagger ? TAGGED_CARRIER_RATING_MULTIPLIER : 1);
-  const defenderRating =
+  // Tackle attempt — see TACKLE_ATTEMPT_HANDICAP's own doc comment for the
+  // full rationale (Tyler's process-map diagram + the Ned Long/Clayton
+  // Oliver tagging bug this fixes). A genuinely separate, low-probability
+  // roll for "does the tackle land," using the same attacker/defender
+  // attribute shape `CONTEST_CONFIG.tackle` (contestTypes.ts) already
+  // defined — tackler: tenacity/strengthManOnMan/aggression, evader:
+  // agility/acceleration/xFactor — kept inline rather than imported,
+  // matching this function's existing style of inlining each roll's own
+  // attribute list (see disposalRating/defenderRating just below).
+  //
+  // Deliberately a manual `resolveThreshold` check, not
+  // `resolveContest`/`recordContest`: `recordContest` credits BOTH named
+  // players symmetrically (winner gets attempts+wins, loser gets attempts
+  // only) — right for a genuine two-sided contest (ruck, clearance, mark),
+  // wrong here, since an evaded tackle isn't the carrier's own "tackle
+  // win." Tackle stats stay defender-only, exactly as before this round.
+  const tacklerRating =
     computeContestRating(defender, ["tenacity", "strengthManOnMan", "aggression"]) *
     tackleDefenderRatingMultiplier(defenderTactic, defenderInForwardHalf) *
     gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
     conditionMultiplierFor(ctx, defendingSide, defender);
-  const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
-
-  // Tackle attempts/wins tallied here rather than via `recordContest`
-  // (Aug 2026) — this disposal-under-pressure roll doesn't go through
-  // `resolveContest`/`CONTEST_CONFIG.tackle` at all (it uses its own
-  // disposalRating-vs-defenderRating threshold check, a deliberate pre-
-  // existing design, not something this round changes), but it's still
-  // exactly the "did the defender attempt/win a tackle" moment Tyler's
-  // contest-breakdown ask needs a rate for, so it's tallied directly against
-  // the same `tackleAttempts`/`tackleWins` fields `CONTEST_STAT_FIELDS`
-  // defines for consistency with every other contest type's naming.
-  if (!result.success) {
+  // Deliberately NOT multiplied by `TAGGED_CARRIER_RATING_MULTIPLIER` here —
+  // checked empirically (scripts/verify_round21_scratch.ts, section 6, a
+  // real Ned-Long-tags-Clayton-Oliver match) and it swamps the handicap
+  // above: a flat 0.5x cut is a huge swing in logistic-space against a
+  // ~40-70-point rating, roughly cancelling out the ~10%-baseline handicap
+  // and pushing a tagger's own tackle-landing rate back up around 60-70% —
+  // reproducing the exact inflated-success-rate shape Tyler reported, just
+  // less extreme than the old ~100%. A tag still meaningfully bites here
+  // through `resolveTagger`'s existing deterministic-matchup mechanic
+  // (every one of the target's attempts is contested by the same named
+  // tagger, not a rotating weighted pick) and through the *unchanged*
+  // disposal-quality roll below, which still applies this multiplier — this
+  // just stops a tag from ALSO inflating the landed-tackle rate itself,
+  // which is precisely the thing Tyler's report says reads as unrealistic.
+  const evasionRating = computeContestRating(carrier, ["agility", "acceleration", "xFactor"]) * conditionMultiplierFor(ctx, state.possession, carrier);
+  const tackleAttemptResult = resolveThreshold(tacklerRating, evasionRating + TACKLE_ATTEMPT_HANDICAP, ctx.rng);
+  lineFor(ctx, defender).tackleAttempts += 1;
+  if (tackleAttemptResult.success) {
     const tacklerLine = lineFor(ctx, defender);
     tacklerLine.tackles += 1;
-    tacklerLine.tackleAttempts += 1;
     tacklerLine.tackleWins += 1;
     log(
       ctx,
@@ -734,7 +776,41 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: defender };
   }
 
-  lineFor(ctx, defender).tackleAttempts += 1;
+  // Evaded the tackle attempt above — the disposal itself can still go
+  // wrong under residual pressure (every multiplier below is unchanged from
+  // before this round), but that's now a genuinely different outcome from a
+  // landed tackle: no tackles/tackleWins credit, just a turnover. Before
+  // this round these two things were the same roll, which is exactly what
+  // let a tagger's tackle *attempts* silently double as tackle *wins* 1:1.
+  const disposalRating =
+    computeContestRating(carrier, ["skill", "positioning"]) *
+    carrierDisposalMultiplier(carrierTactic) *
+    runOffManDisposalMultiplier(carrierTactic) *
+    taggerDisposalMultiplier(carrierTactic === "Tagging") *
+    gameStyleDisposalMultiplier(styleFor(possessingPlan)) *
+    conditionMultiplierFor(ctx, state.possession, carrier) *
+    (tagger ? TAGGED_CARRIER_RATING_MULTIPLIER : 1);
+  const defenderRating =
+    computeContestRating(defender, ["tenacity", "strengthManOnMan", "aggression"]) *
+    tackleDefenderRatingMultiplier(defenderTactic, defenderInForwardHalf) *
+    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
+    conditionMultiplierFor(ctx, defendingSide, defender);
+  const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
+
+  if (!result.success) {
+    log(
+      ctx,
+      state.zone,
+      state.possession,
+      "GENERAL_PLAY",
+      `${carrier.lname} fumbles it under pressure from ${defender.lname}`,
+      [defender.PlayerID, carrier.PlayerID],
+      [...gatherDeltas, { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 }],
+    );
+    const newSide = otherSide(state.possession);
+    return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: defender };
+  }
+
   const line = lineFor(ctx, carrier);
   line.disposals += 1;
   const isKick = ctx.rng() < P_KICK_VS_HANDBALL;

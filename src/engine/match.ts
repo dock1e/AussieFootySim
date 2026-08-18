@@ -6,8 +6,8 @@ import type { ContestType } from "./contestTypes.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
-import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders } from "./involvement.ts";
-import { carrierPosition } from "./positioning.ts";
+import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget } from "./involvement.ts";
+import { carrierPosition, proximityFor, distanceBetween, proximityWeight } from "./positioning.ts";
 import {
   tacticGroupForSlot,
   defaultTacticForPosition,
@@ -354,6 +354,72 @@ const TACKLE_ATTEMPT_HANDICAP = 37;
  */
 const CONTEST_EXECUTION_DIFFICULTY = -22;
 
+/**
+ * Persistent chase — Aug 2026 round 24, backlog #18 Slice A for real. Tyler,
+ * naming exactly this piece after round 23 shipped its "nobody in range"
+ * branch: "Proceed with that persistent chase" — [[Contest Resolution
+ * Redesign]]'s Slice 3 item 3, explicitly deferred out of round 23: "a
+ * player who isn't close enough yet but is running toward the contest keeps
+ * closing distance tick over tick (paced by speed/acceleration), rather than
+ * every pick being freshly, independently rolled with no memory."
+ *
+ * Deliberately scoped to Run and Carry specifically (`P_RUN_AND_CARRY_BASE`
+ * above), not "any tick, any carrier": a chase needs the SAME carrier to
+ * still be holding the ball on the NEXT tick for there to be anything left
+ * to close in on, and Run and Carry is the one place this engine already
+ * lets that happen — the overwhelmingly common case (an uncontested carrier
+ * disposes of the ball the very tick they receive it) gives a chaser no
+ * window at all. See `State.chaserId`'s own doc comment for how the same
+ * chaser persists across ticks rather than being re-picked.
+ *
+ * `CHASE_PURSUIT_DISTANCE` gates whether a chase can even start: the
+ * closest defender (`closestDefender`, `involvement.ts`) has to be within
+ * this of the carrier's own exact position (`carrierPosition`) the moment a
+ * run tick succeeds — deliberately wider than `positioning.ts`'s own
+ * `PROXIMITY_RANGE_DISTANCE` (the immediate-contest range round 23
+ * calibrated), since a chase is explicitly about someone who ISN'T close
+ * enough to contest yet but is still a plausible pursuer, not a second copy
+ * of the same immediate-range check. Landed at 0.35 — right at round 23's
+ * own disclosed finding that the single closest-of-22 defender is almost
+ * always within that distance of any target on the ground (see
+ * `positioning.ts`'s `PROXIMITY_RANGE_DISTANCE` doc comment) — so most Run
+ * and Carry ticks really do find a plausible chaser (real footy: someone's
+ * always converging), but a real, disclosed minority genuinely don't (~9%
+ * of run ticks in `scripts/verify_round24_scratch.ts`'s own calibration
+ * run) — a genuine clean break, not manufactured for variety's sake.
+ *
+ * Once a chase is active, `CHASE_CATCH_HANDICAP_BASE` +
+ * `CHASE_DISTANCE_PENALTY * distance` is the handicap folded onto the
+ * carrier's own evasion rating in a `resolveThreshold(chaserRating,
+ * evasionRating + handicap, ...)` roll each tick the chase continues — one
+ * roll, not two: success means the chaser has both closed the gap AND laid
+ * the tackle this tick, a deliberately different shape from the standing
+ * `TACKLE_ATTEMPT_HANDICAP` roll below (that one already assumes contact is
+ * established and asks only "does it land"; this one is asking "does a
+ * pursuing defender get there at all," which is the harder, rarer question
+ * a genuine run-down tackle earns its highlight-reel status for). The
+ * distance term means a chaser who started closer has a genuinely better
+ * chance than one who started near the outer edge of
+ * `CHASE_PURSUIT_DISTANCE` — recomputed fresh each tick via the same
+ * `proximityFor`/`distanceBetween` primitives round 23 already built,
+ * rather than a second, separately-tracked "metres closed" counter.
+ *
+ * All three calibrated empirically against real club data
+ * (`scripts/verify_round24_scratch.ts`) — landed on a catch rate of roughly
+ * 19-20% per active chase-tick (distance-scaled: closer to ~20%+ for a
+ * chaser who started near the immediate-contest range, down to ~6% for one
+ * who started right at the outer `CHASE_PURSUIT_DISTANCE` edge), same
+ * disclosed-not-derived-on-paper status as every other constant in this
+ * file. No real citation for "how often should a chase-down tackle happen"
+ * exists anywhere in the vault (unlike `TACKLE_ATTEMPT_HANDICAP`'s own
+ * process-map-diagram figure) — self-declared plausible rather than
+ * grounded in a specific reported number, same honestly-disclosed status as
+ * `P_FORWARD_MARK_IS_LEAD`.
+ */
+const CHASE_PURSUIT_DISTANCE = 0.35;
+const CHASE_CATCH_HANDICAP_BASE = 15;
+const CHASE_DISTANCE_PENALTY = 70;
+
 function ruckRating(p: Player): number {
   return computeContestRating(p, ["strengthOverhead", "verticalLeap"]);
 }
@@ -524,6 +590,21 @@ export interface State {
    * free kick, a shot, a contest roll, a normal disposal hand-off).
    */
   runTicks?: number;
+  /**
+   * Aug 2026 round 24 — persistent chase, backlog #18 Slice A for real (see
+   * `CHASE_PURSUIT_DISTANCE`'s own doc comment). Names the SAME pursuing
+   * defender across however many consecutive Run and Carry ticks the chase
+   * lasts, found once via `closestDefender` and re-looked-up by ID every
+   * following tick rather than re-picked fresh — the literal "no memory"
+   * gap Tyler named. Only ever meaningful alongside `runTicks > 0` (a chase
+   * only exists because the SAME carrier is still holding the ball across
+   * ticks — see that constant's own doc comment for why this is scoped to
+   * Run and Carry specifically). Same reset convention as `runTicks` itself:
+   * every return path that isn't continuing this exact chase simply omits
+   * it, which is what ends a chase the instant anything else happens (the
+   * carrier stops running, gets tackled, disposes, etc).
+   */
+  chaserId?: number;
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
@@ -716,6 +797,8 @@ function resolveUnpressuredDisposal(
   possessingTeam: MatchTeam,
   possessingPlan: TeamPlan | null,
   gatherDeltas: StatDelta[],
+  defendingSide: Side,
+  defendingTeam: MatchTeam,
 ): State {
   const line = lineFor(ctx, carrier);
   line.disposals += 1;
@@ -764,15 +847,28 @@ function resolveUnpressuredDisposal(
 
   const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
   if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
-    const receiver = weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone);
+    // Space-aware kick target — Aug 2026 round 24, see
+    // involvement.ts's weightedKickTarget doc comment / [[Contest
+    // Resolution Redesign]]'s Slice 3 item 4. `receiverPick.distance` is the
+    // receiver's own real distance to the nearest opponent at the moment
+    // they're found, so the log line can finally say *why* this was a mark,
+    // not just who took it — genuinely in the clear (beyond
+    // PROXIMITY_RANGE_DISTANCE, `proximityWeight` reading 0) vs a strong
+    // grab under attention.
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiver = receiverPick.player;
     const receiverLine = lineFor(ctx, receiver);
     receiverLine.marks += 1;
+    const markLabel =
+      proximityWeight(receiverPick.distance) === 0
+        ? `${receiver.lname} leads into space and marks it deep in attack`
+        : `${receiver.lname} marks it deep in attack, strongly attended`;
     log(
       ctx,
       newZone,
       state.possession,
       "GENERAL_PLAY",
-      `${receiver.lname} marks it deep in attack`,
+      markLabel,
       [receiver.PlayerID],
       [{ playerId: receiver.PlayerID, stat: "marks", delta: 1 }],
     );
@@ -783,7 +879,7 @@ function resolveUnpressuredDisposal(
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   const newCarrier = isKick
-    ? weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone)
+    ? weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam).player
     : weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, carrier);
   return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier, carrierUncontested: true };
 }
@@ -820,6 +916,78 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     if (ctx.rng() < runChance) {
       const newZone = advanceZone(state.zone, state.possession);
       const verb = runTicksSoFar === 0 ? "finds space and runs it forward, bouncing along the way" : "keeps running, another bounce";
+      const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone);
+
+      // Persistent chase — Aug 2026 round 24, see CHASE_PURSUIT_DISTANCE's
+      // own doc comment. The SAME chaser (state.chaserId), re-looked-up by
+      // ID, if one's already in pursuit from a previous tick of this exact
+      // run; otherwise a fresh closestDefender check against the carrier's
+      // own exact position, locked in as the new chaser only if they're
+      // plausibly close enough to be pursuing at all.
+      let chaser = state.chaserId ? onGroundPlayers(defendingTeam).find((p) => p.PlayerID === state.chaserId) : undefined;
+      if (!chaser) {
+        const closest = closestDefender(defendingSide, defendingTeam, state.zone, state.possession, carrierPos);
+        if (closest && closest.distance <= CHASE_PURSUIT_DISTANCE) chaser = closest.player;
+      }
+
+      if (chaser) {
+        const distance = distanceBetween(
+          carrierPos,
+          proximityFor(chaser, defendingSide, defendingTeam.positions?.get(chaser.PlayerID), state.zone, state.possession),
+        );
+        const chaserTactic = tacticFor(defendingPlan, chaser, defendingTeam.positions);
+        const chaserInForwardHalf = isForward50(state.zone, defendingSide);
+        const chaserRating =
+          computeContestRating(chaser, ["speed", "acceleration"]) *
+          tackleDefenderRatingMultiplier(chaserTactic, chaserInForwardHalf) *
+          gameStyleDefenderMultiplier(styleFor(defendingPlan), chaserInForwardHalf) *
+          conditionMultiplierFor(ctx, defendingSide, chaser);
+        const evasionRating = computeContestRating(carrier, ["speed", "agility"]) * conditionMultiplierFor(ctx, state.possession, carrier);
+        const caught = resolveThreshold(chaserRating, evasionRating + CHASE_CATCH_HANDICAP_BASE + distance * CHASE_DISTANCE_PENALTY, ctx.rng);
+
+        if (caught.success) {
+          const tacklerLine = lineFor(ctx, chaser);
+          tacklerLine.tackles += 1;
+          tacklerLine.tackleAttempts += 1;
+          tacklerLine.tackleWins += 1;
+          log(
+            ctx,
+            state.zone,
+            state.possession,
+            "GENERAL_PLAY",
+            `${chaser.lname} runs ${carrier.lname} down from behind and drags him to ground`,
+            [chaser.PlayerID, carrier.PlayerID],
+            [
+              ...gatherDeltas,
+              { playerId: chaser.PlayerID, stat: "tackles", delta: 1 },
+              { playerId: chaser.PlayerID, stat: "tackleAttempts", delta: 1 },
+              { playerId: chaser.PlayerID, stat: "tackleWins", delta: 1 },
+            ],
+          );
+          const newSide = otherSide(state.possession);
+          return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: chaser };
+        }
+
+        log(
+          ctx,
+          newZone,
+          state.possession,
+          "GENERAL_PLAY",
+          `${carrier.lname} ${verb} — ${chaser.lname} chasing hard but can't get there`,
+          [carrier.PlayerID, chaser.PlayerID],
+          gatherDeltas,
+        );
+        return {
+          phase: "GENERAL_PLAY",
+          zone: newZone,
+          possession: state.possession,
+          carrier,
+          carrierUncontested: false,
+          runTicks: runTicksSoFar + 1,
+          chaserId: chaser.PlayerID,
+        };
+      }
+
       log(ctx, newZone, state.possession, "GENERAL_PLAY", `${carrier.lname} ${verb}`, [carrier.PlayerID], gatherDeltas);
       return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier, carrierUncontested: false, runTicks: runTicksSoFar + 1 };
     }
@@ -851,7 +1019,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // See resolveUnpressuredDisposal's own doc comment for why this is a
     // small separate function rather than threading a nullable defender
     // through the already-intricate pressured path below.
-    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas);
+    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas, defendingSide, defendingTeam);
   }
 
   const defenderTactic = tacticFor(defendingPlan, defender, defendingTeam.positions);
@@ -1048,15 +1216,24 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // their own kick.
   const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
   if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
-    const receiver = weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone);
+    // Space-aware kick target — Aug 2026 round 24, see
+    // involvement.ts's weightedKickTarget doc comment / [[Contest
+    // Resolution Redesign]]'s Slice 3 item 4 — same treatment as
+    // resolveUnpressuredDisposal's own identical shot-chance branch above.
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiver = receiverPick.player;
     const receiverLine = lineFor(ctx, receiver);
     receiverLine.marks += 1;
+    const markLabel =
+      proximityWeight(receiverPick.distance) === 0
+        ? `${receiver.lname} leads into space and marks it deep in attack`
+        : `${receiver.lname} marks it deep in attack, strongly attended`;
     log(
       ctx,
       newZone,
       state.possession,
       "GENERAL_PLAY",
-      `${receiver.lname} marks it deep in attack`,
+      markLabel,
       [receiver.PlayerID],
       [{ playerId: receiver.PlayerID, stat: "marks", delta: 1 }],
     );
@@ -1070,9 +1247,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // engine/involvement.ts. A handball's receiver pool is additionally
   // constrained by real lane distance from the disposer (weightedHandballTarget)
   // rather than the plain zone-only weighting a kick uses — see that
-  // function's own doc comment.
+  // function's own doc comment. A kick's own receiver pool is, as of round
+  // 24, additionally weighted by genuine space from the nearest opponent
+  // (weightedKickTarget) — see that function's own doc comment.
   const newCarrier = isKick
-    ? weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone)
+    ? weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam).player
     : weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, carrier);
   return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier, carrierUncontested: true };
 }

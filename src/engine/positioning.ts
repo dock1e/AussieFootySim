@@ -212,3 +212,34 @@ export function proximityWeight(distance: number): number {
   if (distance > PROXIMITY_RANGE_DISTANCE) return 0;
   return distance <= PROXIMITY_CLOSE_DISTANCE ? 1 : PROXIMITY_MID_FACTOR;
 }
+
+/**
+ * Aug 2026 round 24 — the inverse preference for a *kick target* rather than
+ * a defender: [[Contest Resolution Redesign]]'s Slice 3 item 4 ("Directional
+ * kick/handball intent... a disposal aims at an actual target
+ * position/direction... rather than 'always advance exactly one zone,
+ * statistically-weighted receiver'"). `proximityWeight` above answers "is
+ * this defender close enough to contest" (closer = better, zero beyond
+ * range); a kicker choosing WHERE to send the ball wants the opposite shape
+ * — more room from the nearest opponent is a genuinely better target, not a
+ * hard cutoff (a heavily-attended contested target is still a real, legal
+ * kick option, just a less-favoured one — real disposal decision-making
+ * prefers space but doesn't refuse a contest). See
+ * `involvement.ts`'s `weightedKickTarget`, the one caller.
+ *
+ * Deliberately unbounded-but-capped rather than a second discrete
+ * close/mid/zero tier like `proximityWeight`: a kick target's "how open are
+ * they" genuinely varies continuously (a player standing alone in acres of
+ * space is a meaningfully better target than one merely 0.3 clear), whereas
+ * a defender's contest eligibility is a much more binary real-world fact
+ * (either close enough to get a hand in or not). `SPACE_WEIGHT_MAX` stops a
+ * player in a wildly empty part of the ground (e.g. the opponent's own
+ * `onGroundPlayers` pool momentarily thin near them) from swamping every
+ * other candidate's archetype/position suitability entirely.
+ */
+export const SPACE_WEIGHT_SCALE = 6;
+export const SPACE_WEIGHT_MAX = 4;
+
+export function spaceWeight(distance: number): number {
+  return Math.min(SPACE_WEIGHT_MAX, 1 + distance * SPACE_WEIGHT_SCALE);
+}

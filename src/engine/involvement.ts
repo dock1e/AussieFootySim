@@ -6,7 +6,7 @@ import { ZONE_FOR_POSITION, ownZone, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import type { Rng } from "./rng.ts";
-import { proximityFor, distanceBetween, proximityWeight, type AbstractPosition } from "./positioning.ts";
+import { proximityFor, distanceBetween, proximityWeight, spaceWeight, type AbstractPosition } from "./positioning.ts";
 
 /**
  * Position-weighted involvement — Tactics and Positional Play.md Part 6 /
@@ -227,6 +227,7 @@ export function weightedHandballTarget(rng: Rng, side: Side, team: MatchTeam, zo
   });
 }
 
+/** A player paired with their computed distance from some reference position — `nearbyDefenders`' own original return shape, reused as-is (not a fresh, near-identical type) by `closestDefender` and `weightedKickTarget` below since both are the same "who, and how far" pairing against a different reference point/pool. */
 export interface NearbyPick {
   player: Player;
   distance: number;
@@ -262,4 +263,75 @@ export function nearbyDefenders(rng: Rng, side: Side, team: MatchTeam, zone: Zon
   const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0);
   if (eligible.length === 0) return null;
   return weightedChoice(rng, eligible, (d) => involvementWeight(side, d.player, zone, team.positions?.get(d.player.PlayerID)) * proximityWeight(d.distance));
+}
+
+/**
+ * The single closest of `team`'s on-ground players to `target`, regardless
+ * of whether they're within `PROXIMITY_RANGE_DISTANCE` — unlike
+ * `nearbyDefenders`, never `null` just because nobody's close enough to
+ * *contest* this tick (only `null` if `team` genuinely has no on-ground
+ * players at all, a defensive guard against a state that shouldn't occur in
+ * a real match). Aug 2026 round 24, for the persistent-chase mechanic
+ * (`match.ts`'s Run and Carry — see backlog #18 Slice A / [[Contest
+ * Resolution Redesign]]'s Slice 3 item 3): identifying WHO is closing in on
+ * a fleeing carrier needs an answer even while that player is still too far
+ * away to contest, which is exactly the question `nearbyDefenders`' own
+ * null-when-empty contract can't answer.
+ */
+export function closestDefender(side: Side, team: MatchTeam, zone: Zone, possession: Side, target: AbstractPosition): NearbyPick | null {
+  const pool = onGroundPlayers(team);
+  let best: NearbyPick | null = null;
+  for (const player of pool) {
+    const distance = distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession));
+    if (!best || distance < best.distance) best = { player, distance };
+  }
+  return best;
+}
+
+/**
+ * Aug 2026 round 24 — a kick's real receiver pool, [[Contest Resolution
+ * Redesign]]'s Slice 3 item 4: "a disposal aims at an actual target
+ * position/direction... rather than 'always advance exactly one zone,
+ * statistically-weighted receiver.'" Same archetype/real-position
+ * suitability base as `weightedPlayerChoice` (`involvementWeight`,
+ * unchanged), now additionally weighted by how much genuine room each
+ * candidate has from the *nearest opposing player* (`spaceWeight` —
+ * `positioning.ts`), computed from the candidate's own fuzzy, press-shifted
+ * position (`proximityFor` — they haven't received the ball yet, so unlike
+ * a ball carrier their position isn't pinned exactly). A soft preference,
+ * not a hard cutoff: a heavily-attended target can still be found (real
+ * disposal decisions do sometimes kick to a contest on purpose), just
+ * discounted relative to a genuinely leading target, which is what makes
+ * this a real *direction* rather than the old purely zone/archetype
+ * statistical pick.
+ *
+ * Excludes `disposer` from the pool (same reasoning
+ * `weightedHandballTarget` already documents for itself — you can't kick to
+ * yourself), a small, deliberate correctness fix picked up for free while
+ * writing this new function rather than left as the old
+ * `weightedPlayerChoice` call sites' pre-existing gap.
+ *
+ * `opponentSide`/`opponentTeam` are the *defending* side relative to this
+ * kick — needed to compute each candidate's own real distance-to-nearest-
+ * opponent, which `weightedPlayerChoice` never needed since it had no
+ * concept of "space" at all.
+ */
+export function weightedKickTarget(
+  rng: Rng,
+  side: Side,
+  team: MatchTeam,
+  zone: Zone,
+  possession: Side,
+  disposer: Player,
+  opponentSide: Side,
+  opponentTeam: MatchTeam,
+): NearbyPick {
+  const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
+  const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
+  const candidates: NearbyPick[] = pool.map((player) => {
+    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession);
+    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
+    return { player, distance: closest ? closest.distance : Infinity };
+  });
+  return weightedChoice(rng, candidates, (c) => involvementWeight(side, c.player, zone, team.positions?.get(c.player.PlayerID)) * spaceWeight(c.distance));
 }

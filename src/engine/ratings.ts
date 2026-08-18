@@ -164,16 +164,28 @@ function findDelta(deltas: StatDelta[], stat: keyof BoxScoreLine): StatDelta | u
 
 /**
  * A hitout's real value depends on whether it actually advantaged its own
- * team — runStoppage() always immediately resolves and logs a *separate*
- * clearance contest right after the hitout, in the same tick, and that
- * clearance can be won by either side independent of who won the hitout —
- * so "did the hitout winner's own side also win the following clearance" is
- * a real, already-available signal for "to advantage" vs "sharked," not a
- * guess dressed up as one.
+ * team — `match.ts`'s `resolveRuckTap` always logs a *separate* clearance
+ * contest right after the hitout (`runClearance`), and that clearance can be
+ * won by either side independent of who won the hitout — so "did the
+ * hitout winner's own side also win the following clearance" is a real,
+ * already-available signal for "to advantage" vs "sharked," not a guess
+ * dressed up as one.
+ *
+ * Aug 2026 round 25: the clearance used to resolve in the *same tick* as
+ * the hitout (a single `resolveStoppage` call), which is what the old
+ * `next.tick !== events[index].tick` check was actually checking for. Now
+ * that it's `runClearance`'s own separate game-loop tick
+ * ([[Contest Resolution Redesign]] phased-plan item 3, "ruck-tap-then-
+ * clearance as two ticks, not one function call"), the two events are
+ * still always immediately adjacent in `events[]` (this engine's state
+ * machine is strictly sequential — a `resolveRuckTap` return always routes
+ * to `runClearance` next, nothing else can land in between), so checking
+ * `next.phase === "CLEARANCE"` alone is the correct, sufficient successor
+ * to the old same-tick check — no tick-adjacency test needed at all.
  */
 function hitoutOutcome(hitout: StatDelta, index: number, events: MatchEvent[], sideOf: Map<number, Side>): number {
   const next = events[index + 1];
-  if (!next || next.tick !== events[index].tick || next.phase !== "STOPPAGE") return HITOUT_NEUTRAL;
+  if (!next || next.phase !== "CLEARANCE") return HITOUT_NEUTRAL;
   const clearance = findDelta(next.statDeltas, "clearances");
   if (!clearance) return HITOUT_NEUTRAL;
   return sideOf.get(hitout.playerId) === sideOf.get(clearance.playerId) ? HITOUT_TO_ADVANTAGE : HITOUT_SHARKED;
@@ -193,6 +205,14 @@ function eventPoints(
   if (ev.phase === "STOPPAGE") {
     const hitout = findDelta(ev.statDeltas, "hitouts");
     if (hitout) return { playerId: hitout.playerId, base: hitoutOutcome(hitout, index, events, sideOf) };
+  }
+
+  // Aug 2026 round 25: clearances now log under their own "CLEARANCE" phase
+  // (match.ts's runClearance), a real tick after the hitout's "STOPPAGE"
+  // event rather than sharing its phase tag — see hitoutOutcome's own doc
+  // comment. Split into its own branch rather than left inside the
+  // STOPPAGE check above, which can now never see a clearance delta at all.
+  if (ev.phase === "CLEARANCE") {
     const clearance = findDelta(ev.statDeltas, "clearances");
     if (clearance) return { playerId: clearance.playerId, base: CLEARANCE };
   }

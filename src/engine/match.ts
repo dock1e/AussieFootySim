@@ -44,7 +44,7 @@ import { conditionRatingMultiplier } from "./progression.ts";
  * all flagged below and meant for the balance simulator to tune).
  */
 
-type Phase = "STOPPAGE" | "GENERAL_PLAY" | "CONTEST" | "SHOT";
+type Phase = "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "SHOT";
 
 export interface BoxScoreLine {
   disposals: number;
@@ -605,10 +605,22 @@ export interface State {
    * carrier stops running, gets tackled, disposes, etc).
    */
   chaserId?: number;
+  /**
+   * Aug 2026 round 25 — carries the ruck tap's own outcome forward into the
+   * `CLEARANCE` tick that now follows it a full game-loop tick later (see
+   * `runClearance`'s own doc comment). Whether the tap actually went to hand
+   * cleanly gates `FAVOURED_SIDE_CLEARANCE_BONUS` — unchanged logic from the
+   * old single-tick `resolveStoppage`, just now needing to survive a real
+   * tick boundary instead of living as a local variable inside one function
+   * call. `undefined` outside a `CLEARANCE`-phase state (every other phase's
+   * return path omits it, same reset-by-omission convention `runTicks`/
+   * `chaserId` already established).
+   */
+  stoppageTapWentToHand?: boolean;
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
-  return resolveStoppage(ctx, state.zone, state.possession, false);
+  return resolveRuckTap(ctx, state.zone, state.possession, false);
 }
 
 /**
@@ -625,13 +637,17 @@ function runStoppage(ctx: Ctx, state: State): State {
  * trigger (a fraction of shots that miss everything).
  */
 function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
-  return resolveStoppage(ctx, zone, displaySide, zone === 0 || zone === 4);
+  return resolveRuckTap(ctx, zone, displaySide, zone === 0 || zone === 4);
 }
 
 /**
- * Shared ruck-then-clearance contest shape for both a centre bounce
- * (`runStoppage`, always MIDFIELD) and a boundary throw-in (`runThrowIn`,
- * wherever the ball actually went out) — Aug 2026, round 18.
+ * The ruck tap for both a centre bounce (`runStoppage`, always MIDFIELD)
+ * and a boundary throw-in (`runThrowIn`, wherever the ball actually went
+ * out) — Aug 2026, round 18. The clearance that follows is now its own
+ * real tick (`runClearance`, below) — Aug 2026 round 25, see that
+ * function's own doc comment for the full "why" and what changed. This
+ * function now returns as soon as the tap itself is decided, rather than
+ * immediately resolving the clearance inline in the same call.
  *
  * Aug 2026, round 8: reads through onGroundPlayers rather than the raw
  * squad — a bench interchange player (see MatchTeam.onGround) shouldn't be
@@ -651,7 +667,7 @@ function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
  * tallest on-ground player) — this only changes who's nominated, not who's
  * eligible.
  */
-function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean): State {
+function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean): State {
   const home = onGroundPlayers(ctx.home);
   const away = onGroundPlayers(ctx.away);
   const homePlan = ctx.homePlan;
@@ -714,6 +730,59 @@ function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRu
     ...recordContest(ctx, "ruck", ruckWinner, ruckLoser),
   ]);
 
+  // Aug 2026 round 25: the clearance used to resolve right here, inline, in
+  // the same tick — now it's `runClearance`'s own job, a full game-loop
+  // tick later. `possession` is repurposed to carry which side won the
+  // hitout forward (a stoppage tick never has a real ball-carrier
+  // possession anyway; `ruckWinnerSide` was already computed above for the
+  // execution roll's own conditionMultiplierFor call); `stoppageTapWentToHand`
+  // carries the execution roll's own result forward for the favoured-side
+  // clearance bonus. See `runClearance`'s own doc comment.
+  return { phase: "CLEARANCE", zone, possession: ruckWinnerSide, carrier: null, stoppageTapWentToHand: tapWentToHand };
+}
+
+/**
+ * The clearance contest that follows a ruck tap — split out of the old
+ * single-tick `resolveStoppage` into its own real game-loop tick, Aug 2026
+ * round 25. [[Contest Resolution Redesign]]'s phased-plan item 3 ("Ruck-
+ * tap-then-clearance as two ticks, not one function call" — Tyler's own
+ * closing line on the original process-map diagram: "This same process
+ * model should be adapted and then used for... ruck tap outs," followed up
+ * directly this round: "Proceed with the ruck as two ticks").
+ *
+ * Deliberately a narrower slice than item 3's own original framing, which
+ * explicitly named item 4 — a full `WHO_CONTESTS`/`CONTEST_ROLL`/
+ * `DISPOSAL_DECISION`-style `Phase` taxonomy reused across *every* contest
+ * type — as a dependency for "two ticks" to mean something real rather than
+ * cosmetic. Rather than build that whole generalised architecture this
+ * round, this adds exactly one new, narrowly-scoped `Phase` value
+ * (`"CLEARANCE"`) for this one sequence specifically. It's still genuinely
+ * real, not cosmetic: a full `simulateQuarter` tick boundary now separates
+ * the tap from the clearance (`ctx.tick` advances, the play-by-play gets a
+ * second, distinct logged event, `ratings.ts`'s hitout-outcome scoring and
+ * `ground.ts`'s centre-circle rendering both now key off the real
+ * `"CLEARANCE"` phase tag rather than inferring it from same-tick
+ * adjacency) — just not the reusable, diagram-wide taxonomy item 4
+ * envisioned for marks/tackles/disposals too. See [[Contest Resolution
+ * Redesign]]'s own "honestly scoped down" note for the full disclosure.
+ *
+ * `resolveRuckTap` carries forward exactly what's needed and nothing more —
+ * `zone` (unchanged: the clearance happens at the same spot as the tap),
+ * `possession` (repurposed to mean "which side won the hitout"), and the
+ * new `stoppageTapWentToHand`. `homeClear`/`awayClear` are re-selected
+ * fresh here rather than threaded through `State` — cheap, and this file's
+ * own established pattern (every other rep-selection call site recomputes
+ * `onGroundPlayers` rather than caching it).
+ */
+function runClearance(ctx: Ctx, state: State): State {
+  const zone = state.zone;
+  const homeWonHitout = state.possession === "home";
+  const tapWentToHand = state.stoppageTapWentToHand ?? false;
+  const home = onGroundPlayers(ctx.home);
+  const away = onGroundPlayers(ctx.away);
+  const homePlan = ctx.homePlan;
+  const awayPlan = ctx.awayPlan;
+
   const homeClear = bestByRating(home, clearanceRating);
   const awayClear = bestByRating(away, clearanceRating);
   // Favoured-side tap bonus, Aug 2026 — a real, cited correlation, not an
@@ -722,18 +791,19 @@ function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRu
   // the time, and clubs are "OK with the opposition knowing that." The engine
   // doesn't model tap *direction* (no x/y target for the palm itself), so
   // this is expressed as a rating bonus on the clearance roll for whichever
-  // side just won the hitout — before this round the two contests were fully
+  // side just won the hitout — before round 22 the two contests were fully
   // independent (a team could win the tap and still be no more likely to win
   // the clearance), which understates how strongly a clean, controlled tap
   // really helps. Same "deliberately roughed in, pending the balance
   // simulator" status as every other placeholder constant in this file.
   // Applied at a throw-in too — a makeshift tap still tends to favour its own
   // side, just from a scrappier contest.
-  const homeWonHitout = ruckWinnerSide === "home"; // attacker == home in resolveContest(homeRuck, awayRuck, ...) above
-  // Aug 2026 round 22: the favoured-side bonus now also requires the tap to
-  // have actually gone to hand cleanly (`tapWentToHand`, see the execution
-  // roll above) — a scrappy tap doesn't hand either side a real advantage,
-  // so neither clearance multiplier gets the bonus that tick.
+  //
+  // Aug 2026 round 22: the favoured-side bonus also requires the tap to have
+  // actually gone to hand cleanly (`tapWentToHand`, carried forward from
+  // `resolveRuckTap`'s own execution roll) — a scrappy tap doesn't hand
+  // either side a real advantage, so neither clearance multiplier gets the
+  // bonus that tick.
   const homeClearMult =
     taggingClearanceMultiplier(teamHasTactic(homePlan, "Tagging")) *
     gameStyleClearanceMultiplier(styleFor(homePlan)) *
@@ -755,13 +825,13 @@ function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRu
   // Aug 2026: a clearance win off a stoppage is, by definition, a contested
   // possession (Tyler: "was it a contested hard ball get or an uncontested
   // loose ball get?") — it went through `resolveContest` against a named
-  // opponent, but never actually touched `contestedPoss` before this round.
+  // opponent, but never actually touched `contestedPoss` before round 21.
   lineFor(ctx, clearWinner).contestedPoss += 1;
   log(
     ctx,
     zone,
     winningSide,
-    "STOPPAGE",
+    "CLEARANCE",
     `${clearWinner.lname} clears it for ${teamOf(ctx, winningSide).name}`,
     [clearWinner.PlayerID],
     [
@@ -1647,6 +1717,9 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       case "STOPPAGE":
         match.state = runStoppage(match.ctx, match.state);
         break;
+      case "CLEARANCE":
+        match.state = runClearance(match.ctx, match.state);
+        break;
       case "GENERAL_PLAY":
         match.state = runGeneralPlay(match.ctx, match.state);
         break;
@@ -1657,6 +1730,22 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
         match.state = runShot(match.ctx, match.state);
         break;
     }
+  }
+  // Aug 2026 round 25: a stoppage that happens to land on literally the
+  // quarter's final tick would otherwise have its clearance silently
+  // dropped — the loop above ends with `match.state.phase === "CLEARANCE"`,
+  // and the quarter-end reset just below would overwrite it before
+  // `runClearance` ever gets to run, discarding a real, already-decided
+  // ruck tap with no clearance, no clearance/contestedPoss credit, and no
+  // event logged for it. Rare (roughly one stoppage in `ticksPerQuarter`
+  // lands here), but a real, closable gap rather than an inherent limit —
+  // finish it with one more tick before ending the quarter, rather than
+  // silently drop it. Doesn't touch the "a quarter uses ticksPerQuarter
+  // ticks" contract in any way that matters — this only ever fires for the
+  // rare tick that would otherwise be wasted anyway.
+  if (match.state.phase === "CLEARANCE") {
+    match.ctx.tick += 1;
+    match.state = runClearance(match.ctx, match.state);
   }
   // Quarter-time: reset to a centre stoppage regardless of where play was up to.
   match.state = { phase: "STOPPAGE", zone: MIDFIELD, possession: quarter % 2 === 1 ? "away" : "home", carrier: null };

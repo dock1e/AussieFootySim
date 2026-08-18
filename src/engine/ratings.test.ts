@@ -59,7 +59,7 @@ function makeTeam(name: string, ids: number[]): MatchTeam {
 function ev(partial: {
   tick: number;
   zone: Zone;
-  phase: "STOPPAGE" | "GENERAL_PLAY" | "CONTEST" | "SHOT";
+  phase: "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "SHOT";
   statDeltas: StatDelta[];
   quarter?: 1 | 2 | 3 | 4;
 }): MatchEvent {
@@ -167,15 +167,18 @@ describe("computeAussieFootySimRatings", () => {
   it("a hitout to advantage (own side wins the ensuing clearance) outscores a sharked one", () => {
     const home = makeTeam("Home", [1, 2]);
     const away = makeTeam("Away", [3, 4]);
-    // Player 1's hitout followed by a same-tick, same-side clearance -> "to advantage".
+    // Player 1's hitout followed a tick later by a same-side clearance -> "to advantage".
+    // Aug 2026 round 25: the clearance now lands on its own CLEARANCE-phase
+    // tick (match.ts's runClearance), a real tick after the hitout rather
+    // than sharing its tick/phase — see hitoutOutcome's own doc comment.
     const advantage = [
       ev({ tick: 1, zone: 2, phase: "STOPPAGE", statDeltas: [{ playerId: 1, stat: "hitouts", delta: 1 }] }),
-      ev({ tick: 1, zone: 2, phase: "STOPPAGE", statDeltas: [{ playerId: 2, stat: "clearances", delta: 1 }] }),
+      ev({ tick: 2, zone: 2, phase: "CLEARANCE", statDeltas: [{ playerId: 2, stat: "clearances", delta: 1 }] }),
     ];
     // Player 3 (away)'s hitout followed by player 1 (home) winning the clearance -> "sharked".
     const sharked = [
       ev({ tick: 1, zone: 2, phase: "STOPPAGE", statDeltas: [{ playerId: 3, stat: "hitouts", delta: 1 }] }),
-      ev({ tick: 1, zone: 2, phase: "STOPPAGE", statDeltas: [{ playerId: 1, stat: "clearances", delta: 1 }] }),
+      ev({ tick: 2, zone: 2, phase: "CLEARANCE", statDeltas: [{ playerId: 1, stat: "clearances", delta: 1 }] }),
     ];
     const ratingsAdvantage = computeAussieFootySimRatings(makeResult(advantage), home, away);
     const ratingsSharked = computeAussieFootySimRatings(makeResult(sharked), home, away);

@@ -963,7 +963,16 @@ export function computeDotPositions(
   // fallback Ruck to lane ~0.71, not 0 — see `FALLBACK_RUCK_LANE_NUDGE`).
   // `match.ts`'s `runStoppage` now logs *both* rucks in `playerIds` (not just
   // the winner) specifically so this branch can pull them both in together.
-  const isCentreBounce = event?.phase === "STOPPAGE" && event.zone === MIDFIELD;
+  // Aug 2026 round 25: the clearance that follows a centre-bounce hitout is
+  // now logged one tick later under its own `"CLEARANCE"` phase (see
+  // match.ts's `runClearance`) rather than sharing the hitout's own
+  // `"STOPPAGE"` tag — included here too, or the clearance winner's dot
+  // would pop back out to their ordinary Slice C anchor the instant the tap
+  // resolves, reopening the exact "Gawn standing outside the center circle"
+  // bug this branch exists to fix. The clearance contest is still
+  // physically happening right where the tap just landed, so it belongs
+  // dead centre exactly like the tap itself.
+  const isCentreBounce = (event?.phase === "STOPPAGE" || event?.phase === "CLEARANCE") && event.zone === MIDFIELD;
 
   if (event) {
     const ballX = zoneToX(event.zone);

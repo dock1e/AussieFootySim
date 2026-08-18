@@ -6,6 +6,7 @@ import { ZONE_FOR_POSITION, ownZone, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import type { Rng } from "./rng.ts";
+import { proximityFor, distanceBetween, proximityWeight, type AbstractPosition } from "./positioning.ts";
 
 /**
  * Position-weighted involvement — Tactics and Positional Play.md Part 6 /
@@ -224,4 +225,41 @@ export function weightedHandballTarget(rng: Rng, side: Side, team: MatchTeam, zo
     const laneFactor = laneGap === 0 ? SAME_LANE_FACTOR : laneGap === 1 ? ADJACENT_LANE_FACTOR : OPPOSITE_LANE_FACTOR;
     return base * laneFactor;
   });
+}
+
+export interface NearbyPick {
+  player: Player;
+  distance: number;
+}
+
+/**
+ * Aug 2026 round 23 — the real distance-driven replacement for a plain
+ * `weightedPlayerChoice` wherever "who's actually close enough to contest
+ * this" matters (see `positioning.ts`'s own doc comment, and [[Contest
+ * Resolution Redesign]]'s "Slice 3" for the full diagnosis). Restricts the
+ * pool to `team`'s on-ground players within `PROXIMITY_RANGE_DISTANCE` of
+ * `target` (computed via `positioning.ts`'s `proximityFor`, itself already
+ * shifted toward the ball per the current `zone`/`possession`), then picks
+ * among just that eligible subset — still weighted by the existing
+ * archetype/real-position suitability (`involvementWeight`, unchanged, the
+ * same signal every pre-round-23 pick already used), now ADDITIONALLY
+ * discounted by real proximity (`proximityWeight`) so a merely-plausible but
+ * further-away candidate no longer competes evenly with a genuinely close
+ * one. Returns `null` when the eligible subset is empty — a real "nobody in
+ * range" outcome, not a coin flip dressed up in new language: every one of
+ * `team`'s on-ground players is further than `PROXIMITY_RANGE_DISTANCE` from
+ * `target` this tick.
+ *
+ * `side`/`possession` follow the same raw convention every other function in
+ * this file does — `proximityFor` does its own mirroring internally.
+ */
+export function nearbyDefenders(rng: Rng, side: Side, team: MatchTeam, zone: Zone, possession: Side, target: AbstractPosition): NearbyPick | null {
+  const pool = onGroundPlayers(team);
+  const withDistance = pool.map((player) => ({
+    player,
+    distance: distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession)),
+  }));
+  const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0);
+  if (eligible.length === 0) return null;
+  return weightedChoice(rng, eligible, (d) => involvementWeight(side, d.player, zone, team.positions?.get(d.player.PlayerID)) * proximityWeight(d.distance));
 }

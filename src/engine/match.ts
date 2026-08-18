@@ -6,7 +6,8 @@ import type { ContestType } from "./contestTypes.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
-import { weightedPlayerChoice, weightedHandballTarget } from "./involvement.ts";
+import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders } from "./involvement.ts";
+import { carrierPosition } from "./positioning.ts";
 import {
   tacticGroupForSlot,
   defaultTacticForPosition,
@@ -692,6 +693,101 @@ function resolveStoppage(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRu
   return { phase: "GENERAL_PLAY", zone, possession: winningSide, carrier: clearWinner };
 }
 
+/**
+ * Aug 2026 round 23 — the "nobody in range" outcome from `runGeneralPlay`'s
+ * new distance-driven defender check (see `positioning.ts`, and [[Contest
+ * Resolution Redesign]]'s "Slice 3"). A deliberately separate, self-contained
+ * function rather than a restructure of `runGeneralPlay`'s own pressured-
+ * disposal tail below: the two share the same disposal-type/newZone/
+ * out-on-full/shot-chance/contest-chance shape, but threading an optional/
+ * nullable `defender` through that already-intricate, heavily-tuned existing
+ * path risked more than the modest duplication this costs. No tackle-attempt
+ * roll (nobody attempted one — `tackleAttempts` genuinely isn't credited to
+ * anyone this tick, a real change from before this round, when every
+ * general-play tick credited exactly one defender's tackleAttempts
+ * unconditionally), and no defensive pressure on the disposal roll itself —
+ * a completely unpressured player in open space doesn't fumble a routine
+ * disposal to nobody, so this always succeeds.
+ */
+function resolveUnpressuredDisposal(
+  ctx: Ctx,
+  state: State,
+  carrier: Player,
+  possessingTeam: MatchTeam,
+  possessingPlan: TeamPlan | null,
+  gatherDeltas: StatDelta[],
+): State {
+  const line = lineFor(ctx, carrier);
+  line.disposals += 1;
+  const isKick = ctx.rng() < P_KICK_VS_HANDBALL;
+  if (isKick) line.kicks += 1;
+  else line.handballs += 1;
+
+  const newZone = isKick ? advanceZone(state.zone, state.possession) : state.zone;
+
+  if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
+    const newSide = otherSide(state.possession);
+    lineFor(ctx, carrier).freeKicksAgainst += 1;
+    const freeKickTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), newZone);
+    lineFor(ctx, freeKickTaker).freeKicksFor += 1;
+    log(
+      ctx,
+      newZone,
+      state.possession,
+      "GENERAL_PLAY",
+      `${carrier.lname}'s kick goes out of bounds on the full — free kick to ${freeKickTaker.lname}`,
+      [carrier.PlayerID, freeKickTaker.PlayerID],
+      [
+        ...gatherDeltas,
+        { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "kicks", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "freeKicksAgainst", delta: 1 },
+        { playerId: freeKickTaker.PlayerID, stat: "freeKicksFor", delta: 1 },
+      ],
+    );
+    return { phase: "GENERAL_PLAY", zone: newZone, possession: newSide, carrier: freeKickTaker, carrierUncontested: true };
+  }
+
+  log(
+    ctx,
+    newZone,
+    state.possession,
+    "GENERAL_PLAY",
+    `${carrier.lname} finds space with a${isKick ? " kick" : " handball"} — no one close enough to contest`,
+    [carrier.PlayerID],
+    [
+      ...gatherDeltas,
+      { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
+      { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
+    ],
+  );
+
+  const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
+  if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
+    const receiver = weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone);
+    const receiverLine = lineFor(ctx, receiver);
+    receiverLine.marks += 1;
+    log(
+      ctx,
+      newZone,
+      state.possession,
+      "GENERAL_PLAY",
+      `${receiver.lname} marks it deep in attack`,
+      [receiver.PlayerID],
+      [{ playerId: receiver.PlayerID, stat: "marks", delta: 1 }],
+    );
+    return { phase: "SHOT", zone: newZone, possession: state.possession, carrier: receiver };
+  }
+  const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
+  if (ctx.rng() < contestChance) {
+    return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
+  }
+  const newCarrier = isKick
+    ? weightedPlayerChoice(ctx.rng, state.possession, possessingTeam, newZone)
+    : weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, carrier);
+  return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier, carrierUncontested: true };
+}
+
 function runGeneralPlay(ctx: Ctx, state: State): State {
   const carrier = state.carrier!;
   const possessingTeam = teamOf(ctx, state.possession);
@@ -732,12 +828,32 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const carrierTactic = tacticFor(possessingPlan, carrier, possessingTeam.positions);
   const tag = defendingPlan ? resolveTagger(defendingPlan, carrier.PlayerID) : null;
   const tagger = tag ? defendingTeam.players.find((p) => p.PlayerID === tag.taggerId) : undefined;
-  // Phase 8 Slice B: absent a tagger, the defender rep is no longer a
-  // uniform pick across all 22 — weighted by real involvement plausibility
-  // for the ball's *current* zone (see engine/involvement.ts), so a Key
-  // Defender is actually the likely defender deep in defensive 50, not
-  // exactly as likely as a Small Forward the way a uniform pick made them.
-  const defender = tagger ?? weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
+  // Real distance-driven defender selection — Aug 2026 round 23, see
+  // positioning.ts's own doc comment and [[Contest Resolution Redesign]]'s
+  // "Slice 3" (Tyler: "make our sim much more 'ball aware'... contests
+  // should be dictated based upon ball position, player position in
+  // relation to the ball"). A tagger bypasses this entirely, unchanged from
+  // Phase 8 Slice B: resolveTagger's whole point is a deterministic 1-on-1
+  // assignment regardless of where anyone actually is. Absent a tagger,
+  // `nearbyDefenders` replaces the old "any of the 22, purely by
+  // suitability" pick (Phase 8 Slice B, the comment this replaces) with the
+  // genuinely-in-range subset, closer candidates weighted higher — and when
+  // that subset is empty, there really is nobody there to contest this tick,
+  // Row 2 of Tyler's own process-map diagram ("No players within range to
+  // contest") built for real for the first time.
+  const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone);
+  const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos);
+  const defender = tagger ?? nearby?.player ?? null;
+
+  if (!defender) {
+    // Nobody in range this tick — no tackle attempt (there's no one to
+    // attempt one) and the disposal itself faces zero defensive pressure.
+    // See resolveUnpressuredDisposal's own doc comment for why this is a
+    // small separate function rather than threading a nullable defender
+    // through the already-intricate pressured path below.
+    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas);
+  }
+
   const defenderTactic = tacticFor(defendingPlan, defender, defendingTeam.positions);
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
 
@@ -968,6 +1084,97 @@ const CONTEST_WIN_LABEL: Record<"markContested" | "markLead" | "groundBall", str
   groundBall: "ground ball",
 };
 
+/**
+ * Aug 2026 round 23 — the "nobody in range" outcome from `runContest`'s new
+ * distance-driven eligibility check (`positioning.ts`; [[Contest Resolution
+ * Redesign]]'s "Slice 3"). Row 1/Row 3 of Tyler's own process-map diagram
+ * both draw this exact branch explicitly — an "uncontested" path alongside
+ * the contested one, decided by real numbers/distance, not folded into
+ * `resolveContest`'s 50/50-ish duel the way every groundBall/mark contest
+ * was before this round. The attacker automatically wins *position* here
+ * (there's genuinely no one to contest it), but still faces the same
+ * execution roll round 22 already built — an uncontested mark or ground-ball
+ * gather can still genuinely be spilled, just rarely
+ * (`CONTEST_EXECUTION_DIFFICULTY`, ~1%).
+ *
+ * Deliberately a separate function from `runContest`'s own contested-path
+ * execution roll rather than a shared/parameterised one: the two diverge in
+ * exactly what gets credited (an uncontested win never touches
+ * `contestedMarks`/`contestedPoss` — nobody contested it — and a fumble here
+ * has no genuine `defenderRep` to hand the loose ball to, only a freshly
+ * reactive pickup), so unifying them would mean threading a nullable
+ * defender through code that's already dense with contest-type branching.
+ * Same "modest disclosed duplication over a riskier shared-code restructure"
+ * tradeoff as `resolveUnpressuredDisposal` above.
+ */
+function resolveUncontestedGather(
+  ctx: Ctx,
+  state: State,
+  attackingSide: Side,
+  defendingSide: Side,
+  defendingTeam: MatchTeam,
+  attackerRep: Player,
+  contestType: "markContested" | "markLead" | "groundBall",
+): State {
+  const executionRating =
+    computeContestRating(
+      attackerRep,
+      contestType === "groundBall" ? ["skill", "agility", "readPlay"] : ["manMarking", "strengthOverhead", "verticalLeap"],
+    ) * conditionMultiplierFor(ctx, attackingSide, attackerRep);
+  const executionSucceeded = resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success;
+  const fields = CONTEST_STAT_FIELDS[contestType];
+
+  if (!executionSucceeded) {
+    // A genuine, if rare, uncontested spill — nobody was there to "win" the
+    // loose ball off the attacker, so a fresh weighted pick decides who
+    // actually reacts to it now that it's on the deck. Credited an attempt
+    // for the attacker's own failed gather; the recoverer gets no contest
+    // stat at all — they didn't contest anything, they just reacted first to
+    // a loose ball after the fact.
+    const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
+    (lineFor(ctx, attackerRep)[fields.attempts] as number) += 1;
+    const fumbleLabel = contestType === "groundBall" ? "can't hang onto the ground ball" : "spills the mark";
+    log(
+      ctx,
+      state.zone,
+      defendingSide,
+      "CONTEST",
+      `${attackerRep.lname} ${fumbleLabel}, uncontested — ${recoverer.lname} reacts first to the loose ball`,
+      [attackerRep.PlayerID, recoverer.PlayerID],
+      [{ playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 }],
+    );
+    return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: recoverer };
+  }
+
+  const line = lineFor(ctx, attackerRep);
+  (line[fields.attempts] as number) += 1;
+  (line[fields.wins] as number) += 1;
+  const deltas: StatDelta[] = [
+    { playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 },
+    { playerId: attackerRep.PlayerID, stat: fields.wins, delta: 1 },
+  ];
+  if (contestType === "markContested" || contestType === "markLead") {
+    // Uncontested — still a genuine mark either way, but never a
+    // *contested* mark (nobody contested it), regardless of which of the
+    // two forward-50 labels this contest happened to draw.
+    line.marks += 1;
+    deltas.push({ playerId: attackerRep.PlayerID, stat: "marks", delta: 1 });
+  }
+  log(
+    ctx,
+    state.zone,
+    attackingSide,
+    "CONTEST",
+    `${attackerRep.lname} ${contestType === "groundBall" ? "gathers the loose ball" : "marks it"} — no one close enough to contest`,
+    [attackerRep.PlayerID],
+    deltas,
+  );
+  if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
+    return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep };
+  }
+  return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep, carrierUncontested: true };
+}
+
 function runContest(ctx: Ctx, state: State): State {
   const attackingSide = state.possession;
   const defendingSide = otherSide(attackingSide);
@@ -982,12 +1189,34 @@ function runContest(ctx: Ctx, state: State): State {
       ? "markLead"
       : "markContested"
     : "groundBall";
-  // Both reps weighted by involvement at the contest's own zone (see
-  // engine/involvement.ts) rather than a uniform pick across all 22 — e.g. a
+  // The attacking rep is still weighted by involvement at the contest's own
+  // zone (see engine/involvement.ts) rather than a uniform pick — e.g. a
   // marking contest inside forward 50 now actually favours a Key Forward as
   // the attacking rep, not any of the 22 equally.
   const attackerRep = weightedPlayerChoice(ctx.rng, attackingSide, attackingTeam, state.zone);
-  const defenderRep = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
+
+  // Real distance-driven eligibility check — Aug 2026 round 23, same
+  // positioning.ts primitives as runGeneralPlay's own defender check (see
+  // that function's own doc comment, and [[Contest Resolution Redesign]]'s
+  // "Slice 3"). Row 1/Row 3 of Tyler's own process-map diagram both draw an
+  // explicit "uncontested" branch alongside the contested one — real
+  // numbers/distance decide which, not a coin flip. Before this round every
+  // groundBall/mark was a resolveContest duel regardless of whether a
+  // genuine defender was anywhere near the attacking rep at all.
+  //
+  // `carrierPosition`, not `proximityFor`, for the attacker — the same
+  // reasoning `runGeneralPlay` already uses for its own ball carrier: the
+  // contest is genuinely happening AT `state.zone` (that's what put it in
+  // CONTEST phase), so the attacker's own zoneFrac is known exactly, not a
+  // press-shifted estimate. Pinning it exactly (rather than compounding two
+  // fuzzy estimates against each other) is what a "the ball is right here"
+  // fact should look like.
+  const attackerPos = carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos);
+  if (!nearby) {
+    return resolveUncontestedGather(ctx, state, attackingSide, defendingSide, defendingTeam, attackerRep, contestType);
+  }
+  const defenderRep = nearby.player;
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
   const attackerMult =
     contestRatingMultiplier(tacticFor(attackingPlan, attackerRep, attackingTeam.positions), contestType, "attacker") *

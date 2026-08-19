@@ -933,6 +933,12 @@ export function computeDotPositions(
   driftTime = 0,
   homeStyle: GameStyle = DEFAULT_GAME_STYLE,
   awayStyle: GameStyle = DEFAULT_GAME_STYLE,
+  // Aug 2026 round 26 — only consulted for one specific case: recognising a
+  // kick-launch event that's about to resolve into a MARKING_CONTEST tick
+  // next (see the `isKickInFlight` branch below). Optional/defaulted so the
+  // team-change reset call site (MatchCanvas.tsx, instant snap-to-position,
+  // no animated "next" event in play) doesn't need to supply one.
+  nextEvent: MatchEvent | null = null,
 ): DotPosition[] {
   const homeForm = formationFor(home, "home", event, homeStyle);
   const awayForm = formationFor(away, "away", event, awayStyle);
@@ -974,6 +980,22 @@ export function computeDotPositions(
   // dead centre exactly like the tap itself.
   const isCentreBounce = (event?.phase === "STOPPAGE" || event?.phase === "CLEARANCE") && event.zone === MIDFIELD;
 
+  // Aug 2026 round 26 (Tyler: "I want there to be a moment of suspense
+  // where the viewer sees a ball kicked towards a contest... the target is
+  // moving with distance between them and their opponent"). Every OTHER
+  // multi-player event this function handles (a tackle, a mark contest, a
+  // boundary throw-in) is a genuine physical pairing, which is exactly why
+  // round 19 pulls involved players toward their *group's* shared anchor
+  // instead of each one's own (see the big comment below). A kick-launch
+  // event (match.ts's `runMarkingContest` resolves the very next tick) is
+  // the opposite: the carrier and receiver are named together precisely
+  // *because* they're apart, with the ball crossing the real gap between
+  // them — so this one case needs each player left at their own true
+  // anchor instead, or the group-blend would visibly yank a receiver
+  // "leading into space" straight in next to the carrier, erasing the
+  // distance the whole event exists to show.
+  const isKickInFlight = !isCentreBounce && nextEvent?.phase === "MARKING_CONTEST";
+
   if (event) {
     const ballX = zoneToX(event.zone);
     const primary = all.get(event.playerIds[0]);
@@ -1010,6 +1032,15 @@ export function computeDotPositions(
         // *toward* ballX/baseY — not far enough when a player's own anchor
         // starts meaningfully off-centre, exactly Gawn's case above).
         all.set(id, { ...existing, x: ballX + spread * 0.5 + tieBreak * 4, y: CENTER_Y + spread + tieBreak * 4, involved: true });
+        return;
+      }
+      if (isKickInFlight) {
+        // See `isKickInFlight`'s own comment above — deliberately skips
+        // both the ball-zone blend and the group-average pull every other
+        // multi-player event gets below, so the receiver's real distance
+        // from the carrier (and from whoever's attending them) stays
+        // visible for the one tick the ball is actually travelling.
+        all.set(id, { ...existing, x: existing.x + tieBreak * 8, y: existing.y + tieBreak * 6, involved: true });
         return;
       }
       const groupX = event.playerIds.length > 1 ? avgAnchorX : existing.x;
@@ -1175,8 +1206,24 @@ export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nex
   const anchorX = primary?.x ?? zoneToX(event.zone);
   const anchorY = primary?.y ?? CENTER_Y;
 
+  // Aug 2026 round 26 — a shot-chance kick's flight now spans two real
+  // ticks (see `isKick`'s own comment below): the launch, then the
+  // MARKING_CONTEST resolution a tick later. The ball is still physically
+  // completing that SAME kick's arc while the resolution tick is on
+  // screen — whether it lands as a mark, a spill, or a spoil — so its pace
+  // needs to stay at kick speed for the resolution tick too, not snap back
+  // to a normal/instant pace the moment the outcome is revealed (found via
+  // verify_round26_scratch.ts: without this, the resolution tick's own
+  // `speedMultiplier: 1` made the ball jump from near the carrier to near
+  // the receiver at normal speed, undercutting the whole "moment of
+  // suspense... slower through the air" this split exists to create).
+  // `event.phase === "MARKING_CONTEST"` catches the resolution tick;
+  // `nextEvent?.phase === "MARKING_CONTEST"` catches the launch tick that
+  // precedes it, same look-ahead signal `isKick` below already uses.
+  const kickTrajectory = event.phase === "MARKING_CONTEST" || nextEvent?.phase === "MARKING_CONTEST";
+
   if (hasStat(event, "marks")) {
-    return { x: anchorX, y: anchorY + BALL_MARK_OFFSET_Y, state: "marked", speedMultiplier: 1 };
+    return { x: anchorX, y: anchorY + BALL_MARK_OFFSET_Y, state: "marked", speedMultiplier: kickTrajectory ? KICK_SPEED_MULTIPLIER : 1 };
   }
 
   if (hasStat(event, "tackles")) {
@@ -1190,7 +1237,22 @@ export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nex
     };
   }
 
-  const isKick = hasStat(event, "kicks");
+  // Aug 2026 round 26 — a shot-chance kick's own stat credit (kicks+1)
+  // lands on an earlier same-tick event (match.ts logs the "finds space
+  // with a kick" disposal-credit line first, then this kick-launch line
+  // right after, on the same tick), so this event carries no statDeltas of
+  // its own and would otherwise fall through to the static "neutral" case
+  // below — defeating the entire point of giving the kick its own tick
+  // (see runMarkingContest's doc comment / [[Contest Resolution Redesign]]
+  // item 4: "a moment of suspense where the viewer sees a ball kicked
+  // towards a contest"). `nextEvent.phase === "MARKING_CONTEST"` is
+  // structured data (not description-text matching, per this function's
+  // own principle above) and unambiguous — the only way a MARKING_CONTEST
+  // event is ever reached is via one of these two kick-launch log() calls —
+  // so this reuses the existing look-ahead aiming logic below exactly as
+  // designed: the ball visibly flies from the carrier toward the actual
+  // receiver at the same slow kick pace as any other kick.
+  const isKick = hasStat(event, "kicks") || nextEvent?.phase === "MARKING_CONTEST";
   const isHandball = hasStat(event, "handballs");
   if (isKick || isHandball) {
     // Point toward wherever the *next* revealed event's featured player
@@ -1216,5 +1278,5 @@ export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nex
     };
   }
 
-  return { x: anchorX, y: anchorY + BALL_NEUTRAL_OFFSET_Y, state: "neutral", speedMultiplier: 1 };
+  return { x: anchorX, y: anchorY + BALL_NEUTRAL_OFFSET_Y, state: "neutral", speedMultiplier: kickTrajectory ? KICK_SPEED_MULTIPLIER : 1 };
 }

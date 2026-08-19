@@ -241,6 +241,23 @@ function eventPoints(
     if (contestedPoss) return { playerId: contestedPoss.playerId, base: CONTESTED_POSS_GROUND };
   }
 
+  // Aug 2026 round 26: a shot-chance kick's marking contest now resolves a
+  // tick later than the kick itself, under its own "MARKING_CONTEST" phase
+  // (match.ts's runMarkingContest) — same treatment as the CONTEST branch
+  // just above for the identical underlying situation (an attacker's
+  // genuinely-contested mark attempt vs. a defender's spoil), since that's
+  // exactly what this phase now resolves for a kick specifically. A plain,
+  // uncontested "leading into space" mark is deliberately left unscored
+  // here, same as it's always been for runContest's own uncontested-gather
+  // branch (resolveUncontestedGather credits `marks` but was never matched
+  // by any branch above either) — not a new gap this round introduces.
+  if (ev.phase === "MARKING_CONTEST") {
+    const contestedMark = findDelta(ev.statDeltas, "contestedMarks");
+    if (contestedMark) return { playerId: contestedMark.playerId, base: CONTESTED_MARK };
+    const contestedPoss = findDelta(ev.statDeltas, "contestedPoss");
+    if (contestedPoss) return { playerId: contestedPoss.playerId, base: CONTESTED_POSS_GROUND };
+  }
+
   if (ev.phase === "SHOT") {
     const goal = findDelta(ev.statDeltas, "goals");
     if (goal) return { playerId: goal.playerId, base: GOAL };

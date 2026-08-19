@@ -44,7 +44,7 @@ import { conditionRatingMultiplier } from "./progression.ts";
  * all flagged below and meant for the balance simulator to tune).
  */
 
-type Phase = "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "SHOT";
+type Phase = "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "MARKING_CONTEST" | "SHOT";
 
 export interface BoxScoreLine {
   disposals: number;
@@ -617,6 +617,20 @@ export interface State {
    * `chaserId` already established).
    */
   stoppageTapWentToHand?: boolean;
+  /**
+   * Aug 2026 round 26 — carries a shot-chance kick's own space measurement
+   * (round 24's `weightedKickTarget`, `receiverPick.distance`) forward into
+   * the new `MARKING_CONTEST` tick that now follows it a full game-loop tick
+   * later, rather than resolving the mark inline the same tick the kick
+   * itself is logged — see `runMarkingContest`'s own doc comment for the
+   * full "why". `proximityWeight(this) === 0` means the receiver was
+   * genuinely in the clear at kick time; `> 0` means a real defender was
+   * close enough to actually contest the mark. `undefined` outside a
+   * `MARKING_CONTEST`-phase state — every other phase's return path omits
+   * it, same reset-by-omission convention `stoppageTapWentToHand`/
+   * `chaserId`/`runTicks` already established.
+   */
+  markContestDistance?: number;
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
@@ -917,32 +931,26 @@ function resolveUnpressuredDisposal(
 
   const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
   if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
-    // Space-aware kick target — Aug 2026 round 24, see
-    // involvement.ts's weightedKickTarget doc comment / [[Contest
-    // Resolution Redesign]]'s Slice 3 item 4. `receiverPick.distance` is the
-    // receiver's own real distance to the nearest opponent at the moment
-    // they're found, so the log line can finally say *why* this was a mark,
-    // not just who took it — genuinely in the clear (beyond
-    // PROXIMITY_RANGE_DISTANCE, `proximityWeight` reading 0) vs a strong
-    // grab under attention.
+    // Aug 2026 round 26 — the mark itself no longer resolves on this same
+    // tick; see `runMarkingContest`'s own doc comment / [[Contest Resolution
+    // Redesign]] item 4. `weightedKickTarget` (round 24) already reveals the
+    // receiver's real space situation right here — this tick only launches
+    // the kick and shows it; the carrier stays named alongside the receiver
+    // so both are visible in flight together, not just the receiver alone.
     const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
     const receiver = receiverPick.player;
-    const receiverLine = lineFor(ctx, receiver);
-    receiverLine.marks += 1;
-    const markLabel =
+    const kickLabel =
       proximityWeight(receiverPick.distance) === 0
-        ? `${receiver.lname} leads into space and marks it deep in attack`
-        : `${receiver.lname} marks it deep in attack, strongly attended`;
-    log(
-      ctx,
-      newZone,
-      state.possession,
-      "GENERAL_PLAY",
-      markLabel,
-      [receiver.PlayerID],
-      [{ playerId: receiver.PlayerID, stat: "marks", delta: 1 }],
-    );
-    return { phase: "SHOT", zone: newZone, possession: state.possession, carrier: receiver };
+        ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
+        : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    return {
+      phase: "MARKING_CONTEST",
+      zone: newZone,
+      possession: state.possession,
+      carrier: receiver,
+      markContestDistance: receiverPick.distance,
+    };
   }
   const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
   if (ctx.rng() < contestChance) {
@@ -1286,28 +1294,24 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // their own kick.
   const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
   if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
-    // Space-aware kick target — Aug 2026 round 24, see
-    // involvement.ts's weightedKickTarget doc comment / [[Contest
-    // Resolution Redesign]]'s Slice 3 item 4 — same treatment as
-    // resolveUnpressuredDisposal's own identical shot-chance branch above.
+    // Aug 2026 round 26 — same treatment as resolveUnpressuredDisposal's own
+    // identical shot-chance branch above: the mark no longer resolves this
+    // same tick, see runMarkingContest's own doc comment / [[Contest
+    // Resolution Redesign]] item 4.
     const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
     const receiver = receiverPick.player;
-    const receiverLine = lineFor(ctx, receiver);
-    receiverLine.marks += 1;
-    const markLabel =
+    const kickLabel =
       proximityWeight(receiverPick.distance) === 0
-        ? `${receiver.lname} leads into space and marks it deep in attack`
-        : `${receiver.lname} marks it deep in attack, strongly attended`;
-    log(
-      ctx,
-      newZone,
-      state.possession,
-      "GENERAL_PLAY",
-      markLabel,
-      [receiver.PlayerID],
-      [{ playerId: receiver.PlayerID, stat: "marks", delta: 1 }],
-    );
-    return { phase: "SHOT", zone: newZone, possession: state.possession, carrier: receiver };
+        ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
+        : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    return {
+      phase: "MARKING_CONTEST",
+      zone: newZone,
+      possession: state.possession,
+      carrier: receiver,
+      markContestDistance: receiverPick.distance,
+    };
   }
   const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
   if (ctx.rng() < contestChance) {
@@ -1587,6 +1591,176 @@ function runContest(ctx: Ctx, state: State): State {
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: defenderRep };
 }
 
+/**
+ * The marking contest that follows a shot-chance kick into forward 50 — Aug
+ * 2026 round 26, [[Contest Resolution Redesign]] item 4 ("literal separate
+ * game-loop ticks, not just separate steps inside one function... this is
+ * the piece that most directly answers 'give our simulation much more
+ * life'"), and Tyler's own concrete follow-up ask: "a moment of suspense
+ * where the viewer sees a ball kicked towards a contest and they have enough
+ * opportunity to see if the ball is being kicked to a player on the lead...
+ * or is it going to be a contested marking situation."
+ *
+ * Split out of `resolveUnpressuredDisposal`/`runGeneralPlay`'s shot-chance
+ * branch, which used to pick the receiver (round 24's `weightedKickTarget`)
+ * and credit the mark in the very same tick the kick itself was logged. The
+ * receiver's real situation — genuinely leading in space vs. strongly
+ * attended by a defender — was already computed at that point, but it only
+ * ever showed up as flavour text; the mark itself was unconditional either
+ * way, so "strongly attended" never actually meant anything could go wrong.
+ * The kick tick now only launches the ball and reveals that situation
+ * (`State.markContestDistance`, carried forward the same way round 25's
+ * `stoppageTapWentToHand` crosses a tick boundary); THIS tick, one real
+ * game-loop tick later, is where it actually gets decided — a genuine Row 3
+ * (Tyler's process-map diagram: "Uncontested mark roll" / "Contested mark
+ * roll"), not a foregone conclusion dressed up in different log text.
+ *
+ * Deliberately scoped to this one call site — a direct kick into a forward-50
+ * shot chance — not every kick in the match: this is the one place a kick's
+ * target situation is already computed and already forward-50-gated, so
+ * splitting it doesn't touch the far more common general open-play kick
+ * (still single-tick, unchanged, same as every non-shot-chance kick/handball
+ * receiver pick). See [[Contest Resolution Redesign]]'s own round 26 section
+ * for the disclosed tick-budget cost this was checked against.
+ *
+ * The uncontested/contested branch below is decided by `proximityWeight` on
+ * the SAME distance `weightedKickTarget` already measured via its own
+ * `closestDefender` call at kick time (an unconditional nearest-opponent
+ * search) — re-checking via `nearbyDefenders` here (an eligibility-gated
+ * search using the identical distance formula and the identical
+ * `PROXIMITY_RANGE_DISTANCE` threshold) can't disagree with that: if the
+ * single closest opponent was already beyond range, nothing else on the
+ * defending team can be closer. The `!nearby` fallback below is defensive
+ * only, not a reachable disagreement — it exists so a future change to
+ * either distance check can't silently produce an unhandled state here.
+ */
+function runMarkingContest(ctx: Ctx, state: State): State {
+  const zone = state.zone;
+  const receiver = state.carrier!;
+  const distance = state.markContestDistance ?? Infinity;
+  const possessingSide = state.possession;
+  const possessingTeam = teamOf(ctx, possessingSide);
+  const possessingPlan = planFor(ctx, possessingSide);
+  const defendingSide = otherSide(possessingSide);
+  const defendingTeam = teamOf(ctx, defendingSide);
+  const defendingPlan = planFor(ctx, defendingSide);
+
+  // Uncontested execution roll — Row 3's "Uncontested mark," a near-
+  // certainty once nobody's genuinely there to contest it, the same
+  // CONTEST_EXECUTION_DIFFICULTY pattern every other uncontested gather in
+  // this file already uses (resolveUncontestedGather, runContest's own
+  // attacker-wins branch). Shared by the genuinely-in-the-clear branch below
+  // and the (defensive-only, see this function's own doc comment)
+  // nearbyDefenders fallback.
+  const attemptUncontestedMark = (): State => {
+    const executionRating =
+      computeContestRating(receiver, ["manMarking", "strengthOverhead", "verticalLeap"]) *
+      conditionMultiplierFor(ctx, possessingSide, receiver);
+    if (resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
+      lineFor(ctx, receiver).marks += 1;
+      log(ctx, zone, possessingSide, "MARKING_CONTEST", `${receiver.lname} marks it, leading into space`, [receiver.PlayerID], [
+        { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
+      ]);
+      return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+    }
+    const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
+    log(
+      ctx,
+      zone,
+      defendingSide,
+      "MARKING_CONTEST",
+      `${receiver.lname} can't hang onto it despite the space — ${recoverer.lname} reacts first to the loose ball`,
+      [receiver.PlayerID, recoverer.PlayerID],
+    );
+    return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
+  };
+
+  if (proximityWeight(distance) === 0) return attemptUncontestedMark();
+
+  // Strongly attended — Row 3's "Contested mark." A real defender, freshly
+  // identified via the same carrierPosition-for-the-ball-holder convention
+  // runGeneralPlay/runContest already use once someone's position is a known
+  // fact rather than a fuzzy estimate.
+  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos);
+  if (!nearby) return attemptUncontestedMark();
+
+  const defender = nearby.player;
+  const defenderInForwardHalf = isForward50(zone, defendingSide);
+  const attackerMult =
+    contestRatingMultiplier(tacticFor(possessingPlan, receiver, possessingTeam.positions), "markContested", "attacker") *
+    conditionMultiplierFor(ctx, possessingSide, receiver);
+  const defenderMult =
+    contestRatingMultiplier(tacticFor(defendingPlan, defender, defendingTeam.positions), "markContested", "defender") *
+    gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
+    conditionMultiplierFor(ctx, defendingSide, defender);
+  const result = resolveContest(receiver, defender, "markContested", ctx.rng, {
+    attackerMultiplier: attackerMult,
+    defenderMultiplier: defenderMult,
+  });
+
+  if (result.winner === "attacker") {
+    const executionRating =
+      computeContestRating(receiver, ["manMarking", "strengthOverhead", "verticalLeap"]) *
+      conditionMultiplierFor(ctx, possessingSide, receiver);
+    if (!resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
+      // Won position, spilled the execution — a genuine contested-mark
+      // fumble, mirroring runContest's own identical-shaped branch: both get
+      // the attempt they genuinely made, applied by hand since neither side
+      // actually "won" this one (recordContest's own shape doesn't fit a
+      // fumble either side of).
+      lineFor(ctx, receiver).markContestedAttempts += 1;
+      lineFor(ctx, defender).markContestedAttempts += 1;
+      log(
+        ctx,
+        zone,
+        defendingSide,
+        "MARKING_CONTEST",
+        `${receiver.lname} spills the mark under pressure from ${defender.lname} — ${defender.lname} scoops up the loose ball`,
+        [receiver.PlayerID, defender.PlayerID],
+        [
+          { playerId: receiver.PlayerID, stat: "markContestedAttempts", delta: 1 },
+          { playerId: defender.PlayerID, stat: "markContestedAttempts", delta: 1 },
+        ],
+      );
+      return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
+    }
+    const deltas = [...recordContest(ctx, "markContested", receiver, defender)];
+    lineFor(ctx, receiver).marks += 1;
+    lineFor(ctx, receiver).contestedMarks += 1;
+    deltas.push(
+      { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
+      { playerId: receiver.PlayerID, stat: "contestedMarks", delta: 1 },
+    );
+    log(
+      ctx,
+      zone,
+      possessingSide,
+      "MARKING_CONTEST",
+      `${receiver.lname} takes a strong contested mark over ${defender.lname}`,
+      [receiver.PlayerID, defender.PlayerID],
+      deltas,
+    );
+    return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+  }
+
+  lineFor(ctx, defender).contestedPoss += 1;
+  const spoilDeltas: StatDelta[] = [
+    { playerId: defender.PlayerID, stat: "contestedPoss", delta: 1 },
+    ...recordContest(ctx, "markContested", defender, receiver),
+  ];
+  log(
+    ctx,
+    zone,
+    defendingSide,
+    "MARKING_CONTEST",
+    `${defender.lname} spoils the contest and takes control`,
+    [defender.PlayerID, receiver.PlayerID],
+    spoilDeltas,
+  );
+  return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
+}
+
 function runShot(ctx: Ctx, state: State): State {
   const shooter = state.carrier!;
   const defendingPlan = planFor(ctx, otherSide(state.possession));
@@ -1726,26 +1900,37 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       case "CONTEST":
         match.state = runContest(match.ctx, match.state);
         break;
+      case "MARKING_CONTEST":
+        match.state = runMarkingContest(match.ctx, match.state);
+        break;
       case "SHOT":
         match.state = runShot(match.ctx, match.state);
         break;
     }
   }
-  // Aug 2026 round 25: a stoppage that happens to land on literally the
-  // quarter's final tick would otherwise have its clearance silently
-  // dropped — the loop above ends with `match.state.phase === "CLEARANCE"`,
-  // and the quarter-end reset just below would overwrite it before
-  // `runClearance` ever gets to run, discarding a real, already-decided
-  // ruck tap with no clearance, no clearance/contestedPoss credit, and no
-  // event logged for it. Rare (roughly one stoppage in `ticksPerQuarter`
-  // lands here), but a real, closable gap rather than an inherent limit —
-  // finish it with one more tick before ending the quarter, rather than
-  // silently drop it. Doesn't touch the "a quarter uses ticksPerQuarter
-  // ticks" contract in any way that matters — this only ever fires for the
-  // rare tick that would otherwise be wasted anyway.
+  // Aug 2026 round 25, extended round 26: a stoppage or a shot-chance kick
+  // that happens to land on literally the quarter's final tick would
+  // otherwise have its follow-up silently dropped — the loop above ends with
+  // `match.state.phase === "CLEARANCE"` or `"MARKING_CONTEST"`, and the
+  // quarter-end reset just below would overwrite it before `runClearance`/
+  // `runMarkingContest` ever gets to run, discarding a real, already-decided
+  // ruck tap or kick with no outcome ever resolved, no contest stat credited,
+  // and no event logged for it. Rare (roughly one stoppage or one
+  // shot-chance kick in `ticksPerQuarter` lands here), but a real, closable
+  // gap rather than an inherent limit — finish it with one more tick before
+  // ending the quarter, rather than silently drop it. Doesn't touch the "a
+  // quarter uses ticksPerQuarter ticks" contract in any way that matters —
+  // this only ever fires for the rare tick that would otherwise be wasted
+  // anyway. Neither follow-up phase can itself return another phase needing
+  // this same treatment (`runClearance` always returns `GENERAL_PLAY`;
+  // `runMarkingContest` always returns `SHOT` or `GENERAL_PLAY`), so at most
+  // one extra tick is ever needed here.
   if (match.state.phase === "CLEARANCE") {
     match.ctx.tick += 1;
     match.state = runClearance(match.ctx, match.state);
+  } else if (match.state.phase === "MARKING_CONTEST") {
+    match.ctx.tick += 1;
+    match.state = runMarkingContest(match.ctx, match.state);
   }
   // Quarter-time: reset to a centre stoppage regardless of where play was up to.
   match.state = { phase: "STOPPAGE", zone: MIDFIELD, possession: quarter % 2 === 1 ? "away" : "home", carrier: null };

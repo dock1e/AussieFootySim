@@ -59,7 +59,7 @@ function makeTeam(name: string, ids: number[]): MatchTeam {
 function ev(partial: {
   tick: number;
   zone: Zone;
-  phase: "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "SHOT";
+  phase: "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "MARKING_CONTEST" | "SHOT";
   statDeltas: StatDelta[];
   quarter?: 1 | 2 | 3 | 4;
 }): MatchEvent {

@@ -35,6 +35,14 @@ import { DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
  * decoupled from every player dot's shared `SMOOTHING_HALF_LIFE_MS` so a
  * kick can visibly take ~3x longer to arrive than a handball without
  * changing how fast any player themselves appears to move.
+ *
+ * Aug 2026 round 26 (Tyler: "After a contest they should not warp back to
+ * their previous place on the ground"): every dot's *target* (not just its
+ * rendered chase toward that target) now eases out of a just-finished
+ * contest instead of jumping straight back to the player's static formation
+ * anchor the instant they stop being named — see `applyInvolvementCooldown`'s
+ * own doc comment for the full root-cause diagnosis and why round 19's speed
+ * cap alone didn't fully close this.
  */
 const HOME_COLOR = "#ff5a36"; // accent — matches Tailwind config's accent colour
 const AWAY_COLOR = "#4b8fe0"; // info blue, a clear contrast against the accent
@@ -94,6 +102,74 @@ function stepToward(prev: { x: number; y: number }, target: { x: number; y: numb
   const dist = Math.hypot(dx, dy);
   const scale = dist > maxStep && dist > 0 ? maxStep / dist : 1;
   return { x: prev.x + dx * scale, y: prev.y + dy * scale };
+}
+
+/**
+ * Aug 2026 round 26 (Tyler: "After a contest they should not warp back to
+ * their previous place on the ground"). Root cause, precise — already
+ * disclosed in round 19's own writeup (ROADMAP.md Phase 10 round 19): a
+ * dot's *target* is recomputed fresh every frame purely from whichever event
+ * is currently revealed (`engine/ground.ts`'s `computeDotPositions`) — the
+ * moment a player stops being named in the current event, their target
+ * reverts in one step from "pulled toward the contest" to their static
+ * formation anchor, with zero relationship to where they actually just
+ * were. Round 19's speed cap (`MAX_DOT_SPEED_PX_PER_SEC` above) stops that
+ * from being a literal same-frame teleport, but doesn't touch the
+ * underlying "zero memory" problem it was itself diagnosed against — a
+ * player who was just involved still beelines, at a robotic constant top
+ * speed, in a dead-straight line, back to an arbitrary formation slot, the
+ * instant their involvement ends. That reads as "warping back" even though
+ * it's no longer literally instant.
+ *
+ * Fix: remember each player's last *involved* target and when they stopped
+ * being involved (`lastInvolved`, a ref the caller owns so it persists frame
+ * to frame), then for `INVOLVEMENT_COOLDOWN_SECONDS` afterward, ease their
+ * *target itself* from that last-involved spot toward the fresh formation
+ * anchor (eased lerp) rather than handing `stepToward` a target that already
+ * jumped there in one step. The existing speed-cap/exponential chase
+ * (`stepToward`) still governs the actual frame-to-frame render on top of
+ * this — this only smooths *what* it's chasing, not *how* it chases it, so
+ * it composes with round 19's fix rather than replacing it. A UX-feel
+ * constant, same disclosed-not-derived status as `SMOOTHING_HALF_LIFE_MS`/
+ * `MAX_DOT_SPEED_PX_PER_SEC` above — long enough to visibly soften the
+ * transition, short enough that the next contest's own pull-in doesn't feel
+ * laggy on top of it.
+ */
+const INVOLVEMENT_COOLDOWN_SECONDS = 0.75;
+
+function easeOutQuad(t: number): number {
+  return 1 - (1 - t) * (1 - t);
+}
+
+/**
+ * Applies the cooldown described above to a fresh batch of targets, mutating
+ * `lastInvolved` in place as it goes (records/refreshes an entry for every
+ * currently-involved player, prunes one once its cooldown window has fully
+ * elapsed). Pure aside from that one ref mutation — same "reads live state
+ * via a ref, no React state of its own" shape as every other per-frame
+ * helper in this file, so it can be called directly from the mount-once rAF
+ * loop with no extra effect wiring.
+ */
+function applyInvolvementCooldown(
+  targets: DotPosition[],
+  lastInvolved: Map<number, { x: number; y: number; atSeconds: number }>,
+  nowSeconds: number,
+): DotPosition[] {
+  return targets.map((target) => {
+    if (target.involved) {
+      lastInvolved.set(target.playerId, { x: target.x, y: target.y, atSeconds: nowSeconds });
+      return target;
+    }
+    const last = lastInvolved.get(target.playerId);
+    if (!last) return target;
+    const elapsed = nowSeconds - last.atSeconds;
+    if (elapsed >= INVOLVEMENT_COOLDOWN_SECONDS) {
+      lastInvolved.delete(target.playerId);
+      return target;
+    }
+    const t = easeOutQuad(Math.max(0, elapsed) / INVOLVEMENT_COOLDOWN_SECONDS);
+    return { ...target, x: last.x + (target.x - last.x) * t, y: last.y + (target.y - last.y) * t };
+  });
 }
 
 /**
@@ -724,6 +800,9 @@ export function MatchCanvas({
   awayStyleRef.current = awayStyle;
 
   const renderedRef = useRef<Map<number, DotPosition>>(new Map());
+  // Aug 2026 round 26 — see applyInvolvementCooldown's own doc comment. Keyed
+  // by playerId, same lifetime/reset rules as renderedRef below.
+  const lastInvolvedRef = useRef<Map<number, { x: number; y: number; atSeconds: number }>>(new Map());
   const lastDrawnDotsRef = useRef<DotPosition[]>([]); // what's actually on screen right now, for hover hit-testing
   const teamsKeyRef = useRef("");
   const driftElapsedRef = useRef(0); // seconds, only advances while isPlaying
@@ -743,6 +822,7 @@ export function MatchCanvas({
       renderedRef.current = new Map(
         computeDotPositions(home, away, eventRef.current, 0, homeStyleRef.current, awayStyleRef.current).map((d) => [d.playerId, d]),
       );
+      lastInvolvedRef.current = new Map();
     }
   }, [home, away]);
 
@@ -771,13 +851,20 @@ export function MatchCanvas({
         driftElapsedRef.current,
         homeStyleRef.current,
         awayStyleRef.current,
+        currentNextEvent,
       );
+      // Aug 2026 round 26 — see applyInvolvementCooldown's own doc comment.
+      // Every dot below (and the ball's own aim, further down) chases these
+      // eased targets rather than the raw ones, so a just-finished-being-
+      // involved player doesn't instantly retarget to their formation
+      // anchor the moment play moves on.
+      const easedTargets = applyInvolvementCooldown(targets, lastInvolvedRef.current, driftElapsedRef.current);
       const smoothing = 1 - Math.pow(0.5, dt / SMOOTHING_HALF_LIFE_MS);
       const maxDotStep = MAX_DOT_SPEED_PX_PER_SEC * (dt / 1000);
 
       const rendered = renderedRef.current;
       const drawn: DotPosition[] = [];
-      for (const target of targets) {
+      for (const target of easedTargets) {
         const prev = rendered.get(target.playerId);
         const next: DotPosition = prev ? { ...target, ...stepToward(prev, target, smoothing, maxDotStep) } : target;
         rendered.set(target.playerId, next);
@@ -794,7 +881,7 @@ export function MatchCanvas({
       // into place. Both the ease *and* the speed cap below scale with it,
       // so a long kick still reads as slower to arrive than a short one, not
       // just capped at the same flat speed regardless of shot type.
-      const ballTarget: BallTarget = ballTargetFor(targets, currentEvent, currentNextEvent);
+      const ballTarget: BallTarget = ballTargetFor(easedTargets, currentEvent, currentNextEvent);
       const ballHalfLife = SMOOTHING_HALF_LIFE_MS * ballTarget.speedMultiplier;
       const ballSmoothing = 1 - Math.pow(0.5, dt / ballHalfLife);
       const maxBallStep = (MAX_BALL_SPEED_PX_PER_SEC / ballTarget.speedMultiplier) * (dt / 1000);

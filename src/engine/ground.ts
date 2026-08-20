@@ -172,7 +172,7 @@ export function zoneToX(zone: Zone): number {
  * columns; every pre-Slice-C caller of `zoneToX` for an exact integer zone
  * is untouched and still gets the exact same pixel value either way.
  */
-function zoneFractionToX(z: number): number {
+export function zoneFractionToX(z: number): number {
   const clamped = Math.min(4, Math.max(0, z));
   const lo = Math.floor(clamped) as Zone;
   const hi = Math.min(4, lo + 1) as Zone;
@@ -1260,7 +1260,7 @@ export interface BallTarget {
   x: number;
   y: number;
   state: BallState;
-  /** Relative to a handball's pace (1 = same speed). MatchCanvas.tsx scales the ball's own smoothing half-life by this so a kick visibly takes longer to arrive. */
+  /** Relative to a handball's pace (1 = same speed). MatchCanvas.tsx scales the ball's own smoothing half-life by this so a kick visibly takes longer to arrive. Aug 2026 round 30: scales ONLY the half-life — MatchCanvas.tsx's speed *cap* (`MAX_BALL_SPEED_PX_PER_SEC`, this file) deliberately does NOT scale by this any more, see that constant's own doc comment for the bug this fixed. */
   speedMultiplier: number;
 }
 
@@ -1273,6 +1273,123 @@ const BALL_MARK_OFFSET_Y = -24; // px, above the head
 const BALL_DROPPED_OFFSET_Y = 16; // px, at/below the feet — fumbled
 const BALL_NEUTRAL_OFFSET_Y = -12; // px, held at about chest height — the STOPPAGE/groundBall-win/shot default
 const KICK_SPEED_MULTIPLIER = 3;
+
+/**
+ * The ball's own hard speed cap, in px/sec — `MatchCanvas.tsx`'s render loop
+ * is the actual consumer (its `maxBallStep`), same "player dot equivalent"
+ * relationship `MAX_DOT_SPEED_PX_PER_SEC` (that file, 200) already documents
+ * for itself, just now living here instead. Moved from `MatchCanvas.tsx` to
+ * this file Aug 2026 round 30 so `kickFlightDurationMs` below can derive a
+ * genuinely consistent real-time estimate from the *exact* number the
+ * renderer itself moves the ball at, rather than an independently-guessed
+ * figure that could silently drift out of sync with it — the same
+ * single-source-of-truth reasoning `GROUND_HEIGHT`/`GROUND_END_CAP_FRACTION`
+ * already follow for the geometry side of this file.
+ */
+export const MAX_BALL_SPEED_PX_PER_SEC = 350;
+
+/**
+ * Real, additional hold time (ms, before `useMatchPlayback.ts`'s own
+ * playback-speed divide) a kick/handball's `MARKING_CONTEST`/
+ * `HANDBALL_CONTEST` resolution tick needs on screen, on top of that hook's
+ * existing flat `BASE_TICK_MS`, for the ball to actually finish crossing the
+ * real distance `ballTargetFor` just sent it across — Aug 2026 round 30
+ * (Tyler, live testing): "The ball movement through the air is probably a
+ * bit disproportionate to the speed that the players move. This results in
+ * the players moving before the ball has actually reached their position...
+ * I suggest we connect the speed of the ball and the players... add
+ * additional tick rates for movement... so there is still that feeling of
+ * suspense."
+ *
+ * ROOT CAUSE, two compounding bugs this round:
+ *
+ * (1) `MatchCanvas.tsx`'s own `maxBallStep` used to divide this constant by
+ * `ballTarget.speedMultiplier` — undocumented (that field's own doc comment
+ * only ever claims to scale the smoothing *half-life*, not the hard speed
+ * cap) and backwards: for a kick (`speedMultiplier` 3), the ball's real cap
+ * worked out to ~117px/s — *slower* than a player dot's own
+ * `MAX_DOT_SPEED_PX_PER_SEC` (200), the exact opposite of "you should be
+ * able to kick slightly faster than a player moves." Fixed by simply
+ * dropping that divide (see `MatchCanvas.tsx`) — the cap now stays at its
+ * own already-documented, already-correct value regardless of shot type,
+ * and only the half-life (still `* speedMultiplier`) keeps a kick's ease
+ * reading slower/floatier than a handball's, same as before.
+ *
+ * (2) Even at a genuinely fast, correct cap, a real end-to-end kick's target
+ * jump can still be several hundred pixels — and that whole jump happens on
+ * ONE tick, the resolution tick (`ballTargetFor` only ever nudges the ball a
+ * fixed `BALL_SIDE_OFFSET`, 20px, beside the carrier on the *launch* tick;
+ * the real cross-ground jump to the receiver's actual resolved position only
+ * ever becomes the ball's target the instant the resolution tick itself
+ * becomes current). The flat `BASE_TICK_MS` a tick stays revealed was never
+ * long enough in real time for even a correctly-fast-capped ball to finish
+ * that crossing — while the receiving player's own dot, already drifting
+ * into a leading position over several *prior* ticks (round 28's off-ball
+ * movement), typically only has a small adjustment left and finishes well
+ * within that same flat window. This function is fix (2): a genuinely
+ * distance-derived top-up, not an independently-tuned guess, computed from
+ * the exact same `MAX_BALL_SPEED_PX_PER_SEC` the renderer itself moves the
+ * ball at, so the two can't silently drift out of sync.
+ *
+ * NOT based on `event.zone`: verify_round30_scratch.ts's own first real-data
+ * run caught that `event.zone` is *always* numerically identical between a
+ * kick/handball's launch tick and its own resolution tick — `runMarkingContest`/
+ * `runHandballContest` both resolve using `zone: state.zone`, the exact same
+ * value the launch tick itself logged (a real kick's destination zone is
+ * decided and logged *at launch*, not discovered at resolution — see
+ * `runGeneralPlay`'s `weightedKickTarget` call). So a zone-delta-based
+ * distance (this function's first, wrong attempt) was silently always zero
+ * across all 6,883 real disposal resolutions sampled — not a rare edge case,
+ * a structural certainty. The real distance instead comes from each
+ * player's own `MatchEvent.trackedPositions` snapshot (`engine/movement.ts`)
+ * — the carrier's own real position at launch (deliberately un-nudged
+ * there, `skipPositionNudge: true`) vs the receiver's own real, now-resolved
+ * position at the resolution tick (nudged toward the contest point by then)
+ * — converted to the same pixel space `formationFor`'s own tracked-position
+ * branch already uses (`zoneFractionToX` + `maxHalfHeightAt`), so this stays
+ * a faithful proxy for the actual on-screen jump `ballTargetFor` sends the
+ * ball across, not an approximation of one that happens to always read zero.
+ *
+ * `useMatchPlayback.ts` only ever deals in `MatchEvent`s, never dot/ball
+ * pixel geometry directly (this file's own top comment's established
+ * separation) — reading each named player's own `trackedPositions` entry
+ * off the two events keeps that separation intact (no `computeDotPositions`
+ * call, no React-side state needed) while still landing on a real pixel
+ * estimate. `FLIGHT_ARRIVAL_BUFFER_MS` covers the exponential-ease "tail"
+ * below the hard cap's own transition point (the last ~80px or so, where
+ * `stepToward` stops being cap-limited and reverts to a pure exponential
+ * approach) — a flat, disclosed approximation rather than a derived figure,
+ * same status as every other UX-feel constant in this file. Returns 0 for
+ * anything that isn't a kick/handball's own resolution tick, or where either
+ * player's tracked position is missing (an older save with no
+ * `trackedPositions` at all — the same graceful-degradation convention
+ * `formationFor`'s own tracked-position branch already follows), so
+ * `useMatchPlayback.ts`'s own `Math.max(BASE_TICK_MS, ...)` leaves every
+ * other tick (stoppages, tackles, general play, ...) at exactly its existing
+ * flat pace — genuinely additive, not a blanket slowdown.
+ */
+const FLIGHT_ARRIVAL_BUFFER_MS = 300;
+
+/** Same pixel conversion `formationFor`'s own tracked-position branch uses for a player dot (`zoneFractionToX` + `maxHalfHeightAt(x) * 0.85` for lane->y) — reused here so a flight-distance estimate stays consistent with how a real player's position actually renders. Deliberately omits `formationFor`'s own small home/away `sideOffset` (+-18px) — irrelevant at the scale a multi-hundred-pixel kick estimate operates on. */
+function trackedPixel(pos: AbstractPosition): { x: number; y: number } {
+  const x = zoneFractionToX(pos.zoneFrac);
+  const halfHeight = maxHalfHeightAt(x) * 0.85;
+  return { x, y: CENTER_Y + pos.lane * halfHeight };
+}
+
+export function kickFlightDurationMs(prevEvent: MatchEvent | null, currentEvent: MatchEvent | null): number {
+  if (!prevEvent || !currentEvent) return 0;
+  if (currentEvent.phase !== "MARKING_CONTEST" && currentEvent.phase !== "HANDBALL_CONTEST") return 0;
+  const carrierId = prevEvent.playerIds[0];
+  const receiverId = currentEvent.playerIds[0];
+  const carrierTracked = prevEvent.trackedPositions?.find((t) => t.playerId === carrierId);
+  const receiverTracked = currentEvent.trackedPositions?.find((t) => t.playerId === receiverId);
+  if (!carrierTracked || !receiverTracked) return 0;
+  const from = trackedPixel({ zoneFrac: carrierTracked.zoneFrac, lane: carrierTracked.lane });
+  const to = trackedPixel({ zoneFrac: receiverTracked.zoneFrac, lane: receiverTracked.lane });
+  const pixelDistance = Math.hypot(to.x - from.x, to.y - from.y);
+  return (pixelDistance / MAX_BALL_SPEED_PX_PER_SEC) * 1000 + FLIGHT_ARRIVAL_BUFFER_MS;
+}
 
 export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nextEvent: MatchEvent | null): BallTarget {
   if (!event) {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MatchResult, MatchEvent, BoxScoreLine } from "../engine/match";
+import { kickFlightDurationMs } from "../engine/ground";
 
 /**
  * Turns a fully- or partially-simulated MatchResult into a controllable
@@ -31,6 +32,18 @@ import type { MatchResult, MatchEvent, BoxScoreLine } from "../engine/match";
  */
 export type PlaybackSpeed = 0.5 | 1 | 2 | 4 | 8 | 16;
 const BASE_TICK_MS = 450; // ms between events at 1x — tune freely, purely a UX feel constant
+// Aug 2026 round 30 (Tyler, live testing: "players moving before the ball has
+// actually reached their position... add additional tick rates for
+// movement... so there is still that feeling of suspense") — a flat
+// BASE_TICK_MS for every tick regardless of content meant a long kick's own
+// MARKING_CONTEST/HANDBALL_CONTEST resolution tick never stayed on screen
+// long enough, in real time, for the ball to actually finish visibly
+// crossing the real distance it had just been sent across, even after
+// MatchCanvas.tsx's own companion fix made its speed correctly faster than a
+// player's. `holdMs` below is BASE_TICK_MS unchanged for every ordinary
+// tick, and genuinely extended (not independently guessed — see
+// `kickFlightDurationMs`'s own doc comment in engine/ground.ts) only for the
+// specific tick where that flight actually happens.
 
 function emptyLine(): BoxScoreLine {
   return {
@@ -113,9 +126,17 @@ export function useMatchPlayback(result: MatchResult | null, homeIds: Set<number
       setIsPlaying(false);
       return;
     }
+    // See BASE_TICK_MS's own round-30 comment above: `currentIndex` is the
+    // tick currently on screen, so this is "how long should THIS tick stay
+    // up before advancing" — the natural point to extend it, if it's a
+    // kick/handball's own resolution tick that needs genuinely more real
+    // time for the ball's flight to visibly finish.
+    const currentEv = result.events[currentIndex] ?? null;
+    const prevEv = currentIndex > 0 ? result.events[currentIndex - 1] : null;
+    const holdMs = Math.max(BASE_TICK_MS, kickFlightDurationMs(prevEv, currentEv));
     timerRef.current = setTimeout(() => {
       setCurrentIndex((i) => Math.min(i + 1, result.events.length - 1));
-    }, BASE_TICK_MS / speed);
+    }, holdMs / speed);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };

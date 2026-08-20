@@ -3,7 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
 import { benchPlayers } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
-import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_END_CAP_FRACTION, type DotPosition, type BallTarget } from "../engine/ground";
+import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_END_CAP_FRACTION, MAX_BALL_SPEED_PX_PER_SEC, type DotPosition, type BallTarget } from "../engine/ground";
 import { ACTIVE_GROUND } from "../data/grounds";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
 
@@ -92,8 +92,12 @@ const SMOOTHING_HALF_LIFE_MS = 150;
  * and not instant.
  */
 const MAX_DOT_SPEED_PX_PER_SEC = 200;
-/** Same fix, for the ball — a kicked/handballed ball genuinely travels faster than a running player, so its own cap is higher; still combined with (not replacing) the existing kick-vs-handball `speedMultiplier` below, which keeps a kick reading as slower/floatier than a handball for any *given* distance — this cap only bites for a jump big enough that even the slower exponential ease would otherwise have closed it in one tick. */
-const MAX_BALL_SPEED_PX_PER_SEC = 350;
+// MAX_BALL_SPEED_PX_PER_SEC itself now lives in engine/ground.ts (imported
+// above) — Aug 2026 round 30, so useMatchPlayback.ts's own tick-hold-time
+// estimate can derive from the *exact* same number this file moves the ball
+// at, rather than an independently-guessed one. See that constant's own doc
+// comment (ground.ts) for the full round-30 write-up, including the bug this
+// relocation was part of fixing.
 
 /** Moves `prev` toward `target` by the exponential-ease step, but never further than `maxStep` in a straight line — the shared fix behind `MAX_DOT_SPEED_PX_PER_SEC`/`MAX_BALL_SPEED_PX_PER_SEC` above. Below the cap this is byte-identical to the plain exponential formula every caller used before this round. */
 function stepToward(prev: { x: number; y: number }, target: { x: number; y: number }, smoothing: number, maxStep: number): { x: number; y: number } {
@@ -876,15 +880,31 @@ export function MatchCanvas({
       // still-smoothing `drawn` ones) so its direction/offset logic reads
       // stable positions, then chases that target at its own event-type-
       // dependent rate — a kick's target has speedMultiplier 3, so its
-      // half-life is 3x longer and it visibly takes longer to arrive than a
-      // handball's, independent of how fast the player dots themselves ease
-      // into place. Both the ease *and* the speed cap below scale with it,
-      // so a long kick still reads as slower to arrive than a short one, not
-      // just capped at the same flat speed regardless of shot type.
+      // half-life is 3x longer and its initial ease reads visibly floatier
+      // than a handball's, independent of how fast the player dots
+      // themselves ease into place.
+      //
+      // Aug 2026 round 30 (Tyler, live testing: "the ball movement through
+      // the air is probably a bit disproportionate to the speed that the
+      // players move... players moving before the ball has actually reached
+      // their position"): the speed CAP below used to *also* scale by
+      // `speedMultiplier` (dividing it down for a kick) — undocumented (the
+      // field's own doc comment only ever claimed the half-life), and
+      // backwards: it made a kick's own hard cap ~117px/s, slower than a
+      // player dot's own `MAX_DOT_SPEED_PX_PER_SEC` (200). The cap now stays
+      // flat at `MAX_BALL_SPEED_PX_PER_SEC` regardless of shot type — always
+      // faster than a player, matching "you should be able to kick slightly
+      // faster than a player moves" — and only the half-life keeps a kick's
+      // ease *reading* floatier for any given distance. See
+      // `engine/ground.ts`'s own `MAX_BALL_SPEED_PX_PER_SEC` and
+      // `kickFlightDurationMs` doc comments for the full write-up, including
+      // the companion fix (useMatchPlayback.ts holding a kick/handball's
+      // resolution tick on screen long enough, in real time, for even this
+      // now-correctly-fast ball to actually finish a long flight).
       const ballTarget: BallTarget = ballTargetFor(easedTargets, currentEvent, currentNextEvent);
       const ballHalfLife = SMOOTHING_HALF_LIFE_MS * ballTarget.speedMultiplier;
       const ballSmoothing = 1 - Math.pow(0.5, dt / ballHalfLife);
-      const maxBallStep = (MAX_BALL_SPEED_PX_PER_SEC / ballTarget.speedMultiplier) * (dt / 1000);
+      const maxBallStep = MAX_BALL_SPEED_PX_PER_SEC * (dt / 1000);
       ballRenderedRef.current = stepToward(ballRenderedRef.current, ballTarget, ballSmoothing, maxBallStep);
 
       const ctx = canvasRef.current?.getContext("2d");

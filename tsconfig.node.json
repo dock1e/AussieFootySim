@@ -11,5 +11,25 @@
     "noEmit": true,
     "strict": true
   },
-  "include": ["vite.config.ts", "scripts"]
+  // Aug 2026 round 30 (Tyler's own `npm run build`, real Windows machine):
+  // this used to include the whole "scripts" directory, which sweeps up
+  // every verify_round<N>_scratch.ts too -- explicitly documented
+  // throughout this project as throwaway/untracked/run via
+  // `node --experimental-strip-types`, never meant to be held to tsc's
+  // strict bar. An older convention (scripts/.*.throwaway) kept scratch
+  // files out of this exact scan by naming them with a non-.ts extension;
+  // that convention silently eroded starting round 15's
+  // verify_round15_scratch.ts (a plain .ts name, no leading dot, no
+  // .throwaway suffix) without anyone noticing this config still swept
+  // the whole directory -- 15 rounds of scratch scripts accumulated with
+  // zero tsc coverage assumed, until round 29's happened to have a real
+  // type looseness (`e.trackedPositions` possibly undefined) that finally
+  // broke `npm run build`'s second tsc pass for real. Fixed at the root:
+  // list only the genuine, relied-upon CLI entry points `npm run
+  // build:data`/`npm run simulate` actually need type-checked
+  // (scripts/csv.ts is pulled in automatically -- buildData.ts imports it)
+  // -- any future scratch script, named however a given round happens to
+  // name it, is now structurally excluded rather than accidentally swept
+  // in by a directory-level include.
+  "include": ["vite.config.ts", "scripts/buildData.ts", "scripts/simulate.ts"]
 }

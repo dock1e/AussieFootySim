@@ -234,7 +234,7 @@ export function nearbyDefenders(rng: Rng, side: Side, team: MatchTeam, zone: Zon
   const pool = onGroundPlayers(team);
   const withDistance = pool.map((player) => ({
     player,
-    distance: distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession)),
+    distance: distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions)),
   }));
   const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0);
   if (eligible.length === 0) return null;
@@ -258,7 +258,7 @@ export function closestDefender(side: Side, team: MatchTeam, zone: Zone, possess
   const pool = onGroundPlayers(team);
   let best: NearbyPick | null = null;
   for (const player of pool) {
-    const distance = distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession));
+    const distance = distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions));
     if (!best || distance < best.distance) best = { player, distance };
   }
   return best;
@@ -305,7 +305,7 @@ export function weightedKickTarget(
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
   const candidates: NearbyPick[] = pool.map((player) => {
-    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession);
+    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
     return { player, distance: closest ? closest.distance : Infinity };
   });
@@ -349,7 +349,7 @@ export function weightedHandballTarget(
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
   const candidates: NearbyPick[] = pool.map((player) => {
-    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession);
+    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
     return { player, distance: closest ? closest.distance : Infinity };
   });

@@ -89,19 +89,29 @@ const LINE_MOBILITY: Record<Line, number> = {
 };
 
 /**
- * A single representative lane per position — deliberately simpler than
- * `ground.ts`'s own `POSITION_LANES` (which lists both lanes for a dual-slot
- * position, e.g. `BP: [-1, 1]`, so it can place two literal same-named
- * occupants on different flanks for rendering). The engine doesn't need to
- * know which specific occupant of a duplicated slot is on which flank — just
- * a plausible "how central is this position" for a real distance proxy.
- * Centre-anchored positions (spine + Followers) read as 0; wing/flank
- * positions read as a genuine, non-trivial offset since that's exactly the
- * real-world claim ("Wing" and "Flank" are named for a reason). Fallback
- * (archetype-line, no real position) reads as centrally-laned (0) — no real
- * per-player lane data exists to draw on for those players, same "no
- * evidence, no guess" shape `Lane` (`involvement.ts`) already uses for the
- * identical case.
+ * Each dual-lane position's representative lane MAGNITUDE only — the SIGN
+ * (which real flank a specific occupant is on) is applied separately by
+ * `laneSignFor`, just below. Through round 27 this table was the *entire*
+ * lane story: `positioning.ts` was purely a distance-to-ball-zone proxy, so
+ * "the engine doesn't need to know which specific occupant of a duplicated
+ * slot is on which flank — just a plausible 'how central is this position'"
+ * (this file's original round-23 reasoning) was actually true — two players
+ * landing on the same abstract lane was fine, it just meant they read as
+ * equally close. Round 28 broke that invariant without noticing: it started
+ * feeding this same anchor straight into literal on-screen rendering
+ * (`ground.ts`'s new tracked-position branch), where sign suddenly matters a
+ * great deal — an always-positive magnitude here meant BOTH occupants of
+ * every dual-lane slot, on BOTH teams, rendered on the same physical side of
+ * the ground, the exact bug Tyler's round-28 live testing caught ("all the
+ * players now gravitate to one side of the ground... other half of the
+ * ground is unused"). `laneSignFor` (below) closes that gap, restoring the
+ * same real-per-occupant flank split `ground.ts`'s own
+ * `assignAnchors`/`POSITION_LANES` fallback and `involvement.ts`'s own
+ * `laneFor` already give — this table now supplies only the magnitude half
+ * of the answer. Centre-anchored positions (spine + Followers) still read as
+ * 0 either way; fallback (archetype-line, no real position) still reads as
+ * centrally-laned (0) — no real per-player lane data exists to draw on for
+ * those players.
  */
 const POSITION_LANE: Partial<Record<Position, number>> = {
   FB: 0,
@@ -118,6 +128,35 @@ const POSITION_LANE: Partial<Record<Position, number>> = {
   FF: 0,
   FP: 0.6,
 };
+
+/**
+ * Which real flank (-1 left / +1 right / 0 centre-anchored) a SPECIFIC
+ * occupant of `position` is actually on — the sign half of `homeAnchor`'s
+ * lane, `POSITION_LANE` above being the magnitude half. Same PlayerID-order
+ * convention `ground.ts`'s own `assignAnchors` and `involvement.ts`'s own
+ * `laneFor` already use (lower PlayerID of the two real occupants reads
+ * left, higher reads right) — a third independent copy rather than an
+ * import, for the identical circular-import reason this file's top comment
+ * already gives for not importing `ground.ts`, and `involvement.ts`'s own
+ * `DUAL_LANE_POSITIONS` doc comment already gives for its own copy:
+ * `involvement.ts` imports FROM this file (for `proximityFor`), so this file
+ * importing `laneFor` back from `involvement.ts` would itself be circular.
+ * `teamPositions` undefined (no roster context available) reads as centre
+ * (0) — a plain, disclosed "no evidence, no guess" default, never actually
+ * hit by any current call site (every one of them has a real
+ * `MatchTeam.positions` map in scope to pass through).
+ */
+const DUAL_LANE_POSITIONS: ReadonlySet<Position> = new Set(["BP", "HBF", "W", "HFF", "FP"]);
+
+function laneSignFor(playerId: number, position: Position | null | undefined, teamPositions: Map<number, Position> | undefined): -1 | 0 | 1 {
+  if (!position || !DUAL_LANE_POSITIONS.has(position) || !teamPositions) return 0;
+  const sameSlot = [...teamPositions.entries()]
+    .filter(([, pos]) => pos === position)
+    .map(([id]) => id)
+    .sort((a, b) => a - b);
+  const idx = sameSlot.indexOf(playerId);
+  return idx <= 0 ? -1 : 1;
+}
 
 /**
  * Aug 2026 round 28 — the same static, team-wide structural bias
@@ -176,11 +215,17 @@ function gameStyleAnchorBias(position: Position, style: GameStyle): AnchorBias {
   }
 }
 
-/** A player's home anchor, before any ball-relative shift — real assigned position if known, else the archetype-line fallback (identical graceful-degradation order to `involvement.ts`'s `involvementWeight`/`ground.ts`'s `assignAnchors`). `style` (Aug 2026 round 28) defaults to Balanced (zero bias, byte-identical to before this param existed) — see `gameStyleAnchorBias`'s own doc comment. */
-function homeAnchor(player: Player, position: Position | null | undefined, style: GameStyle = DEFAULT_GAME_STYLE): AbstractPosition {
+/** A player's home anchor, before any ball-relative shift — real assigned position if known, else the archetype-line fallback (identical graceful-degradation order to `involvement.ts`'s `involvementWeight`/`ground.ts`'s `assignAnchors`). `style` (Aug 2026 round 28) defaults to Balanced (zero bias, byte-identical to before this param existed) — see `gameStyleAnchorBias`'s own doc comment. `teamPositions` (Aug 2026 round 29) signs a dual-lane position's magnitude by real per-occupant flank via `laneSignFor` — see that function's doc comment for why this exists as a separate param rather than being folded into `POSITION_LANE` itself. */
+function homeAnchor(
+  player: Player,
+  position: Position | null | undefined,
+  style: GameStyle = DEFAULT_GAME_STYLE,
+  teamPositions?: Map<number, Position>,
+): AbstractPosition {
   if (position && ZONE_FOR_POSITION[position] !== null) {
     const bias = gameStyleAnchorBias(position, style);
-    return { zoneFrac: (ZONE_FOR_POSITION[position] as Zone) + bias.zoneShift, lane: (POSITION_LANE[position] ?? 0) * bias.laneScale };
+    const sign = laneSignFor(player.PlayerID, position, teamPositions);
+    return { zoneFrac: (ZONE_FOR_POSITION[position] as Zone) + bias.zoneShift, lane: (POSITION_LANE[position] ?? 0) * sign * bias.laneScale };
   }
   const line = ARCHETYPE_LINE[player.archetype as Archetype] ?? "Midfield";
   return { zoneFrac: ZONE_FOR_LINE[line], lane: 0 };
@@ -224,8 +269,9 @@ export function proximityFor(
   ballZone: Zone,
   ballPossession: Side,
   style: GameStyle = DEFAULT_GAME_STYLE,
+  teamPositions?: Map<number, Position>,
 ): AbstractPosition {
-  const anchor = homeAnchor(player, position, style);
+  const anchor = homeAnchor(player, position, style, teamPositions);
   const mobility = mobilityFor(player, position);
   const ownBallZone = ownZone(side, ballZone);
   const centred = (ownBallZone - 2) / 2; // -1 (deep in this side's own defence) .. +1 (deep in their own attack)
@@ -246,8 +292,8 @@ export function proximityFor(
  * already raw/home-relative, so nothing here depends on which side the
  * carrier plays for.
  */
-export function carrierPosition(carrier: Player, position: Position | null | undefined, ballZone: Zone): AbstractPosition {
-  return { zoneFrac: ballZone, lane: homeAnchor(carrier, position).lane };
+export function carrierPosition(carrier: Player, position: Position | null | undefined, ballZone: Zone, teamPositions?: Map<number, Position>): AbstractPosition {
+  return { zoneFrac: ballZone, lane: homeAnchor(carrier, position, DEFAULT_GAME_STYLE, teamPositions).lane };
 }
 
 /**

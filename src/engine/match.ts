@@ -8,7 +8,7 @@ import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
 import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget } from "./involvement.ts";
 import { carrierPosition, proximityFor, distanceBetween, proximityWeight, type AbstractPosition } from "./positioning.ts";
-import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, type TrackedPosition } from "./movement.ts";
+import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
 import {
   tacticGroupForSlot,
   defaultTacticForPosition,
@@ -553,6 +553,16 @@ function lineFor(ctx: Ctx, player: Player): BoxScoreLine {
   return line;
 }
 
+/**
+ * `skipPositionNudge` (Aug 2026 round 29) — see `nudgeInvolvedPositions`'s
+ * own doc comment (`movement.ts`) for the full root-cause/fix writeup.
+ * Defaults to false (nudge on) since almost every logged event is a real
+ * physical pairing/moment the named players' tracked positions should
+ * reflect; explicitly passed `true` only at the handful of disposal-*launch*
+ * call sites (a kick/handball about to resolve into a
+ * `MARKING_CONTEST`/`HANDBALL_CONTEST` next tick), where the carrier and
+ * receiver are named together specifically because they're apart.
+ */
 function log(
   ctx: Ctx,
   zone: Zone,
@@ -561,7 +571,17 @@ function log(
   description: string,
   playerIds: number[],
   statDeltas: StatDelta[] = [],
+  skipPositionNudge = false,
 ) {
+  // Runs regardless of `recordEvents` (same discipline `simulateQuarter`'s
+  // own `stepTickPositions` already uses) — tracked-position evolution
+  // should be one self-consistent layer whether or not anyone's actually
+  // recording events, not a side effect of logging. Cheap either way:
+  // `ctx.trackedPositions` still feeds nothing gameplay/stats-relevant, see
+  // this function's own doc comment.
+  if (!skipPositionNudge) {
+    ctx.trackedPositions = nudgeInvolvedPositions(ctx.home, ctx.away, zone, playerIds, ctx.trackedPositions);
+  }
   if (!ctx.recordEvents) return;
   ctx.events.push({
     tick: ctx.tick,
@@ -1038,7 +1058,7 @@ function resolveUnpressuredDisposal(
       proximityWeight(receiverPick.distance) === 0
         ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -1070,7 +1090,7 @@ function resolveUnpressuredDisposal(
       proximityWeight(receiverPick.distance) === 0
         ? `${carrier.lname} finds ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -1085,7 +1105,7 @@ function resolveUnpressuredDisposal(
     proximityWeight(receiverPick.distance) === 0
       ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
       : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
-  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID]);
+  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
   return {
     phase: "HANDBALL_CONTEST",
     zone: newZone,
@@ -1127,7 +1147,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     if (ctx.rng() < runChance) {
       const newZone = advanceZone(state.zone, state.possession);
       const verb = runTicksSoFar === 0 ? "finds space and runs it forward, bouncing along the way" : "keeps running, another bounce";
-      const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone);
+      const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
 
       // Persistent chase — Aug 2026 round 24, see CHASE_PURSUIT_DISTANCE's
       // own doc comment. The SAME chaser (state.chaserId), re-looked-up by
@@ -1144,7 +1164,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       if (chaser) {
         const distance = distanceBetween(
           carrierPos,
-          proximityFor(chaser, defendingSide, defendingTeam.positions?.get(chaser.PlayerID), state.zone, state.possession),
+          proximityFor(chaser, defendingSide, defendingTeam.positions?.get(chaser.PlayerID), state.zone, state.possession, undefined, defendingTeam.positions),
         );
         const chaserTactic = tacticFor(defendingPlan, chaser, defendingTeam.positions);
         const chaserInForwardHalf = isForward50(state.zone, defendingSide);
@@ -1220,7 +1240,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // that subset is empty, there really is nobody there to contest this tick,
   // Row 2 of Tyler's own process-map diagram ("No players within range to
   // contest") built for real for the first time.
-  const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone);
+  const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
   const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos);
   const defender = tagger ?? nearby?.player ?? null;
 
@@ -1437,7 +1457,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       proximityWeight(receiverPick.distance) === 0
         ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -1467,7 +1487,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       proximityWeight(receiverPick.distance) === 0
         ? `${carrier.lname} finds ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -1482,7 +1502,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     proximityWeight(receiverPick.distance) === 0
       ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
       : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
-  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID]);
+  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
   return {
     phase: "HANDBALL_CONTEST",
     zone: newZone,
@@ -1626,7 +1646,7 @@ function runContest(ctx: Ctx, state: State): State {
   // press-shifted estimate. Pinning it exactly (rather than compounding two
   // fuzzy estimates against each other) is what a "the ball is right here"
   // fact should look like.
-  const attackerPos = carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone);
+  const attackerPos = carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone, attackingTeam.positions);
   const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos);
   if (!nearby) {
     return resolveUncontestedGather(ctx, state, attackingSide, defendingSide, defendingTeam, attackerRep, contestType);
@@ -1862,7 +1882,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   // identified via the same carrierPosition-for-the-ball-holder convention
   // runGeneralPlay/runContest already use once someone's position is a known
   // fact rather than a fuzzy estimate.
-  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone);
+  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
   const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos);
   if (!nearby) return attemptUncontestedMark();
 
@@ -2014,7 +2034,7 @@ function runHandballContest(ctx: Ctx, state: State): State {
 
   if (proximityWeight(distance) === 0) return attemptCleanReceive();
 
-  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone);
+  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
   const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos);
   if (!nearby) return attemptCleanReceive();
 

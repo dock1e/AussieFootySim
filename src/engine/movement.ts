@@ -359,8 +359,9 @@ function targetFor(
   zone: Zone,
   possession: Side,
   opponentPos: AbstractPosition | undefined,
+  teamPositions: Map<number, Position> | undefined,
 ): AbstractPosition {
-  const home = proximityFor(player, side, position, zone, possession, style);
+  const home = proximityFor(player, side, position, zone, possession, style, teamPositions);
   const group = tacticGroupForSlot(position, player.archetype as Archetype);
   const tactic = resolvedTactic(plan, player, position);
   if (group === "Defender" && opponentPos) return defenderTarget(side, home, opponentPos, tactic, zone);
@@ -383,7 +384,7 @@ function stepSide(
     const position = team.positions?.get(player.PlayerID);
     const opponentId = matchups.get(player.PlayerID);
     const opponentPos = opponentId !== undefined ? current.get(opponentId) : undefined;
-    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos);
+    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions);
     const from = current.get(player.PlayerID) ?? target;
     out.set(player.PlayerID, stepToward(from, target, maxStepFor(player)));
   }
@@ -411,9 +412,84 @@ export function stepPositions(
 /** Seeds every on-ground player's tracked position at match start and at every quarter-time reset (real teams realign to shape at the break) — everyone's own plain `proximityFor` anchor at a neutral centre-bounce state (no press yet, matching `match.ts`'s own initial/reset `State`), so the very first tick's movement already starts from a sensible position rather than an arbitrary cold-start value. */
 export function initialPositions(home: MatchTeam, away: MatchTeam, homeStyle: GameStyle, awayStyle: GameStyle, neutralZone: Zone, neutralPossession: Side): Map<number, AbstractPosition> {
   const out = new Map<number, AbstractPosition>();
-  for (const p of onGroundPlayers(home)) out.set(p.PlayerID, proximityFor(p, "home", home.positions?.get(p.PlayerID), neutralZone, neutralPossession, homeStyle));
-  for (const p of onGroundPlayers(away)) out.set(p.PlayerID, proximityFor(p, "away", away.positions?.get(p.PlayerID), neutralZone, neutralPossession, awayStyle));
+  for (const p of onGroundPlayers(home)) out.set(p.PlayerID, proximityFor(p, "home", home.positions?.get(p.PlayerID), neutralZone, neutralPossession, homeStyle, home.positions));
+  for (const p of onGroundPlayers(away)) out.set(p.PlayerID, proximityFor(p, "away", away.positions?.get(p.PlayerID), neutralZone, neutralPossession, awayStyle, away.positions));
   return out;
+}
+
+/**
+ * Pulls specifically-named players' PERSISTENT tracked positions toward the
+ * same "group average blended toward the ball's own zone" point
+ * `ground.ts`'s rendering-only involved-player blend has computed for
+ * display since round 3/18/19 (`computeDotPositions`'s own
+ * `avgAnchorX`/`ballX` blend) — Aug 2026 round 29 (Tyler, live testing):
+ * "Salem moved to this forward position all in one tick and none of the
+ * opposition players moved... he slides back to his original half back
+ * position before he kicks it." Root cause: round 28 gave every tracked
+ * player a real, persistent position, but never touched that
+ * already-existing rendering blend, which only ever changed what got
+ * DRAWN for one event, not the underlying tracked truth — so a player's
+ * real position kept quietly evolving toward their ordinary tactical
+ * target the whole time they looked, on screen, like they were near the
+ * ball, and the moment they stopped being named, rendering reverted to
+ * that untouched, stale spot (round 26's own `applyInvolvementCooldown`
+ * eases that reversion, but can't fix that its *destination* is wrong).
+ *
+ * `match.ts`'s `log()` calls this for every event's own `playerIds`, right
+ * before it snapshots `ctx.trackedPositions` onto the event — so the
+ * snapshot `ground.ts` reads is already correct, and the next tick's
+ * `stepPositions` keeps evolving FROM that real spot, leaving nothing
+ * stale to slide back to.
+ *
+ * Bounded by the exact same per-player `maxStepFor` cap every other
+ * tracked-position update already respects — no special "burst" speed for
+ * involvement. A real player arguably does accelerate harder to crash a
+ * contest, but this round has no calibrated basis for how much harder, so
+ * it deliberately reuses the one speed model that already exists rather
+ * than invent an untuned multiplier; a disclosed, revisitable
+ * simplification, not an oversight.
+ *
+ * Deliberately NOT called for a disposal *launch* event (a kick/handball
+ * about to resolve into `MARKING_CONTEST`/`HANDBALL_CONTEST` next tick) —
+ * `match.ts` passes `skipPositionNudge: true` at exactly those call sites.
+ * Pulling the carrier and receiver's real positions toward each other
+ * there would undo round 26/27's own, separately-hard-won fix ([[Contest
+ * Resolution Redesign]] item 4: "a moment of suspense where the viewer
+ * sees a ball kicked towards a contest... the target is moving with
+ * distance between them and their opponent") — that pair is named together
+ * *because* they're apart, with the ball crossing the real gap, not
+ * because they're physically converging yet.
+ *
+ * Genuinely additive, not a gameplay change: `ctx.trackedPositions` still
+ * isn't read by any contest-eligibility or receiver-picking logic
+ * (`involvement.ts`'s `proximityFor`-based picks stay entirely separate,
+ * per `movement.ts`'s own top comment) — this only ever changes what
+ * renders and where the NEXT tick's tactical stepping starts from, never a
+ * match outcome, a contest roll, or a stat.
+ */
+export function nudgeInvolvedPositions(
+  home: MatchTeam,
+  away: MatchTeam,
+  zone: Zone,
+  playerIds: number[],
+  current: Map<number, AbstractPosition>,
+): Map<number, AbstractPosition> {
+  const involved = playerIds.map((id) => current.get(id)).filter((p): p is AbstractPosition => p !== undefined);
+  if (involved.length === 0) return current;
+  const avgZoneFrac = involved.reduce((s, p) => s + p.zoneFrac, 0) / involved.length;
+  const avgLane = involved.reduce((s, p) => s + p.lane, 0) / involved.length;
+  const groupPoint: AbstractPosition = { zoneFrac: avgZoneFrac, lane: avgLane };
+  const roster = [...onGroundPlayers(home), ...onGroundPlayers(away)];
+  const next = new Map(current);
+  for (const id of playerIds) {
+    const from = current.get(id);
+    const player = roster.find((p) => p.PlayerID === id);
+    if (!from || !player) continue;
+    const anchor = playerIds.length > 1 ? groupPoint : from;
+    const target: AbstractPosition = { zoneFrac: (anchor.zoneFrac + zone) / 2, lane: anchor.lane };
+    next.set(id, stepToward(from, target, maxStepFor(player)));
+  }
+  return next;
 }
 
 /** `Ctx.trackedPositions` -> `MatchEvent.trackedPositions`'s own array-of-objects shape — see this file's top comment for why a `Map` can't be the thing that actually gets logged. */

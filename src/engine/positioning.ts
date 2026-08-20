@@ -2,6 +2,7 @@ import type { Player } from "../types/player.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 import { ZONE_FOR_POSITION, ZONE_FOR_LINE, ownZone, type Side, type Zone } from "./zones.ts";
+import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
 
 /**
  * A real, engine-side position/distance model — Aug 2026 round 23. Tyler,
@@ -42,6 +43,14 @@ import { ZONE_FOR_POSITION, ZONE_FOR_LINE, ownZone, type Side, type Zone } from 
  * same real-world claim (a key-position player roams a tight heat map, a
  * nomadic mid covers the whole corridor), grounded in the same Aug 2026
  * Champion Data heat-map research ([[Tactics and Positional Play]] Part 1).
+ *
+ * Aug 2026 round 28 — `proximityFor` gained an optional `style: GameStyle`
+ * param (defaulting to Balanced, zero effect on every pre-existing caller)
+ * so `engine/movement.ts`'s new off-ball movement model can seed a
+ * defender/forward's home anchor with the same team-wide structural bias
+ * `ground.ts`'s renderer already applies — see `gameStyleAnchorBias` below
+ * for why that's a genuinely new capability for this file, not a
+ * restatement.
  */
 
 export interface AbstractPosition {
@@ -110,10 +119,68 @@ const POSITION_LANE: Partial<Record<Position, number>> = {
   FP: 0.6,
 };
 
-/** A player's home anchor, before any ball-relative shift — real assigned position if known, else the archetype-line fallback (identical graceful-degradation order to `involvement.ts`'s `involvementWeight`/`ground.ts`'s `assignAnchors`). */
-function homeAnchor(player: Player, position: Position | null | undefined): AbstractPosition {
+/**
+ * Aug 2026 round 28 — the same static, team-wide structural bias
+ * `ground.ts`'s own `gameStyleAnchorBias` already applies to a position's
+ * *rendered* anchor, ported here so the engine's own position/distance model
+ * (this file) can finally see it too — see [[Tactics and Positional Play]]'s
+ * "Slice H" for the original design. Before this round, `positioning.ts`
+ * (real gameplay effect: contest eligibility, kick/handball targeting) and
+ * `ground.ts` (rendering only) silently disagreed on this — a team running
+ * Defensive Flood visibly pushed its back line forward on screen, but
+ * `nearbyDefenders`/`weightedKickTarget` never knew about it. DELIBERATELY
+ * DUPLICATED rather than imported, same reasoning this file's own top-of-file
+ * doc comment already gives for `POSITION_MOBILITY`: `ground.ts` imports
+ * `match.ts`, and `match.ts` needs this module, so the reverse import would
+ * be circular. `GameStyle` itself is safe to import directly (`tactics.ts`
+ * has no engine-internal imports of its own), which is what makes ROUTING a
+ * real style *value* into this file possible at all, even though the bias
+ * *table* still can't be shared code with ground.ts's own copy.
+ */
+const DEFENSIVE_LINE_POSITIONS: readonly Position[] = ["FB", "BP", "HBF", "CHB"];
+const FORWARD_LINE_POSITIONS: readonly Position[] = ["FF", "FP", "HFF", "CHF"];
+const WING_FLANK_POSITIONS: readonly Position[] = ["W", "HBF", "HFF"];
+
+const FLOOD_PUSH_ZONE = 0.4;
+const FLOOD_CONTRACT_ZONE = 0.3;
+const FLOOD_SPREAD_SCALE = 1.15;
+const FLOOD_CONTRACT_SCALE = 0.7;
+const MIDDLE_GRAVITY_SCALE = 0.5;
+const SPREAD_WIDE_SCALE = 1.15;
+
+interface AnchorBias {
+  zoneShift: number;
+  laneScale: number;
+}
+const NO_BIAS: AnchorBias = { zoneShift: 0, laneScale: 1 };
+
+/** Byte-for-byte the same branch logic as `ground.ts`'s `gameStyleAnchorBias` — see that function's own doc comment for the pptx-cross-checked reasoning behind each number. Only ever applied to a real-position anchor, never the archetype-line fallback, same restriction ground.ts's own version imposes (Tyler's own description names real positions specifically). */
+function gameStyleAnchorBias(position: Position, style: GameStyle): AnchorBias {
+  switch (style) {
+    case "Defensive Flood":
+      if (DEFENSIVE_LINE_POSITIONS.includes(position)) return { zoneShift: FLOOD_PUSH_ZONE, laneScale: FLOOD_SPREAD_SCALE };
+      if (FORWARD_LINE_POSITIONS.includes(position)) return { zoneShift: FLOOD_CONTRACT_ZONE, laneScale: FLOOD_CONTRACT_SCALE };
+      return NO_BIAS;
+    case "Forward Press":
+      if (FORWARD_LINE_POSITIONS.includes(position)) return { zoneShift: -FLOOD_PUSH_ZONE, laneScale: FLOOD_SPREAD_SCALE };
+      if (DEFENSIVE_LINE_POSITIONS.includes(position)) return { zoneShift: -FLOOD_CONTRACT_ZONE, laneScale: FLOOD_CONTRACT_SCALE };
+      return NO_BIAS;
+    case "Attack the Middle":
+      if (WING_FLANK_POSITIONS.includes(position)) return { zoneShift: 0, laneScale: MIDDLE_GRAVITY_SCALE };
+      return NO_BIAS;
+    case "Spread the Ground":
+      if (WING_FLANK_POSITIONS.includes(position)) return { zoneShift: 0, laneScale: SPREAD_WIDE_SCALE };
+      return NO_BIAS;
+    default:
+      return NO_BIAS; // Balanced — no bias, byte-identical to before this feature existed
+  }
+}
+
+/** A player's home anchor, before any ball-relative shift — real assigned position if known, else the archetype-line fallback (identical graceful-degradation order to `involvement.ts`'s `involvementWeight`/`ground.ts`'s `assignAnchors`). `style` (Aug 2026 round 28) defaults to Balanced (zero bias, byte-identical to before this param existed) — see `gameStyleAnchorBias`'s own doc comment. */
+function homeAnchor(player: Player, position: Position | null | undefined, style: GameStyle = DEFAULT_GAME_STYLE): AbstractPosition {
   if (position && ZONE_FOR_POSITION[position] !== null) {
-    return { zoneFrac: ZONE_FOR_POSITION[position] as Zone, lane: POSITION_LANE[position] ?? 0 };
+    const bias = gameStyleAnchorBias(position, style);
+    return { zoneFrac: (ZONE_FOR_POSITION[position] as Zone) + bias.zoneShift, lane: (POSITION_LANE[position] ?? 0) * bias.laneScale };
   }
   const line = ARCHETYPE_LINE[player.archetype as Archetype] ?? "Midfield";
   return { zoneFrac: ZONE_FOR_LINE[line], lane: 0 };
@@ -150,8 +217,15 @@ function mirrorZoneFrac(side: Side, z: number): number {
   return side === "home" ? z : 4 - z;
 }
 
-export function proximityFor(player: Player, side: Side, position: Position | null | undefined, ballZone: Zone, ballPossession: Side): AbstractPosition {
-  const anchor = homeAnchor(player, position);
+export function proximityFor(
+  player: Player,
+  side: Side,
+  position: Position | null | undefined,
+  ballZone: Zone,
+  ballPossession: Side,
+  style: GameStyle = DEFAULT_GAME_STYLE,
+): AbstractPosition {
+  const anchor = homeAnchor(player, position, style);
   const mobility = mobilityFor(player, position);
   const ownBallZone = ownZone(side, ballZone);
   const centred = (ownBallZone - 2) / 2; // -1 (deep in this side's own defence) .. +1 (deep in their own attack)

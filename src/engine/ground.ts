@@ -7,6 +7,7 @@ import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 import { ACTIVE_GROUND, setActiveGroundConfig, type GroundConfig } from "../data/grounds.ts";
 import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
+import type { AbstractPosition } from "./positioning.ts";
 
 /**
  * Ground-shape geometry and dot placement for the Canvas match renderer —
@@ -828,7 +829,23 @@ function individualZoneNudge(playerId: number): number {
  * for "positioning should update more frequently for players without the
  * ball too."
  */
-function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null, style: GameStyle = DEFAULT_GAME_STYLE): Map<number, DotPosition> {
+function formationFor(
+  team: MatchTeam,
+  side: Side,
+  event: MatchEvent | null,
+  style: GameStyle = DEFAULT_GAME_STYLE,
+  // Aug 2026 round 28 — every on-ground player's real, engine-simulated
+  // position at this exact event (`engine/movement.ts`'s matchup-aware,
+  // tactic/GameStyle-differentiated model), keyed by PlayerID across BOTH
+  // teams (safe to share one map: PlayerIDs are globally unique, and each
+  // call here only ever looks up its own roster's own IDs). Optional/
+  // defaulted so every existing caller — the balance simulator, Vitest
+  // determinism checks, and any event logged before this round (an older
+  // save file) — falls back to the pre-round-28 press-scalar model below
+  // exactly as before. See `computeDotPositions`'s own construction of this
+  // map from `event.trackedPositions` for where it actually comes from.
+  tracked?: Map<number, AbstractPosition>,
+): Map<number, DotPosition> {
   // Aug 2026, round 8 (Tyler: "the Interchange players are currently on the
   // field the whole time"): only the on-ground roster gets a formation anchor
   // at all — an interchange player (see MatchTeam.onGround) simply never
@@ -844,15 +861,54 @@ function formationFor(team: MatchTeam, side: Side, event: MatchEvent | null, sty
   const out = new Map<number, DotPosition>();
 
   for (const p of roster) {
-    const a = anchors.get(p.PlayerID);
-    if (!a) continue; // every player gets either a real or fallback anchor above — defensive only
-    const individualPress = press * pressResponseScale(p.PlayerID);
-    const rawZoneTarget = a.homeZone + individualPress * a.mobility + individualZoneNudge(p.PlayerID);
-    const shiftedHomeZone = Math.min(4, Math.max(0, rawZoneTarget));
-    const rawZone = mirrorZone(side, shiftedHomeZone);
-    const x = zoneFractionToX(rawZone) + sideOffset;
-    const halfHeight = maxHalfHeightAt(x) * 0.85;
-    const y = CENTER_Y + (a.lane + a.laneNudge) * halfHeight;
+    const trackedPos = tracked?.get(p.PlayerID);
+    let x: number;
+    let y: number;
+    if (trackedPos) {
+      // A real, per-tick engine position is available for this player —
+      // defenders tracking their assigned opponent, forwards leading into
+      // space, tactic/GameStyle-differentiated, all computed by the engine
+      // itself rather than reconstructed here from one team-wide press
+      // scalar. `zoneFrac` is already the same "raw" convention `event.zone`
+      // and `zoneFractionToX` use (see positioning.ts's own `AbstractPosition`
+      // doc comment) — unlike `rawZoneTarget` below, no `mirrorZone` call is
+      // needed. Same for `lane`: already real-pitch left/right, not
+      // side-mirrored, matching how `a.lane` is used untransformed just below.
+      x = zoneFractionToX(trackedPos.zoneFrac) + sideOffset;
+      const halfHeight = maxHalfHeightAt(x) * 0.85;
+      y = CENTER_Y + trackedPos.lane * halfHeight;
+      // BUG FIXED Aug 2026, round 28 — found by this round's own
+      // scratch-script collision sweep (not reported by Tyler): unlike the
+      // fallback branch below (`individualZoneNudge`/`pressResponseScale`,
+      // both per-player), a tracked position is a genuinely continuous
+      // function of the engine's own (zoneFrac, lane) with no per-player
+      // nudge anywhere in it — and `movement.ts` deliberately leaves
+      // Midfield/Ruck players' TARGET as the plain, undifferentiated
+      // `proximityFor` anchor this round (see that file's own disclosed
+      // scope note), so any two of them with no resolvable matchup pull can
+      // legitimately compute to the EXACT same position. Confirmed: the
+      // first version of this branch (no nudge) landed ~6 exact-pixel
+      // collisions per event on average across a 15-match sweep — the same
+      // root-cause *class* round 3 already fixed for the old press-scalar
+      // path, just reopened here for the new one. Same fix, same spirit,
+      // fresh salt (5, not yet used elsewhere in this file) so it doesn't
+      // correlate with `driftOffset`/the involved-player `tieBreak` below.
+      const nudge = hashPlayer(p.PlayerID, 5) - 0.5; // +-0.5
+      x += nudge * 8;
+      y += nudge * 6;
+    } else {
+      // Fallback: no engine-tracked position for this player at this event
+      // — exactly the pre-round-28 single-scalar press model, unchanged.
+      const a = anchors.get(p.PlayerID);
+      if (!a) continue; // every player gets either a real or fallback anchor above — defensive only
+      const individualPress = press * pressResponseScale(p.PlayerID);
+      const rawZoneTarget = a.homeZone + individualPress * a.mobility + individualZoneNudge(p.PlayerID);
+      const shiftedHomeZone = Math.min(4, Math.max(0, rawZoneTarget));
+      const rawZone = mirrorZone(side, shiftedHomeZone);
+      x = zoneFractionToX(rawZone) + sideOffset;
+      const halfHeight = maxHalfHeightAt(x) * 0.85;
+      y = CENTER_Y + (a.lane + a.laneNudge) * halfHeight;
+    }
     out.set(p.PlayerID, {
       playerId: p.PlayerID,
       lname: p.lname,
@@ -941,8 +997,18 @@ export function computeDotPositions(
   // no animated "next" event in play) doesn't need to supply one.
   nextEvent: MatchEvent | null = null,
 ): DotPosition[] {
-  const homeForm = formationFor(home, "home", event, homeStyle);
-  const awayForm = formationFor(away, "away", event, awayStyle);
+  // Aug 2026 round 28 — one shared map built once from this event's own
+  // engine-tracked snapshot (present on every event logged from this round
+  // onward; absent on events from an older save, or from any caller that
+  // built a `MatchEvent` by hand without going through `match.ts`'s `log()`
+  // — see `formationFor`'s own fallback for that case). PlayerIDs are
+  // globally unique across both sides, so one map safely serves both
+  // `formationFor` calls below.
+  const tracked = event?.trackedPositions
+    ? new Map<number, AbstractPosition>(event.trackedPositions.map((t) => [t.playerId, { zoneFrac: t.zoneFrac, lane: t.lane }]))
+    : undefined;
+  const homeForm = formationFor(home, "home", event, homeStyle, tracked);
+  const awayForm = formationFor(away, "away", event, awayStyle, tracked);
   const all = new Map<number, DotPosition>([...homeForm, ...awayForm]);
 
   // BUG FIXED Aug 2026 (Tyler, live testing): this used to snap every

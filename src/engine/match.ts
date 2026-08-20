@@ -7,7 +7,8 @@ import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } f
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
 import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget } from "./involvement.ts";
-import { carrierPosition, proximityFor, distanceBetween, proximityWeight } from "./positioning.ts";
+import { carrierPosition, proximityFor, distanceBetween, proximityWeight, type AbstractPosition } from "./positioning.ts";
+import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, type TrackedPosition } from "./movement.ts";
 import {
   tacticGroupForSlot,
   defaultTacticForPosition,
@@ -144,6 +145,18 @@ export interface MatchEvent {
    * updates alongside the ground view" and src/hooks/useMatchPlayback.ts.
    */
   statDeltas: StatDelta[];
+  /**
+   * Aug 2026 round 28 — every on-ground player's real, engine-computed
+   * off-ball position at the moment this event was logged (`engine/
+   * movement.ts`). Array-of-objects, matching `statDeltas`'s own
+   * established convention rather than a `Map` — this whole object gets
+   * persisted via `saveGame.ts`/IndexedDB, and a `Map` doesn't survive that
+   * round-trip. Optional so every OLDER saved match (built before this
+   * round) still loads and renders fine — `ground.ts`'s `computeDotPositions`
+   * falls back to its own pre-existing `formationFor` reconstruction
+   * whenever this is absent.
+   */
+  trackedPositions?: TrackedPosition[];
 }
 
 export interface TeamResult {
@@ -471,6 +484,18 @@ export interface Ctx {
   /** null = no condition map supplied for this side, i.e. every player plays at full condition — see SimulateMatchOptions. */
   homeCondition: Map<number, number> | null;
   awayCondition: Map<number, number> | null;
+  /**
+   * Aug 2026 round 28 — every on-ground player's current off-ball position
+   * (`engine/movement.ts`), updated once per tick by `simulateQuarter` and
+   * snapshotted onto every logged `MatchEvent` (`log()` below). See
+   * `movement.ts`'s own top comment for the full design — this is the real,
+   * persistent, engine-side "who's moving where and why" state Tyler's own
+   * chase-AI ask (round 19, substantially reopened round 28) has been
+   * pointing at since backlog #18's original Slice A scoping.
+   */
+  trackedPositions: Map<number, AbstractPosition>;
+  /** Each defender/forward's assigned direct opponent, both directions — resolved once at match start (`resolveMatchups`, `movement.ts`) and held for the whole match; see that function's own doc comment for exactly how a matchup is decided. */
+  matchups: Map<number, number>;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
@@ -538,7 +563,17 @@ function log(
   statDeltas: StatDelta[] = [],
 ) {
   if (!ctx.recordEvents) return;
-  ctx.events.push({ tick: ctx.tick, quarter: ctx.quarter, zone, possession, phase, description, playerIds, statDeltas });
+  ctx.events.push({
+    tick: ctx.tick,
+    quarter: ctx.quarter,
+    zone,
+    possession,
+    phase,
+    description,
+    playerIds,
+    statDeltas,
+    trackedPositions: snapshotPositions(ctx.trackedPositions),
+  });
 }
 
 /** Maps each `ContestType` onto its two new `BoxScoreLine` fields — see that interface's own doc comment. A lookup table rather than templated string keys (`` `${type}Attempts` ``) so TypeScript can actually check every field name against `keyof BoxScoreLine`. Exported so UI code (LiveMatch.tsx's click-to-inspect stats modal) can read the same fields without a second, driftable copy of this table. */
@@ -2108,6 +2143,8 @@ export interface MatchInProgress {
 export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: number, opts: SimulateMatchOptions = {}): MatchInProgress {
   const ticksPerQuarter = opts.ticksPerQuarter ?? DEFAULT_TICKS_PER_QUARTER;
   const recordEvents = opts.recordEvents ?? true;
+  const homePlan = opts.homePlan ? sanitizePlan(home.players, opts.homePlan, home.positions) : null;
+  const awayPlan = opts.awayPlan ? sanitizePlan(away.players, opts.awayPlan, away.positions) : null;
 
   const ctx: Ctx = {
     home,
@@ -2122,10 +2159,16 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
       home: { name: home.name, goals: 0, behinds: 0, points: 0 },
       away: { name: away.name, goals: 0, behinds: 0, points: 0 },
     },
-    homePlan: opts.homePlan ? sanitizePlan(home.players, opts.homePlan, home.positions) : null,
-    awayPlan: opts.awayPlan ? sanitizePlan(away.players, opts.awayPlan, away.positions) : null,
+    homePlan,
+    awayPlan,
     homeCondition: opts.homeCondition ?? null,
     awayCondition: opts.awayCondition ?? null,
+    // Aug 2026 round 28 — resolved once here (real assigned positions don't
+    // change mid-match) and seeded at a neutral centre-bounce state,
+    // matching the initial `State` built just below. See `engine/
+    // movement.ts`'s own top comment for the full design.
+    matchups: resolveMatchups(home, away),
+    trackedPositions: initialPositions(home, away, styleFor(homePlan), styleFor(awayPlan), MIDFIELD, "home"),
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.
@@ -2138,8 +2181,34 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
 /** Runs exactly one quarter's worth of ticks, then resets to a centre stoppage — the exact same per-quarter body `simulateMatch()`'s own loop used to run inline, just callable one quarter at a time. Mutates `match` in place (and returns it, for chaining/assignment convenience). */
 export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4): MatchInProgress {
   match.ctx.quarter = quarter;
+  // Aug 2026 round 28 — step every on-ground player's off-ball position
+  // once per tick consumed below (both the main loop and the dangling-
+  // phase loop further down), using the zone/possession the ball was
+  // actually at entering that tick (i.e. the result of the PREVIOUS
+  // tick's resolution, since this always runs before that tick's own
+  // phase handler). Any `log()` call a phase handler makes during the
+  // same tick snapshots these freshly-stepped positions, not stale ones
+  // from a tick ago. See `engine/movement.ts`'s top comment for the full
+  // model. Factored into a closure since it's called from 5 separate
+  // sites below with identical arguments bar the always-current `match`
+  // state they close over.
+  const stepTickPositions = () => {
+    match.ctx.trackedPositions = stepPositions(
+      match.ctx.home,
+      match.ctx.away,
+      match.ctx.homePlan,
+      match.ctx.awayPlan,
+      styleFor(match.ctx.homePlan),
+      styleFor(match.ctx.awayPlan),
+      match.state.zone,
+      match.state.possession,
+      match.ctx.matchups,
+      match.ctx.trackedPositions,
+    );
+  };
   for (let t = 0; t < match.ticksPerQuarter; t++) {
     match.ctx.tick += 1;
+    stepTickPositions();
     switch (match.state.phase) {
       case "STOPPAGE":
         match.state = runStoppage(match.ctx, match.state);
@@ -2203,12 +2272,15 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
   for (let guard = 0; guard < MAX_DANGLING_PHASE_TICKS; guard++) {
     if (match.state.phase === "CLEARANCE") {
       match.ctx.tick += 1;
+      stepTickPositions();
       match.state = runClearance(match.ctx, match.state);
     } else if (match.state.phase === "MARKING_CONTEST") {
       match.ctx.tick += 1;
+      stepTickPositions();
       match.state = runMarkingContest(match.ctx, match.state);
     } else if (match.state.phase === "HANDBALL_CONTEST") {
       match.ctx.tick += 1;
+      stepTickPositions();
       match.state = runHandballContest(match.ctx, match.state);
     } else if (match.state.phase === "SHOT") {
       // The one phase in this chain that ISN'T a phase this same loop
@@ -2219,6 +2291,7 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       // MARKING_CONTEST -> SHOT link in the proven chain above is actually
       // walked, not just reasoned about.
       match.ctx.tick += 1;
+      stepTickPositions();
       match.state = runShot(match.ctx, match.state);
     } else {
       break;
@@ -2226,6 +2299,25 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
   }
   // Quarter-time: reset to a centre stoppage regardless of where play was up to.
   match.state = { phase: "STOPPAGE", zone: MIDFIELD, possession: quarter % 2 === 1 ? "away" : "home", carrier: null };
+  // Aug 2026 round 28 — real assigned positions don't change mid-match, so
+  // this is the same `resolveMatchups` result recomputed for nothing; only
+  // `trackedPositions` actually needs resetting here, back to each side's
+  // neutral home-anchor layout for the new centre bounce, matching how
+  // `startMatch` seeds it initially. Without this, the first tick of the
+  // new quarter would `stepPositions` from wherever players happened to be
+  // standing when the previous quarter's buzzer sounded, which is a
+  // reasonable-enough starting point on its own, but the discontinuity in
+  // ball zone (wherever play last was -> MIDFIELD) would otherwise pair with
+  // *continuous* player positions and read as a one-tick teleport of the
+  // ball alone rather than the real break-in-play a quarter change is.
+  match.ctx.trackedPositions = initialPositions(
+    match.ctx.home,
+    match.ctx.away,
+    styleFor(match.ctx.homePlan),
+    styleFor(match.ctx.awayPlan),
+    MIDFIELD,
+    match.state.possession,
+  );
   return match;
 }
 

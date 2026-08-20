@@ -258,6 +258,22 @@ function eventPoints(
     if (contestedPoss) return { playerId: contestedPoss.playerId, base: CONTESTED_POSS_GROUND };
   }
 
+  // Aug 2026 round 27 — a handball's own reception now resolves a tick later
+  // too, under its own "HANDBALL_CONTEST" phase (match.ts's
+  // runHandballContest), the handball half of the same generalisation that
+  // gave MARKING_CONTEST above its kick-side counterpart. No `contestedMarks`
+  // check here — a mark can only ever come off a kick under the real Laws of
+  // the Game, so `runHandballContest` never credits that stat (see its own
+  // doc comment) — just the one `contestedPoss` case, identical treatment and
+  // identical base value to every other ground-level contested-possession
+  // win in this file. Same "plain uncontested reception deliberately left
+  // unscored" convention as MARKING_CONTEST's own comment above states, not a
+  // new gap this phase introduces either.
+  if (ev.phase === "HANDBALL_CONTEST") {
+    const contestedPoss = findDelta(ev.statDeltas, "contestedPoss");
+    if (contestedPoss) return { playerId: contestedPoss.playerId, base: CONTESTED_POSS_GROUND };
+  }
+
   if (ev.phase === "SHOT") {
     const goal = findDelta(ev.statDeltas, "goals");
     if (goal) return { playerId: goal.playerId, base: GOAL };

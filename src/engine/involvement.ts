@@ -203,30 +203,6 @@ const SAME_LANE_FACTOR = 1;
 const ADJACENT_LANE_FACTOR = 0.35; // one side (a flank) vs the centre
 const OPPOSITE_LANE_FACTOR = 0.08; // left flank vs right flank — rare, not impossible, a real handball across the body does happen
 
-/**
- * A handball's real receiver pool — same archetype/zone weighting as
- * `weightedPlayerChoice`, additionally discounted by real lane distance from
- * `disposer`, so a short, local exchange (the real "Triangle Handball"
- * pattern — [[Tactics and Positional Play]] Part 3) is what actually comes
- * out the other end, not a teammate on the opposite flank who merely shares
- * the ball's coarse zone. Excludes `disposer` themselves from the pool (they
- * can't handball to themselves). See `match.ts`'s `runGeneralPlay` — kicks
- * still go through the plain `weightedPlayerChoice`, unrestricted by lane,
- * since a kick can genuinely find a target clear across the ground.
- */
-export function weightedHandballTarget(rng: Rng, side: Side, team: MatchTeam, zone: Zone, disposer: Player): Player {
-  const disposerLane = laneFor(disposer.PlayerID, team.positions?.get(disposer.PlayerID), team.positions);
-  const pool = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
-  if (pool.length === 0) return disposer; // defensive only — a real on-ground side always has teammates
-  return weightedChoice(rng, pool, (p) => {
-    const base = involvementWeight(side, p, zone, team.positions?.get(p.PlayerID));
-    const lane = laneFor(p.PlayerID, team.positions?.get(p.PlayerID), team.positions);
-    const laneGap = Math.abs(lane - disposerLane); // 0 same, 1 adjacent (flank<->centre), 2 opposite flanks
-    const laneFactor = laneGap === 0 ? SAME_LANE_FACTOR : laneGap === 1 ? ADJACENT_LANE_FACTOR : OPPOSITE_LANE_FACTOR;
-    return base * laneFactor;
-  });
-}
-
 /** A player paired with their computed distance from some reference position — `nearbyDefenders`' own original return shape, reused as-is (not a fresh, near-identical type) by `closestDefender` and `weightedKickTarget` below since both are the same "who, and how far" pairing against a different reference point/pool. */
 export interface NearbyPick {
   player: Player;
@@ -334,4 +310,54 @@ export function weightedKickTarget(
     return { player, distance: closest ? closest.distance : Infinity };
   });
   return weightedChoice(rng, candidates, (c) => involvementWeight(side, c.player, zone, team.positions?.get(c.player.PlayerID)) * spaceWeight(c.distance));
+}
+
+/**
+ * A handball's real receiver pool — same archetype/zone weighting as
+ * `weightedPlayerChoice`, additionally discounted by real lane distance from
+ * `disposer`, so a short, local exchange (the real "Triangle Handball"
+ * pattern — [[Tactics and Positional Play]] Part 3) is what actually comes
+ * out the other end, not a teammate on the opposite flank who merely shares
+ * the ball's coarse zone. Excludes `disposer` themselves from the pool (they
+ * can't handball to themselves).
+ *
+ * Aug 2026 round 27 — extended to return a `NearbyPick` (real
+ * distance-to-nearest-opponent for whichever candidate is actually chosen)
+ * rather than a bare `Player`, the exact same shape/reasoning upgrade
+ * `weightedKickTarget` got in round 24 and for the same reason: [[Contest
+ * Resolution Redesign]] item 4 needs a receiver's real space situation
+ * BEFORE the reception resolves (`runHandballContest`, one tick later), and
+ * before this round nothing about a handball reception carried any distance/
+ * space signal at all — the lane discount below governs WHO gets picked, not
+ * how contested picking them turns out to be. `opponentSide`/`opponentTeam`
+ * and the extra `possession` param are new for the same reason
+ * `weightedKickTarget` needs them: `proximityFor` (a candidate's own fuzzy,
+ * not-yet-received-it position) and `closestDefender` both need to know
+ * where the ball's press is coming from, not just which zone it's in.
+ */
+export function weightedHandballTarget(
+  rng: Rng,
+  side: Side,
+  team: MatchTeam,
+  zone: Zone,
+  possession: Side,
+  disposer: Player,
+  opponentSide: Side,
+  opponentTeam: MatchTeam,
+): NearbyPick {
+  const disposerLane = laneFor(disposer.PlayerID, team.positions?.get(disposer.PlayerID), team.positions);
+  const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
+  const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
+  const candidates: NearbyPick[] = pool.map((player) => {
+    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession);
+    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
+    return { player, distance: closest ? closest.distance : Infinity };
+  });
+  return weightedChoice(rng, candidates, (c) => {
+    const base = involvementWeight(side, c.player, zone, team.positions?.get(c.player.PlayerID));
+    const lane = laneFor(c.player.PlayerID, team.positions?.get(c.player.PlayerID), team.positions);
+    const laneGap = Math.abs(lane - disposerLane); // 0 same, 1 adjacent (flank<->centre), 2 opposite flanks
+    const laneFactor = laneGap === 0 ? SAME_LANE_FACTOR : laneGap === 1 ? ADJACENT_LANE_FACTOR : OPPOSITE_LANE_FACTOR;
+    return base * laneFactor * spaceWeight(c.distance);
+  });
 }

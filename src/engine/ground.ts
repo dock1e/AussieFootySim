@@ -933,9 +933,10 @@ export function computeDotPositions(
   driftTime = 0,
   homeStyle: GameStyle = DEFAULT_GAME_STYLE,
   awayStyle: GameStyle = DEFAULT_GAME_STYLE,
-  // Aug 2026 round 26 — only consulted for one specific case: recognising a
-  // kick-launch event that's about to resolve into a MARKING_CONTEST tick
-  // next (see the `isKickInFlight` branch below). Optional/defaulted so the
+  // Aug 2026 round 26, widened round 27 — only consulted for one specific
+  // case: recognising a disposal-launch event that's about to resolve into a
+  // MARKING_CONTEST or HANDBALL_CONTEST tick next (see the
+  // `isDisposalInFlight` branch below). Optional/defaulted so the
   // team-change reset call site (MatchCanvas.tsx, instant snap-to-position,
   // no animated "next" event in play) doesn't need to supply one.
   nextEvent: MatchEvent | null = null,
@@ -986,15 +987,25 @@ export function computeDotPositions(
   // multi-player event this function handles (a tackle, a mark contest, a
   // boundary throw-in) is a genuine physical pairing, which is exactly why
   // round 19 pulls involved players toward their *group's* shared anchor
-  // instead of each one's own (see the big comment below). A kick-launch
-  // event (match.ts's `runMarkingContest` resolves the very next tick) is
-  // the opposite: the carrier and receiver are named together precisely
-  // *because* they're apart, with the ball crossing the real gap between
-  // them — so this one case needs each player left at their own true
-  // anchor instead, or the group-blend would visibly yank a receiver
-  // "leading into space" straight in next to the carrier, erasing the
-  // distance the whole event exists to show.
-  const isKickInFlight = !isCentreBounce && nextEvent?.phase === "MARKING_CONTEST";
+  // instead of each one's own (see the big comment below). A disposal-launch
+  // event (match.ts's `runMarkingContest`/`runHandballContest` resolves the
+  // very next tick) is the opposite: the carrier and receiver are named
+  // together precisely *because* they're apart, with the ball crossing the
+  // real gap between them — so this one case needs each player left at their
+  // own true anchor instead, or the group-blend would visibly yank a
+  // receiver "leading into space" straight in next to the carrier, erasing
+  // the distance the whole event exists to show.
+  //
+  // Aug 2026 round 27 — widened from a kick-only `isKickInFlight` to cover a
+  // handball's own launch tick too ([[Contest Resolution Redesign]] item 4's
+  // round 27 generalisation): the same rendering reason applies identically
+  // regardless of which disposal type is in flight, so this is a rename plus
+  // an added `||`, not a second parallel flag. `ballTargetFor`'s own
+  // `kickTrajectory` stays kick-only, deliberately NOT widened the same way —
+  // see that flag's own doc comment; a handball should still cross the gap at
+  // normal (not kick-slowed) pace, only the "don't collapse the two players
+  // together" fix here is shared.
+  const isDisposalInFlight = !isCentreBounce && (nextEvent?.phase === "MARKING_CONTEST" || nextEvent?.phase === "HANDBALL_CONTEST");
 
   if (event) {
     const ballX = zoneToX(event.zone);
@@ -1034,8 +1045,8 @@ export function computeDotPositions(
         all.set(id, { ...existing, x: ballX + spread * 0.5 + tieBreak * 4, y: CENTER_Y + spread + tieBreak * 4, involved: true });
         return;
       }
-      if (isKickInFlight) {
-        // See `isKickInFlight`'s own comment above — deliberately skips
+      if (isDisposalInFlight) {
+        // See `isDisposalInFlight`'s own comment above — deliberately skips
         // both the ball-zone blend and the group-average pull every other
         // multi-player event gets below, so the receiver's real distance
         // from the carrier (and from whoever's attending them) stays
@@ -1253,7 +1264,14 @@ export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nex
   // designed: the ball visibly flies from the carrier toward the actual
   // receiver at the same slow kick pace as any other kick.
   const isKick = hasStat(event, "kicks") || nextEvent?.phase === "MARKING_CONTEST";
-  const isHandball = hasStat(event, "handballs");
+  // Aug 2026 round 27 — same look-ahead fix as `isKick` two lines up, now
+  // needed for a handball's own launch tick too: `runHandballContest` no
+  // longer resolves in the same tick as the "finds space with a handball"
+  // stat-credit line (see [[Contest Resolution Redesign]] item 4's round 27
+  // section), so a handball launch event carries no `handballs` statDelta of
+  // its own and would otherwise fall through to the static "neutral" ball
+  // below, silently undoing this event's whole reason for existing.
+  const isHandball = hasStat(event, "handballs") || nextEvent?.phase === "HANDBALL_CONTEST";
   if (isKick || isHandball) {
     // Point toward wherever the *next* revealed event's featured player
     // actually is when we know it (a real look-ahead, not a guess) — that's

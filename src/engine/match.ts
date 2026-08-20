@@ -44,7 +44,7 @@ import { conditionRatingMultiplier } from "./progression.ts";
  * all flagged below and meant for the balance simulator to tune).
  */
 
-type Phase = "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "MARKING_CONTEST" | "SHOT";
+type Phase = "STOPPAGE" | "CLEARANCE" | "GENERAL_PLAY" | "CONTEST" | "MARKING_CONTEST" | "HANDBALL_CONTEST" | "SHOT";
 
 export interface BoxScoreLine {
   disposals: number;
@@ -355,6 +355,34 @@ const TACKLE_ATTEMPT_HANDICAP = 37;
 const CONTEST_EXECUTION_DIFFICULTY = -22;
 
 /**
+ * Aug 2026 round 27 — `runHandballContest`'s own pressure term, added on top
+ * of `CONTEST_EXECUTION_DIFFICULTY` rather than replacing it: a handball
+ * reception is the same rating-vs-difficulty shape as an uncontested mark
+ * (`contestTypes.ts`'s own doc comment names "catching a handball" as exactly
+ * this category, distinct from the six dueling attacker/defender contests in
+ * that file), so a genuinely uncontested handball reception reuses that same
+ * near-certainty baseline unchanged. What a mark doesn't need and a handball
+ * does: a continuous difficulty bump for how closely attended the receiver
+ * is, scaled by the same `proximityWeight` tiering `nearbyDefenders`/
+ * `runMarkingContest` already use (0 beyond range, 0.4 mid, 1 close) rather
+ * than a second discrete contested/uncontested branch with its own separate
+ * roll shape — there's no second player's attributes in this roll at all
+ * (see `runHandballContest`'s own doc comment for why), so "how contested"
+ * has to enter as difficulty, not as an opposing rating.
+ *
+ * 70 is a reasoned starting point, not a fitted one: at `proximityWeight`'s
+ * "close" tier (1), it roughly halves a typical receiver's uncontested
+ * success rate down into real, meaningful fumble-risk territory without
+ * making a pressured handball receive a coin flip; at "mid" tier (0.4) it's
+ * a much smaller bite, matching how lightly `nearbyDefenders` itself already
+ * discounts that tier elsewhere. Checked against real player data in
+ * `verify_round27_scratch.ts` rather than left as an unverified guess — see
+ * that script and [[Contest Resolution Redesign]]'s own round 27 section for
+ * the observed retention rates this landed on.
+ */
+const HANDBALL_RECEIVE_PRESSURE_PENALTY = 70;
+
+/**
  * Persistent chase — Aug 2026 round 24, backlog #18 Slice A for real. Tyler,
  * naming exactly this piece after round 23 shipped its "nobody in range"
  * branch: "Proceed with that persistent chase" — [[Contest Resolution
@@ -631,6 +659,38 @@ export interface State {
    * `chaserId`/`runTicks` already established.
    */
   markContestDistance?: number;
+  /**
+   * Aug 2026 round 27 — [[Contest Resolution Redesign]] item 4 generalised:
+   * "splitting out the general kicks and handballs into two ticks," not just
+   * the forward-50 shot-chance kick round 26 built. Every kick receiver
+   * (not only a shot-chance one) now launches into the SAME `MARKING_CONTEST`
+   * tick — a real mark is a real mark wherever on the ground it happens, and
+   * reusing `runMarkingContest`'s already-proven uncontested/contested
+   * mechanism outright (rather than a second, parallel one) is most of why
+   * this generalisation was cheap. This flag is the only thing that
+   * distinguishes the two at resolution time: `true` on a genuine forward-50
+   * shot chance routes a successful mark on to `SHOT` exactly as before;
+   * `false`/omitted on every other kick routes it back to `GENERAL_PLAY`
+   * instead, receiver as the new carrier. `undefined` outside a
+   * `MARKING_CONTEST`-phase state, same reset-by-omission convention as
+   * every other field here.
+   */
+  markContestIsShotChance?: boolean;
+  /**
+   * Aug 2026 round 27 — the handball half of the same generalisation,
+   * `markContestDistance`'s own exact counterpart for a handball's receiver
+   * instead of a kick's. See `runHandballContest`'s own doc comment for why
+   * this resolves through a genuinely different (rating-vs-difficulty, not
+   * dueling attacker/defender) mechanism than a mark does — `contestTypes.ts`
+   * already flags "catching a handball" as that other shape, not something to
+   * force through `runMarkingContest`/`CONTEST_CONFIG.markContested`, and a
+   * mark can only ever come off a kick under the real Laws of the Game, never
+   * a handball, so the two outcomes can't legitimately share one mechanism
+   * even before that categorisation is considered. `undefined` outside a
+   * `HANDBALL_CONTEST`-phase state, same reset-by-omission convention as
+   * `markContestDistance`.
+   */
+  handballContestDistance?: number;
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
@@ -950,16 +1010,54 @@ function resolveUnpressuredDisposal(
       possession: state.possession,
       carrier: receiver,
       markContestDistance: receiverPick.distance,
+      markContestIsShotChance: true,
     };
   }
   const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
   if (ctx.rng() < contestChance) {
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
-  const newCarrier = isKick
-    ? weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam).player
-    : weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, carrier);
-  return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier, carrierUncontested: true };
+  // Aug 2026 round 27 — every other kick/handball reception, generalising the
+  // shot-chance-only split immediately above to the rest of the match; see
+  // [[Contest Resolution Redesign]] item 4's round 27 section. Both branches
+  // launch the same way the shot-chance one already does (name the receiver,
+  // reveal their real space situation, resolve a full tick later) — a kick
+  // rejoins the exact same `MARKING_CONTEST` machinery just used above (this
+  // time with `markContestIsShotChance` omitted, so a successful mark rejoins
+  // `GENERAL_PLAY` instead of jumping to `SHOT`); a handball goes to the new,
+  // differently-shaped `runHandballContest` instead (see that function's own
+  // doc comment for why a handball reception isn't a dueling contest the way
+  // a mark is).
+  if (isKick) {
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiver = receiverPick.player;
+    const kickLabel =
+      proximityWeight(receiverPick.distance) === 0
+        ? `${carrier.lname} finds ${receiver.lname} leading into space`
+        : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    return {
+      phase: "MARKING_CONTEST",
+      zone: newZone,
+      possession: state.possession,
+      carrier: receiver,
+      markContestDistance: receiverPick.distance,
+    };
+  }
+  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+  const receiver = receiverPick.player;
+  const handballLabel =
+    proximityWeight(receiverPick.distance) === 0
+      ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
+      : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
+  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID]);
+  return {
+    phase: "HANDBALL_CONTEST",
+    zone: newZone,
+    possession: state.possession,
+    carrier: receiver,
+    handballContestDistance: receiverPick.distance,
+  };
 }
 
 function runGeneralPlay(ctx: Ctx, state: State): State {
@@ -1311,23 +1409,52 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       possession: state.possession,
       carrier: receiver,
       markContestDistance: receiverPick.distance,
+      markContestIsShotChance: true,
     };
   }
   const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
   if (ctx.rng() < contestChance) {
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
-  // Weighted by involvement at the zone the ball just advanced *to* — see
-  // engine/involvement.ts. A handball's receiver pool is additionally
-  // constrained by real lane distance from the disposer (weightedHandballTarget)
-  // rather than the plain zone-only weighting a kick uses — see that
-  // function's own doc comment. A kick's own receiver pool is, as of round
-  // 24, additionally weighted by genuine space from the nearest opponent
-  // (weightedKickTarget) — see that function's own doc comment.
-  const newCarrier = isKick
-    ? weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam).player
-    : weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, carrier);
-  return { phase: "GENERAL_PLAY", zone: newZone, possession: state.possession, carrier: newCarrier, carrierUncontested: true };
+  // Aug 2026 round 27 — same generalisation as resolveUnpressuredDisposal's
+  // own identical tail; see that function's own doc comment right above its
+  // matching block. Weighted by involvement at the zone the ball just
+  // advanced *to* — see engine/involvement.ts. A handball's receiver pool is
+  // additionally constrained by real lane distance from the disposer
+  // (weightedHandballTarget) rather than the plain zone-only weighting a kick
+  // uses — see that function's own doc comment. A kick's own receiver pool is,
+  // as of round 24, additionally weighted by genuine space from the nearest
+  // opponent (weightedKickTarget) — see that function's own doc comment.
+  if (isKick) {
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiver = receiverPick.player;
+    const kickLabel =
+      proximityWeight(receiverPick.distance) === 0
+        ? `${carrier.lname} finds ${receiver.lname} leading into space`
+        : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID]);
+    return {
+      phase: "MARKING_CONTEST",
+      zone: newZone,
+      possession: state.possession,
+      carrier: receiver,
+      markContestDistance: receiverPick.distance,
+    };
+  }
+  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+  const receiver = receiverPick.player;
+  const handballLabel =
+    proximityWeight(receiverPick.distance) === 0
+      ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
+      : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
+  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID]);
+  return {
+    phase: "HANDBALL_CONTEST",
+    zone: newZone,
+    possession: state.possession,
+    carrier: receiver,
+    handballContestDistance: receiverPick.distance,
+  };
 }
 
 /** Prose label for `runContest`'s "X wins the ___" log line — a separate, sentence-shaped set of strings from `CONTEST_CONFIG[type].label` (contestTypes.ts), which is phrased for a menu/table context instead. */
@@ -1615,13 +1742,25 @@ function runContest(ctx: Ctx, state: State): State {
  * (Tyler's process-map diagram: "Uncontested mark roll" / "Contested mark
  * roll"), not a foregone conclusion dressed up in different log text.
  *
- * Deliberately scoped to this one call site — a direct kick into a forward-50
- * shot chance — not every kick in the match: this is the one place a kick's
- * target situation is already computed and already forward-50-gated, so
- * splitting it doesn't touch the far more common general open-play kick
- * (still single-tick, unchanged, same as every non-shot-chance kick/handball
- * receiver pick). See [[Contest Resolution Redesign]]'s own round 26 section
- * for the disclosed tick-budget cost this was checked against.
+ * Aug 2026 round 27 — the "deliberately scoped to this one call site" claim
+ * this paragraph used to make no longer holds: Tyler's own explicit follow-up
+ * ("splitting out the general kicks and handballs into two ticks") pushes
+ * every OTHER kick reception through this exact same function too now, not
+ * just a forward-50 shot chance — a real mark is a real mark wherever on the
+ * ground it happens, and this function's own uncontested/contested mechanism
+ * needed no change at all to become correct for that broader case, just a
+ * routing decision at the end (`State.markContestIsShotChance` — see its own
+ * doc comment). `SHOT` only when that flag is set; every other kick reception
+ * rejoins `GENERAL_PLAY` instead, receiver as the new carrier, exactly the
+ * same "arrived via a won contest, no `carrierUncontested` credit" convention
+ * every other contest-win return path in this file already follows — except
+ * the genuinely-uncontested branch, which now also needs to set
+ * `carrierUncontested: true` on its own `GENERAL_PLAY` return (a case that
+ * literally couldn't arise before this round, when that branch only ever
+ * returned `SHOT`, where the flag goes unread). See [[Contest Resolution
+ * Redesign]]'s own round 27 section for the disclosed tick-budget cost this
+ * generalisation was checked against — considerably larger than round 26's
+ * own narrow 4.04%, since kicks are no longer just a forward-50 minority.
  *
  * The uncontested/contested branch below is decided by `proximityWeight` on
  * the SAME distance `weightedKickTarget` already measured via its own
@@ -1661,7 +1800,14 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       log(ctx, zone, possessingSide, "MARKING_CONTEST", `${receiver.lname} marks it, leading into space`, [receiver.PlayerID], [
         { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
       ]);
-      return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+      if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+      // Aug 2026 round 27 — a clean mark outside a shot chance simply
+      // continues general play, receiver as the new carrier. `carrierUncontested`
+      // matters here in a way it never did for this branch before this round:
+      // this return path used to always be `SHOT`, which never reads that
+      // flag, so it was never needed. See State.carrierUncontested's own doc
+      // comment for what reading it a tick later actually credits.
+      return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
     }
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
     log(
@@ -1741,7 +1887,13 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       [receiver.PlayerID, defender.PlayerID],
       deltas,
     );
-    return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+    // Aug 2026 round 27 — same routing split as the uncontested branch above;
+    // no `carrierUncontested` needed here since `marks`/`contestedMarks` are
+    // already credited directly above, matching every other contest-win
+    // return path in this file (see State.carrierUncontested's own doc
+    // comment: "false/omitted whenever they won it instead").
+    if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+    return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver };
   }
 
   lineFor(ctx, defender).contestedPoss += 1;
@@ -1757,6 +1909,107 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     `${defender.lname} spoils the contest and takes control`,
     [defender.PlayerID, receiver.PlayerID],
     spoilDeltas,
+  );
+  return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
+}
+
+/**
+ * The handball half of round 27's generalisation — resolves one real tick
+ * after a handball's launch tick (`State.handballContestDistance`, carried
+ * forward exactly the way `markContestDistance` crosses into
+ * `runMarkingContest`). Deliberately NOT a rewrite of `runMarkingContest` for
+ * handballs: `contestTypes.ts`'s own doc comment already categorises
+ * "catching a handball" as a *rating-vs-difficulty* contest (a single
+ * player's execution rating against a difficulty number), not one of the six
+ * dueling attacker/defender contests `CONTEST_CONFIG`/`resolveContest` model
+ * — there's no second player's attributes in this roll, just a receiver's own
+ * hands under however much pressure `weightedHandballTarget` measured at
+ * launch time. Real Laws of the Game reinforce the same split independently:
+ * a mark can only ever come off a kick, never a handball, so the two
+ * receptions were never legitimately the same mechanism to begin with, quite
+ * apart from the "different shape of contest" reasoning above.
+ *
+ * Structurally mirrors `runMarkingContest`'s own uncontested/contested split
+ * (same `proximityWeight`-on-a-carried-forward-distance gate, same
+ * `nearbyDefenders` re-check for a real named defender, same defensive-only
+ * `!nearby` fallback — see that function's own doc comment for why re-
+ * checking can't disagree with the distance already measured at launch time)
+ * without sharing code: the actual roll shape genuinely differs (one
+ * `resolveThreshold` against a pressure-scaled difficulty here, vs.
+ * `resolveContest` between two named players there), so a shared helper would
+ * need to abstract over that difference for no real benefit at only two call
+ * sites.
+ *
+ * Always returns `GENERAL_PLAY` — a handball reception is never itself a shot
+ * chance (see match.ts's own "a shot can only ever come off a kick" comment,
+ * runGeneralPlay/resolveUnpressuredDisposal), so unlike `runMarkingContest`
+ * there's no second phase this could ever route to.
+ */
+function runHandballContest(ctx: Ctx, state: State): State {
+  const zone = state.zone;
+  const receiver = state.carrier!;
+  const distance = state.handballContestDistance ?? Infinity;
+  const possessingSide = state.possession;
+  const possessingTeam = teamOf(ctx, possessingSide);
+  const defendingSide = otherSide(possessingSide);
+  const defendingTeam = teamOf(ctx, defendingSide);
+
+  // Same near-certainty baseline every other uncontested gather in this file
+  // uses (CONTEST_EXECUTION_DIFFICULTY) — see that constant's own doc comment
+  // for why a handball reception's contested case adds a separate pressure
+  // term on top rather than branching to a different roll shape entirely.
+  const attemptCleanReceive = (): State => {
+    const executionRating =
+      computeContestRating(receiver, ["skill", "agility", "copeWithPressure"]) * conditionMultiplierFor(ctx, possessingSide, receiver);
+    if (resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
+      log(ctx, zone, possessingSide, "HANDBALL_CONTEST", `${receiver.lname} takes the handball cleanly in space`, [receiver.PlayerID]);
+      return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
+    }
+    const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
+    log(
+      ctx,
+      zone,
+      defendingSide,
+      "HANDBALL_CONTEST",
+      `${receiver.lname} spills the handball despite the space — ${recoverer.lname} reacts first to the loose ball`,
+      [receiver.PlayerID, recoverer.PlayerID],
+    );
+    return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
+  };
+
+  if (proximityWeight(distance) === 0) return attemptCleanReceive();
+
+  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos);
+  if (!nearby) return attemptCleanReceive();
+
+  const defender = nearby.player;
+  const executionRating =
+    computeContestRating(receiver, ["skill", "agility", "copeWithPressure"]) * conditionMultiplierFor(ctx, possessingSide, receiver);
+  const difficulty = CONTEST_EXECUTION_DIFFICULTY + proximityWeight(distance) * HANDBALL_RECEIVE_PRESSURE_PENALTY;
+  if (resolveThreshold(executionRating, difficulty, ctx.rng).success) {
+    lineFor(ctx, receiver).contestedPoss += 1;
+    log(
+      ctx,
+      zone,
+      possessingSide,
+      "HANDBALL_CONTEST",
+      `${receiver.lname} holds onto the handball under pressure from ${defender.lname}`,
+      [receiver.PlayerID, defender.PlayerID],
+      [{ playerId: receiver.PlayerID, stat: "contestedPoss", delta: 1 }],
+    );
+    return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver };
+  }
+
+  lineFor(ctx, defender).contestedPoss += 1;
+  log(
+    ctx,
+    zone,
+    defendingSide,
+    "HANDBALL_CONTEST",
+    `${defender.lname} closes down the handball and scoops up the loose ball`,
+    [defender.PlayerID, receiver.PlayerID],
+    [{ playerId: defender.PlayerID, stat: "contestedPoss", delta: 1 }],
   );
   return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
 }
@@ -1903,34 +2156,73 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       case "MARKING_CONTEST":
         match.state = runMarkingContest(match.ctx, match.state);
         break;
+      case "HANDBALL_CONTEST":
+        match.state = runHandballContest(match.ctx, match.state);
+        break;
       case "SHOT":
         match.state = runShot(match.ctx, match.state);
         break;
     }
   }
-  // Aug 2026 round 25, extended round 26: a stoppage or a shot-chance kick
-  // that happens to land on literally the quarter's final tick would
-  // otherwise have its follow-up silently dropped — the loop above ends with
-  // `match.state.phase === "CLEARANCE"` or `"MARKING_CONTEST"`, and the
-  // quarter-end reset just below would overwrite it before `runClearance`/
-  // `runMarkingContest` ever gets to run, discarding a real, already-decided
-  // ruck tap or kick with no outcome ever resolved, no contest stat credited,
-  // and no event logged for it. Rare (roughly one stoppage or one
-  // shot-chance kick in `ticksPerQuarter` lands here), but a real, closable
-  // gap rather than an inherent limit — finish it with one more tick before
-  // ending the quarter, rather than silently drop it. Doesn't touch the "a
-  // quarter uses ticksPerQuarter ticks" contract in any way that matters —
-  // this only ever fires for the rare tick that would otherwise be wasted
-  // anyway. Neither follow-up phase can itself return another phase needing
-  // this same treatment (`runClearance` always returns `GENERAL_PLAY`;
-  // `runMarkingContest` always returns `SHOT` or `GENERAL_PLAY`), so at most
-  // one extra tick is ever needed here.
-  if (match.state.phase === "CLEARANCE") {
-    match.ctx.tick += 1;
-    match.state = runClearance(match.ctx, match.state);
-  } else if (match.state.phase === "MARKING_CONTEST") {
-    match.ctx.tick += 1;
-    match.state = runMarkingContest(match.ctx, match.state);
+  // Aug 2026 round 25, extended round 26, made a real loop round 27: a
+  // stoppage or a launched kick/handball that happens to land on literally
+  // the quarter's final tick would otherwise have its follow-up silently
+  // dropped — the loop above ends with `match.state.phase` at one of
+  // `"CLEARANCE"`, `"MARKING_CONTEST"`, or (round 27) `"HANDBALL_CONTEST"`,
+  // and the quarter-end reset just below would overwrite it before
+  // `runClearance`/`runMarkingContest`/`runHandballContest` ever gets to run
+  // — discarding a real, already-decided ruck tap or disposal with no outcome
+  // ever resolved, no contest stat credited, and no event logged for it.
+  //
+  // BUG FIXED round 27, found by this round's own scratch-script sweep (not
+  // reported by Tyler — the old code's own comment claimed "none of the
+  // three follow-up phases can itself return another phase needing this same
+  // treatment," which was already false the moment round 26 gave
+  // `runMarkingContest` a real `"SHOT"` exit: a shot-chance mark landing on
+  // literally the last tick of a quarter would resolve the mark itself here,
+  // then lose the shot entirely to the hard reset just below, with no
+  // scratch-script check ever having actually exercised that specific
+  // boundary — round 26's own shot-chance-only volume was apparently too low
+  // to hit it in a 60-seed sample. Round 27's much higher launch volume made
+  // it land 12 times in 767 shot-chance mark successes across 60 matches,
+  // which is what actually surfaced it. `runShot` itself can chain further
+  // still: a miss that becomes a boundary throw-in (`P_MISS_BECOMES_THROW_IN`)
+  // returns `"CLEARANCE"` (via `runThrowIn`/`resolveRuckTap`), which is
+  // ITSELF one of the three phases needing this same dangling-tick treatment.
+  // So a single `if`/`else if` was never actually sufficient — the real,
+  // provable bound is a genuine WHILE loop: `runClearance` and
+  // `runHandballContest` are confirmed terminal (both always return
+  // `GENERAL_PLAY`, which needs no further treatment here), and the only
+  // possible chain is `MARKING_CONTEST` -> `SHOT` -> `CLEARANCE` ->
+  // `GENERAL_PLAY` (terminal) — three dangling resolutions in the
+  // worst case, never more (`runShot` never returns `MARKING_CONTEST` or
+  // `HANDBALL_CONTEST`, so it can't cycle back into needing this loop again).
+  // `MAX_DANGLING_PHASE_TICKS` is a defensive cap well above that proven
+  // bound, not a number this code is actually expected to reach.
+  const MAX_DANGLING_PHASE_TICKS = 5;
+  for (let guard = 0; guard < MAX_DANGLING_PHASE_TICKS; guard++) {
+    if (match.state.phase === "CLEARANCE") {
+      match.ctx.tick += 1;
+      match.state = runClearance(match.ctx, match.state);
+    } else if (match.state.phase === "MARKING_CONTEST") {
+      match.ctx.tick += 1;
+      match.state = runMarkingContest(match.ctx, match.state);
+    } else if (match.state.phase === "HANDBALL_CONTEST") {
+      match.ctx.tick += 1;
+      match.state = runHandballContest(match.ctx, match.state);
+    } else if (match.state.phase === "SHOT") {
+      // The one phase in this chain that ISN'T a phase this same loop
+      // resolved a tick earlier in the ordinary case too — SHOT is only ever
+      // reached here via MARKING_CONTEST's own dangling resolution landing on
+      // this exact boundary, ordinarily it gets its own real tick from the
+      // main per-quarter loop above like everything else. Included so the
+      // MARKING_CONTEST -> SHOT link in the proven chain above is actually
+      // walked, not just reasoned about.
+      match.ctx.tick += 1;
+      match.state = runShot(match.ctx, match.state);
+    } else {
+      break;
+    }
   }
   // Quarter-time: reset to a centre stoppage regardless of where play was up to.
   match.state = { phase: "STOPPAGE", zone: MIDFIELD, possession: quarter % 2 === 1 ? "away" : "home", carrier: null };

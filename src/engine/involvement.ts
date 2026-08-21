@@ -6,7 +6,18 @@ import { ZONE_FOR_POSITION, ownZone, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import type { Rng } from "./rng.ts";
-import { proximityFor, distanceBetween, proximityWeight, spaceWeight, directionWeight, kickRangeWeight, type AbstractPosition } from "./positioning.ts";
+import {
+  proximityFor,
+  distanceBetween,
+  proximityWeight,
+  spaceWeight,
+  directionWeight,
+  kickRangeWeight,
+  handballRangeWeight,
+  nearestCandidate,
+  MAX_HANDBALL_DISTANCE,
+  type AbstractPosition,
+} from "./positioning.ts";
 
 /**
  * Position-weighted involvement — Tactics and Positional Play.md Part 6 /
@@ -422,6 +433,28 @@ export function weightedKickTarget(
  * `weightedKickTarget` needs them: `proximityFor` (a candidate's own fuzzy,
  * not-yet-received-it position) and `closestDefender` both need to know
  * where the ball's press is coming from, not just which zone it's in.
+ *
+ * `disposerPos`/`trackedPositions` (Aug 2026 round 35) — Tyler's own
+ * sequencing, right after round 34: "we will do the weightedHandballTarget
+ * after that." A real, diagnosed gap, not a token pass for consistency's
+ * sake: `laneFactor` below only ever discounts by WIDTH (which flank), never
+ * by LENGTH — a same-lane teammate standing right next to the disposer and
+ * one standing three zones up the ground read as equally good targets
+ * today, which contradicts this function's own round-18 origin ("A handball
+ * is only designed to be quick, short distance exchanges of the ball").
+ * `handballRangeWeight` (`positioning.ts`) closes that: a hard cutoff (not a
+ * discount — see that function's own doc comment for why a hard physical
+ * limit is, if anything, more justified here than `weightedKickTarget`'s
+ * own `kickRangeWeight`) beyond a genuinely short `MAX_HANDBALL_DISTANCE`.
+ * Same real-position-preferred, stateless-fallback pattern as round 33/34:
+ * `disposerPos` (the same `carrierPosition`-derived estimate every other
+ * disposer-position need in this file already uses) is the fallback,
+ * `trackedPositions` (`ctx.trackedPositions`) preferred when available.
+ * `involvementWeight`/`spaceWeight`/`laneFactor` — every pre-existing
+ * signal — are completely untouched; only this one new term is added.
+ * Deliberately no `directionWeight`-style backward discount — see
+ * `handballRangeWeight`'s own doc comment for why a backward handball isn't
+ * the same kind of problem a backward kick is.
  */
 export function weightedHandballTarget(
   rng: Rng,
@@ -432,20 +465,45 @@ export function weightedHandballTarget(
   disposer: Player,
   opponentSide: Side,
   opponentTeam: MatchTeam,
+  disposerPos: AbstractPosition,
+  trackedPositions: Map<number, AbstractPosition>,
 ): NearbyPick {
   const disposerLane = laneFor(disposer.PlayerID, team.positions?.get(disposer.PlayerID), team.positions);
+  const realDisposerPos = trackedPositions.get(disposer.PlayerID) ?? disposerPos;
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
-  const candidates: NearbyPick[] = pool.map((player) => {
+  const candidates: (NearbyPick & { handballDistance: number })[] = pool.map((player) => {
     const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
-    return { player, distance: closest ? closest.distance : Infinity };
+    const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+    return {
+      player,
+      distance: closest ? closest.distance : Infinity,
+      handballDistance: distanceBetween(realDisposerPos, rangePos),
+    };
   });
+  // Round 35, same-round follow-up — real match data (see
+  // `nearestCandidate`'s own doc comment in positioning.ts) found that on
+  // 37.6% of real handball ticks, NOT ONE teammate clears
+  // `MAX_HANDBALL_DISTANCE`. Left to `handballRangeWeight` alone, every one
+  // of those ticks would degrade to `weightedChoice`'s distance-blind
+  // uniform fallback — the exact failure mode this round exists to remove,
+  // just relocated rather than fixed. Two weighted-lottery alternatives were
+  // tried and both still let real launch distance run into the multiple-
+  // units range often enough to matter (see that doc comment); a
+  // deterministic "closest available" pick is what real football actually
+  // does when genuinely nobody is in comfortable range, so that's what this
+  // is. Every tick where a real in-range teammate exists is completely
+  // unaffected — this only ever fires when `candidates` has zero entries
+  // within `MAX_HANDBALL_DISTANCE`.
+  if (!candidates.some((c) => c.handballDistance <= MAX_HANDBALL_DISTANCE)) {
+    return nearestCandidate(candidates);
+  }
   return weightedChoice(rng, candidates, (c) => {
     const base = involvementWeight(side, c.player, zone, team.positions?.get(c.player.PlayerID));
     const lane = laneFor(c.player.PlayerID, team.positions?.get(c.player.PlayerID), team.positions);
     const laneGap = Math.abs(lane - disposerLane); // 0 same, 1 adjacent (flank<->centre), 2 opposite flanks
     const laneFactor = laneGap === 0 ? SAME_LANE_FACTOR : laneGap === 1 ? ADJACENT_LANE_FACTOR : OPPOSITE_LANE_FACTOR;
-    return base * laneFactor * spaceWeight(c.distance);
+    return base * laneFactor * spaceWeight(c.distance) * handballRangeWeight(c.handballDistance);
   });
 }

@@ -1105,7 +1105,7 @@ function resolveUnpressuredDisposal(
       markContestDistance: receiverPick.distance,
     };
   }
-  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
   const receiver = receiverPick.player;
   const handballLabel =
     proximityWeight(receiverPick.distance) === 0
@@ -1510,7 +1510,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       markContestDistance: receiverPick.distance,
     };
   }
-  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
   const receiver = receiverPick.player;
   const handballLabel =
     proximityWeight(receiverPick.distance) === 0

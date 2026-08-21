@@ -483,3 +483,95 @@ export const MAX_KICK_DISTANCE = 1.5;
 export function kickRangeWeight(distance: number): number {
   return distance <= MAX_KICK_DISTANCE ? 1 : 0;
 }
+
+/**
+ * Aug 2026 round 35 — Tyler's own sequencing, right after round 34: "we will
+ * do the weightedHandballTarget after that." `weightedHandballTarget`
+ * (involvement.ts) already discounts by real lane GAP (same/adjacent/
+ * opposite flank, round 18/27's `laneFor`-based `laneFactor`) — but lane is
+ * a WIDTH-only classification, blind to the LENGTH axis entirely. A
+ * same-lane teammate standing right next to the disposer and one standing
+ * three zones up the ground currently read as equally good "same lane"
+ * targets, with zero extra discount for the second one being nowhere near a
+ * real handball's actual reach — the exact gap Tyler's own original round-18
+ * report was about: "A handball is only designed to be quick, short distance
+ * exchanges of the ball." This is the direct handball analogue of
+ * `kickRangeWeight` above: a genuine physical range limit, not a tactical
+ * preference, so a hard cutoff — if anything more strictly justified here
+ * than for a kick, since a handball's range is bounded by arm/hand mechanics
+ * and a short run-up, not a full kicking motion.
+ *
+ * `MAX_HANDBALL_DISTANCE` is deliberately much smaller than
+ * `MAX_KICK_DISTANCE`, same reasoned-not-derived, disclosed-approximation
+ * status as that constant: using `distanceBetween`'s own ~40m/zoneFrac-unit
+ * scale (`MAX_KICK_DISTANCE`'s own doc comment), a real handball rarely
+ * travels much beyond 15-20m even at full stretch, which lands at roughly
+ * 0.4-0.5 units — `0.5` chosen as a round figure at the upper end of that
+ * range (generous rather than stingy, since `weightedChoice`'s all-zero
+ * fallback is a uniform pick, and a slightly-too-generous cutoff is a much
+ * smaller error than one that starves the receiver pool most ticks). Checked
+ * against real match data in `scripts/verify_round35_scratch.ts` rather than
+ * left as an unverified guess, same discipline as every other constant in
+ * this file.
+ *
+ * Deliberately NOT paired with a `directionWeight`-style backward discount
+ * the way `weightedKickTarget` is: a backward or lateral handball is a
+ * completely normal, unremarkable part of real football (the short outlet
+ * ball back to a teammate under pressure), unlike a forward kicking
+ * backward to a back pocket, which is what Tyler's round-33 report was
+ * actually about. Adding one here would be solving a problem nobody
+ * reported and real football doesn't support penalising.
+ */
+export const MAX_HANDBALL_DISTANCE = 0.5;
+
+export function handballRangeWeight(distance: number): number {
+  return distance <= MAX_HANDBALL_DISTANCE ? 1 : 0;
+}
+
+/**
+ * Aug 2026 round 35, same-round follow-up — the "generous... a slightly-too-
+ * generous cutoff is a much smaller error than one that starves the receiver
+ * pool most ticks" reasoning above turned out to be wrong in practice, not
+ * just cautious: instrumenting the real shipped `weightedHandballTarget`
+ * against real match data (`DEBUG_HANDBALL`, this round) found the true
+ * zero-real-candidate-within-range rate is 37.6% of real handball ticks
+ * (2939 real selections sampled) — not the "rare, not routine" <5% round 33
+ * measured for `kickRangeWeight`'s own analogous fallback. A real, genuinely
+ * isolated disposer with no teammate within ~20m is evidently common in this
+ * engine's off-ball shape, not an edge case. Left alone, `weightedChoice`'s
+ * own documented all-zero-weight behaviour — a fully uniform pick across
+ * every remaining on-ground teammate, distance-blind — fires on well over a
+ * third of real handballs, which is exactly how a 162m "handball" (this
+ * round's own worst real sample) becomes possible even with the hard cutoff
+ * in place: not a bug in the cutoff itself, but in what happens once it
+ * rejects everyone.
+ *
+ * Two weighted-lottery fallbacks were tried here first — a gentle
+ * `1 / (1 + distance)` decay (barely moved the real numbers: max real launch
+ * distance 4.052 -> 3.910), then a steeper `exp(-distance /
+ * MAX_HANDBALL_DISTANCE)` decay tied to the same constant (better: mean
+ * 0.863 -> 0.558, max 4.052 -> 3.056, but a real ~120m handball still showed
+ * up in the worst real sample). Both share the same flaw: ANY weighted
+ * lottery, however steep, keeps a nonzero chance of landing on a distant
+ * candidate whenever that candidate's `involvementWeight * laneFactor *
+ * spaceWeight` product is unusually large — and across thousands of real
+ * ticks, a low-probability tail still fires sometimes. A real footballer
+ * forced into this exact situation — genuinely nobody within comfortable
+ * range — doesn't run a mental lottery weighted by how good a target
+ * otherwise looks; they offload to whoever is physically nearest, full
+ * stop. So this is deterministic, not a `weightedChoice` weight function:
+ * `nearestCandidate` below picks the single real closest teammate by
+ * `handballDistance`, ignoring every other signal. No natural-variety cost
+ * either — unlike `spaceWeight`/`directionWeight`'s soft preferences among
+ * otherwise-comparable options, there IS no good option on these ticks, so
+ * there's nothing worth preserving a lottery over. Only ever used by
+ * `weightedHandballTarget` for the specific tick where NOT ONE candidate
+ * clears `MAX_HANDBALL_DISTANCE` — every in-range tick still resolves
+ * through `handballRangeWeight` and `weightedChoice` exactly as before,
+ * completely untouched.
+ */
+export function nearestCandidate<T extends { handballDistance: number }>(candidates: readonly T[]): T {
+  let nearest = candidates[0];
+  for (const c of candidates) if (c.handballDistance < nearest.handballDistance) nearest = c;
+  return nearest;
+}

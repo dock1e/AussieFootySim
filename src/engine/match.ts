@@ -1006,6 +1006,12 @@ function resolveUnpressuredDisposal(
   else line.handballs += 1;
 
   const newZone = isKick ? advanceZone(state.zone, state.possession) : state.zone;
+  // Aug 2026 round 33 — the disposer's own exact position at the moment of
+  // this kick, computed once and reused by both weightedKickTarget call
+  // sites below (shot-chance and general) rather than duplicated at each —
+  // see weightedKickTarget's own doc comment (involvement.ts) for why this
+  // is now required.
+  const disposerPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
 
   if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
     const newSide = otherSide(state.possession);
@@ -1052,7 +1058,7 @@ function resolveUnpressuredDisposal(
     // receiver's real space situation right here — this tick only launches
     // the kick and shows it; the carrier stays named alongside the receiver
     // so both are visible in flight together, not just the receiver alone.
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
     const kickLabel =
       proximityWeight(receiverPick.distance) === 0
@@ -1084,7 +1090,7 @@ function resolveUnpressuredDisposal(
   // doc comment for why a handball reception isn't a dueling contest the way
   // a mark is).
   if (isKick) {
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
     const kickLabel =
       proximityWeight(receiverPick.distance) === 0
@@ -1391,6 +1397,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // Kicks alone advance the zone; a handball keeps play, and the receiver
   // pool below, right where it already was.
   const newZone = isKick ? advanceZone(state.zone, state.possession) : state.zone;
+  // Aug 2026 round 33 — same reasoning as resolveUnpressuredDisposal's own
+  // identical line: the disposer's own exact position, computed once and
+  // reused by both weightedKickTarget call sites below.
+  const disposerPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
 
   // Out on the Full — Aug 2026 round 19, see P_KICK_GOES_OUT_ON_FULL's own
   // doc comment. Only a kick can literally sail out on the full; the
@@ -1451,7 +1461,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // identical shot-chance branch above: the mark no longer resolves this
     // same tick, see runMarkingContest's own doc comment / [[Contest
     // Resolution Redesign]] item 4.
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
     const kickLabel =
       proximityWeight(receiverPick.distance) === 0
@@ -1481,7 +1491,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // as of round 24, additionally weighted by genuine space from the nearest
   // opponent (weightedKickTarget) — see that function's own doc comment.
   if (isKick) {
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam);
+    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
     const kickLabel =
       proximityWeight(receiverPick.distance) === 0

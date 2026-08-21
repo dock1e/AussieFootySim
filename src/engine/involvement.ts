@@ -6,7 +6,7 @@ import { ZONE_FOR_POSITION, ownZone, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import type { Rng } from "./rng.ts";
-import { proximityFor, distanceBetween, proximityWeight, spaceWeight, type AbstractPosition } from "./positioning.ts";
+import { proximityFor, distanceBetween, proximityWeight, spaceWeight, directionWeight, kickRangeWeight, type AbstractPosition } from "./positioning.ts";
 
 /**
  * Position-weighted involvement — Tactics and Positional Play.md Part 6 /
@@ -291,6 +291,34 @@ export function closestDefender(side: Side, team: MatchTeam, zone: Zone, possess
  * kick — needed to compute each candidate's own real distance-to-nearest-
  * opponent, which `weightedPlayerChoice` never needed since it had no
  * concept of "space" at all.
+ *
+ * `disposerPos`/`trackedPositions` (Aug 2026 round 33) — Tyler, watching a
+ * real match: "why is Mihocek (a forward) kicking it backwards to a back
+ * pocket (Houston)... Mihocek should have a maximum distance on his kick."
+ * Before this round, this function had zero awareness of the disposer's own
+ * real position at all — a candidate's weight came purely from their
+ * suitability for the target zone and their own openness, never from how
+ * far or in which direction they actually were from the player about to
+ * kick it. `disposerPos` (the same `carrierPosition`-derived estimate
+ * `runGeneralPlay`'s Run and Carry/chase logic already uses for an
+ * analogous "where exactly is the person with the ball" need) is the
+ * fallback; `trackedPositions` (`ctx.trackedPositions`, always populated by
+ * the time a real match tick reaches this function — see `movement.ts`) is
+ * preferred when available for the DIRECTION/RANGE check specifically,
+ * since that's the same real, continuously-evolving position the ball's own
+ * on-screen flight actually renders from (`ground.ts`) — the stateless
+ * `proximityFor` estimate `pos` below is a fair proxy for "roughly how
+ * suitable/open is this candidate" (unchanged, still driving
+ * `involvementWeight`/`spaceWeight` exactly as before this round, so
+ * neither of those two already-calibrated signals is disturbed), but
+ * verified against real match data to diverge too often from a player's
+ * REAL position for a hard distance/direction physical constraint to be
+ * checked against safely. Every candidate's real distance-from-disposer
+ * (`kickRangeWeight`) and real forward-vs-backward progress relative to the
+ * disposer (`directionWeight`) now multiply into the same weight
+ * `involvementWeight`/`spaceWeight` already compute — see each function's
+ * own doc comment (`positioning.ts`) for the reasoning behind each
+ * cutoff/discount.
  */
 export function weightedKickTarget(
   rng: Rng,
@@ -301,15 +329,32 @@ export function weightedKickTarget(
   disposer: Player,
   opponentSide: Side,
   opponentTeam: MatchTeam,
+  disposerPos: AbstractPosition,
+  trackedPositions: Map<number, AbstractPosition>,
 ): NearbyPick {
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
-  const candidates: NearbyPick[] = pool.map((player) => {
+  const realDisposerPos = trackedPositions.get(disposer.PlayerID) ?? disposerPos;
+  const candidates: (NearbyPick & { kickDistance: number; progress: number })[] = pool.map((player) => {
     const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
-    return { player, distance: closest ? closest.distance : Infinity };
+    const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+    return {
+      player,
+      distance: closest ? closest.distance : Infinity,
+      kickDistance: distanceBetween(realDisposerPos, rangePos),
+      progress: (rangePos.zoneFrac - realDisposerPos.zoneFrac) * (side === "home" ? 1 : -1),
+    };
   });
-  return weightedChoice(rng, candidates, (c) => involvementWeight(side, c.player, zone, team.positions?.get(c.player.PlayerID)) * spaceWeight(c.distance));
+  return weightedChoice(
+    rng,
+    candidates,
+    (c) =>
+      involvementWeight(side, c.player, zone, team.positions?.get(c.player.PlayerID)) *
+      spaceWeight(c.distance) *
+      directionWeight(c.progress) *
+      kickRangeWeight(c.kickDistance),
+  );
 }
 
 /**

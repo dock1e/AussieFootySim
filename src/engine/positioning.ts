@@ -425,3 +425,61 @@ export const SPACE_WEIGHT_MAX = 4;
 export function spaceWeight(distance: number): number {
   return Math.min(SPACE_WEIGHT_MAX, 1 + distance * SPACE_WEIGHT_SCALE);
 }
+
+/**
+ * Aug 2026 round 33 — Tyler, watching a real match (Mihocek, a genuine Key
+ * Forward, kicking to Houston, a genuine Medium Defender/back-pocket type):
+ * "why is Mihocek (a forward) kicking it backwards to a back pocket
+ * (Houston)". `weightedKickTarget` (involvement.ts) already discounts a
+ * genuinely mismatched candidate via `involvementWeight`'s own zone-
+ * suitability floor (`FALLBACK_WEIGHT` = 0.3, never zero — a real football
+ * team does occasionally have an out-of-position player near the ball), but
+ * before this round had no notion of the candidate's actual DIRECTION
+ * relative to the disposer at all — a wide-open defender sitting behind the
+ * play could still occasionally out-weigh a well-covered, correctly-
+ * positioned forward purely via `spaceWeight`'s own uncapped openness bonus,
+ * since defenders are routinely the most unmarked players on the ground
+ * during general play precisely because nobody bothers to defend that deep
+ * against the run of play — the exact opposite of what should make a kick
+ * target more attractive. `progress` is the candidate's real zoneFrac
+ * movement relative to the disposer, already signed for the kicking side's
+ * own attacking direction by the caller (positive = advancing toward goal).
+ * A genuine backward "safety" kick under pressure does happen in real
+ * football, so this is a steep discount, not an outright ban — the same
+ * "soft preference, not a hard cutoff" shape `spaceWeight`'s own doc comment
+ * above already establishes for this exact function.
+ */
+export const BACKWARD_KICK_FACTOR = 0.12;
+
+export function directionWeight(progress: number): number {
+  return progress >= 0 ? 1 : BACKWARD_KICK_FACTOR;
+}
+
+/**
+ * Aug 2026 round 33 — Tyler, same report: "how is that able to happen,
+ * Mihocek should have a maximum distance on his kick. Around 45-60 meters
+ * for most players." Unlike `directionWeight` above, this is a hard cutoff,
+ * not a discount: a football boot has a genuine maximum range, not just a
+ * tactical preference against using it. Grounded in `distanceBetween`'s own
+ * disclosed scale (its own doc comment above: each of `zoneFrac`'s 4 units
+ * and `lane`'s 2 units "covers a several-tens-of-metres span") — averaging
+ * `data/grounds.ts`'s own `GROUND_CONFIGS[*].realDimensions.lengthM` (~155-
+ * 170m across the 12 modelled venues, ~160m typical) across 4 zoneFrac units
+ * gives roughly 40m per unit for the dominant, lengthwise kicking direction.
+ * `MAX_KICK_DISTANCE` = 1.5 lands close to the upper end of Tyler's own
+ * 45-60m range for a mostly-lengthwise kick (~60m), while still allowing a
+ * shorter combined length+lateral `distanceBetween` value for an angled
+ * kick to reach a target. Same reasoned-not-derived, disclosed-approximation
+ * status `distanceBetween` itself already carries — this project doesn't
+ * have a literal, uniform metres-per-unit conversion for this abstract model
+ * (see [[ROADMAP]] gap #77), so this is deliberately a round figure grounded
+ * in the right order of magnitude, not a precise physics simulation.
+ * `weightedChoice`'s own existing all-zero-weight fallback (a uniform pick)
+ * is what happens on the rare tick where genuinely nobody is within range —
+ * disclosed there, not re-implemented here.
+ */
+export const MAX_KICK_DISTANCE = 1.5;
+
+export function kickRangeWeight(distance: number): number {
+  return distance <= MAX_KICK_DISTANCE ? 1 : 0;
+}

@@ -350,6 +350,47 @@ function resolvedTactic(plan: TeamPlan | null, player: Player, position: Positio
   return defaultTacticForPosition(position, tacticGroupForSlot(position, player.archetype as Archetype));
 }
 
+/**
+ * Midfield/Ruck contest-crashing — Aug 2026 round 31. Tyler: "midfielders
+ * generally try and find space and spread out across the center square, but
+ * once an opponent near them has the ball they should close that distance
+ * and try to tackle or contest the ball." Unlike Defender/Forward (round
+ * 28), Midfield/Ruck have no fixed opponent matchup (`MIRROR_POSITION`
+ * deliberately excludes W/C/R/RR/ROV — see this file's own top comment) — a
+ * mid's "who to close down" is whoever the LIVE ball carrier is, not a
+ * designated direct opponent, so `stepSide`/`stepPositions` below thread the
+ * carrier's own real tracked position through directly, rather than
+ * `matchups`. Only ever supplied when the carrier is a genuine opponent of
+ * this player's own side (`stepSide`'s own `carrierIsOpponent` check) — a
+ * mid on the SAME side as the carrier keeps their ordinary, newly-spread-out
+ * anchor (`positioning.ts`'s round 31 write-up), matching Tyler's own
+ * wording, "once an OPPONENT near them has the ball."
+ *
+ * `MIDFIELD_CONTEST_RANGE`/`MIDFIELD_CONTEST_PULL_MAX` — a disclosed,
+ * reasoned starting point, same status as every other pacing constant in
+ * this file: within range, pull scales linearly from 0 (right at the edge)
+ * up to `MIDFIELD_CONTEST_PULL_MAX` (right on top of the carrier) — a mid
+ * standing well clear of the ball stays on their own home anchor, only
+ * closing in once the carrier is genuinely nearby, the "spread out... but
+ * close that distance" two-mode behaviour Tyler asked for. Computed from
+ * `home` (this player's own ball-relative anchor), not their actual current
+ * tracked position — same "purely a function of already-decided state"
+ * shape `defenderTarget`/`forwardTarget` already use, and still bounded by
+ * the same `maxStepFor` cap every target in this file goes through
+ * (`stepToward`, in `stepSide`) — no special "burst" speed to crash a
+ * contest, same disclosed simplification `nudgeInvolvedPositions` already
+ * carries for the identical reason.
+ */
+const MIDFIELD_CONTEST_RANGE = 0.5;
+const MIDFIELD_CONTEST_PULL_MAX = 0.85;
+
+function midfieldTarget(home: AbstractPosition, carrierPos: AbstractPosition): AbstractPosition {
+  const distance = distanceBetween(home, carrierPos);
+  if (distance > MIDFIELD_CONTEST_RANGE) return home;
+  const pull = MIDFIELD_CONTEST_PULL_MAX * (1 - distance / MIDFIELD_CONTEST_RANGE);
+  return { zoneFrac: lerp(home.zoneFrac, carrierPos.zoneFrac, pull), lane: lerp(home.lane, carrierPos.lane, pull) };
+}
+
 function targetFor(
   player: Player,
   side: Side,
@@ -360,13 +401,15 @@ function targetFor(
   possession: Side,
   opponentPos: AbstractPosition | undefined,
   teamPositions: Map<number, Position> | undefined,
+  opponentCarrierPos: AbstractPosition | undefined,
 ): AbstractPosition {
   const home = proximityFor(player, side, position, zone, possession, style, teamPositions);
   const group = tacticGroupForSlot(position, player.archetype as Archetype);
   const tactic = resolvedTactic(plan, player, position);
   if (group === "Defender" && opponentPos) return defenderTarget(side, home, opponentPos, tactic, zone);
   if ((group === "KeyForward" || group === "SmallForward") && opponentPos) return forwardTarget(side, home, opponentPos, tactic, zone, possession);
-  return home; // Midfield/Ruck, or a defender/forward with no resolvable opponent this match
+  if ((group === "Midfield" || group === "Ruck") && opponentCarrierPos) return midfieldTarget(home, opponentCarrierPos);
+  return home; // a defender/forward with no resolvable opponent this match, or nobody currently carries the ball
 }
 
 function stepSide(
@@ -379,18 +422,20 @@ function stepSide(
   matchups: Map<number, number>,
   current: Map<number, AbstractPosition>,
   out: Map<number, AbstractPosition>,
+  carrierPos: AbstractPosition | undefined,
 ): void {
+  const carrierIsOpponent = carrierPos !== undefined && possession !== side;
   for (const player of onGroundPlayers(team)) {
     const position = team.positions?.get(player.PlayerID);
     const opponentId = matchups.get(player.PlayerID);
     const opponentPos = opponentId !== undefined ? current.get(opponentId) : undefined;
-    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions);
+    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions, carrierIsOpponent ? carrierPos : undefined);
     const from = current.get(player.PlayerID) ?? target;
     out.set(player.PlayerID, stepToward(from, target, maxStepFor(player)));
   }
 }
 
-/** One real simulated tick's worth of movement for every on-ground player of both teams — `match.ts`'s `simulateQuarter` calls this once per tick, using the CURRENT (i.e. most recently resolved) `zone`/`possession`, mirroring exactly how `ground.ts`'s own `pressLineFor` already reads "the current event's own zone/possession" as its input. Pure function of already-decided state (no `Rng` consumed) — same determinism-safety class as `ground.ts`'s rendering, just now living in the engine so it can be snapshotted onto real match events instead of only ever existing for one animation frame at a time. */
+/** One real simulated tick's worth of movement for every on-ground player of both teams — `match.ts`'s `simulateQuarter` calls this once per tick, using the CURRENT (i.e. most recently resolved) `zone`/`possession`/`carrier`, mirroring exactly how `ground.ts`'s own `pressLineFor` already reads "the current event's own zone/possession" as its input. `carrier` (Aug 2026 round 31) is `match.ts`'s own `State.carrier` — see `midfieldTarget`'s doc comment for why Midfield/Ruck needs the actual live carrier rather than a fixed matchup. Pure function of already-decided state (no `Rng` consumed) — same determinism-safety class as `ground.ts`'s rendering, just now living in the engine so it can be snapshotted onto real match events instead of only ever existing for one animation frame at a time. */
 export function stepPositions(
   home: MatchTeam,
   away: MatchTeam,
@@ -400,12 +445,14 @@ export function stepPositions(
   awayStyle: GameStyle,
   zone: Zone,
   possession: Side,
+  carrier: Player | null,
   matchups: Map<number, number>,
   current: Map<number, AbstractPosition>,
 ): Map<number, AbstractPosition> {
+  const carrierPos = carrier ? current.get(carrier.PlayerID) : undefined;
   const next = new Map<number, AbstractPosition>();
-  stepSide(home, "home", homePlan, homeStyle, zone, possession, matchups, current, next);
-  stepSide(away, "away", awayPlan, awayStyle, zone, possession, matchups, current, next);
+  stepSide(home, "home", homePlan, homeStyle, zone, possession, matchups, current, next, carrierPos);
+  stepSide(away, "away", awayPlan, awayStyle, zone, possession, matchups, current, next, carrierPos);
   return next;
 }
 

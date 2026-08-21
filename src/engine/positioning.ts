@@ -113,16 +113,51 @@ const LINE_MOBILITY: Record<Line, number> = {
  * centrally-laned (0) — no real per-player lane data exists to draw on for
  * those players.
  */
+/**
+ * Aug 2026 round 31 (Tyler, live testing: "our midfielders (ruck, ruck
+ * rover, rover, center) are all clumped together and move around the field
+ * as two blobs"). Root cause: C/R/RR/ROV all shared `ZONE_FOR_POSITION`'s
+ * zone 2 (Midfield, correct — they genuinely do follow the ball together
+ * along the length axis) AND, until this round, all read `POSITION_LANE`
+ * value 0 with zero real per-position spread on the WIDTH axis either — so
+ * `homeAnchor` computed the literal identical `AbstractPosition` for all
+ * four (same zoneFrac, same lane 0), and `movement.ts`'s `targetFor` leaves
+ * Midfield/Ruck's target as this plain anchor unmodified (no matchup-based
+ * differentiation the way Defender/Forward get) — one team's four followers
+ * collapsing onto one point every tick is "a blob," and both teams doing it
+ * gives exactly Tyler's "two blobs." `ground.ts`'s OWN separate (older,
+ * rendering-only) `POSITION_LANES` table already gave R/RR/ROV a small
+ * +-0.12 spread plus a further nudge specifically to avoid this — but that
+ * table is only ever read as a FALLBACK when no real engine-tracked
+ * position exists (see `formationFor`'s own trackedPos branch), and round
+ * 28 made real tracked positions the norm for every live match, silently
+ * bypassing that old safety net.
+ *
+ * Four real, distinct, evenly-spaced lanes (0.3 apart — comfortably clear of
+ * `PROXIMITY_RANGE_DISTANCE` (0.25) below, so no two followers register as
+ * "in proximity range" of each other purely from standing at the same
+ * zoneFrac, and comfortably inside the +-0.6 half-back/half-forward flank
+ * lane so this quartet doesn't visually or gameplay-wise merge with them)
+ * fixes this at the root: C/R/RR/ROV now genuinely spread across the width
+ * of the centre corridor instead of collapsing onto one point, both at a
+ * centre bounce (which has its own separate `ground.ts` override anyway —
+ * see `isCentreBounce`) and, more importantly, throughout general play,
+ * where this anchor is what `movement.ts`'s off-ball stepping actually
+ * chases. A reasoned, disclosed-as-not-derived starting spread, same status
+ * as every other lane constant in this file/`ground.ts`'s own table — not
+ * claiming a specific real AFL centre-bounce formation, just real,
+ * meaningful separation instead of none.
+ */
 const POSITION_LANE: Partial<Record<Position, number>> = {
   FB: 0,
   BP: 0.6,
   HBF: 0.6,
   CHB: 0,
   W: 0.9,
-  C: 0,
-  R: 0,
-  RR: 0,
-  ROV: 0,
+  C: -0.15,
+  R: 0.15,
+  RR: 0.45,
+  ROV: -0.45,
   HFF: 0.6,
   CHF: 0,
   FF: 0,
@@ -215,7 +250,34 @@ function gameStyleAnchorBias(position: Position, style: GameStyle): AnchorBias {
   }
 }
 
-/** A player's home anchor, before any ball-relative shift — real assigned position if known, else the archetype-line fallback (identical graceful-degradation order to `involvement.ts`'s `involvementWeight`/`ground.ts`'s `assignAnchors`). `style` (Aug 2026 round 28) defaults to Balanced (zero bias, byte-identical to before this param existed) — see `gameStyleAnchorBias`'s own doc comment. `teamPositions` (Aug 2026 round 29) signs a dual-lane position's magnitude by real per-occupant flank via `laneSignFor` — see that function's doc comment for why this exists as a separate param rather than being folded into `POSITION_LANE` itself. */
+/**
+ * A player's home anchor, before any ball-relative shift — real assigned
+ * position if known, else the archetype-line fallback (identical
+ * graceful-degradation order to `involvement.ts`'s `involvementWeight`/
+ * `ground.ts`'s `assignAnchors`). `style` (Aug 2026 round 28) defaults to
+ * Balanced (zero bias, byte-identical to before this param existed) — see
+ * `gameStyleAnchorBias`'s own doc comment. `teamPositions` (Aug 2026 round
+ * 29) signs a dual-lane position's magnitude by real per-occupant flank via
+ * `laneSignFor` — see that function's doc comment for why this exists as a
+ * separate param rather than being folded into `POSITION_LANE` itself.
+ *
+ * BUG FIXED Aug 2026 round 31 — found while diagnosing the midfield-clumping
+ * report above (`POSITION_LANE`'s own doc comment): `sign` used to come
+ * straight from `laneSignFor` UNCONDITIONALLY, for every position, not just
+ * the dual-lane ones it's actually meant to resolve — and `laneSignFor`
+ * itself always returns 0 for anything outside `DUAL_LANE_POSITIONS`. That
+ * silently zeroed out `POSITION_LANE`'s value for every single-occupant
+ * position (FB/CHB/C/R/RR/ROV/CHF/FF) regardless of what the table said,
+ * which was invisible for as long as every one of those entries also
+ * happened to be 0 — but would have kept silently discarding this round's
+ * new nonzero C/R/RR/ROV values too, reopening the exact clumping bug this
+ * round exists to fix. Single-occupant positions have nothing to
+ * disambiguate (there's only ever one of them per team) — they should just
+ * use their own `POSITION_LANE` value directly, sign included where the
+ * table itself already carries a sign (e.g. this round's `C`/`ROV`, both
+ * negative). Dual-lane positions are unaffected: `laneSignFor` still resolves
+ * their sign exactly as before.
+ */
 function homeAnchor(
   player: Player,
   position: Position | null | undefined,
@@ -224,7 +286,7 @@ function homeAnchor(
 ): AbstractPosition {
   if (position && ZONE_FOR_POSITION[position] !== null) {
     const bias = gameStyleAnchorBias(position, style);
-    const sign = laneSignFor(player.PlayerID, position, teamPositions);
+    const sign = DUAL_LANE_POSITIONS.has(position) ? laneSignFor(player.PlayerID, position, teamPositions) : 1;
     return { zoneFrac: (ZONE_FOR_POSITION[position] as Zone) + bias.zoneShift, lane: (POSITION_LANE[position] ?? 0) * sign * bias.laneScale };
   }
   const line = ARCHETYPE_LINE[player.archetype as Archetype] ?? "Midfield";

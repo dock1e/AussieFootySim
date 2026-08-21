@@ -2222,6 +2222,7 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       styleFor(match.ctx.awayPlan),
       match.state.zone,
       match.state.possession,
+      match.state.carrier,
       match.ctx.matchups,
       match.ctx.trackedPositions,
     );

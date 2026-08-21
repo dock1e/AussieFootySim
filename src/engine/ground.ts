@@ -1120,6 +1120,44 @@ export function computeDotPositions(
         all.set(id, { ...existing, x: existing.x + tieBreak * 8, y: existing.y + tieBreak * 6, involved: true });
         return;
       }
+      if (tracked?.has(id)) {
+        // BUG FIXED Aug 2026 round 31 (Tyler, live testing: "Maynard had
+        // been in the defensive pocket standing next to Sharp. On this
+        // tick, Maynard moved the entire way from the pocket to the contest
+        // on the wing with Bowey... Had Maynard's position actually been
+        // updated and he was placed on the wing, but just the visualisation
+        // of the simulation had not updated to display his true position?"
+        // — essentially correct: `existing.x`/`existing.y` here already
+        // comes from `formationFor`'s own `trackedPos` branch above, a
+        // real, per-tick-paced engine position (`movement.ts`'s
+        // `stepPositions`/`nudgeInvolvedPositions`, both bounded by
+        // `maxStepFor` — a player genuinely cannot cover more than a
+        // realistic step in one tick). The code below this branch predates
+        // round 28's real tracked positions (round 3/18/19) and was built
+        // for a world where an "involved" player's own anchor had NO
+        // ball-relative pull at all — so it blends `existing.x` 50/50 with
+        // `ballX` (`event.zone`'s raw pixel position) to visually pull them
+        // toward the contest. Once a real tracked position exists,
+        // `existing.x` is ALREADY correctly pulled toward the contest
+        // (`nudgeInvolvedPositions` did that server-side, capped, over
+        // however many ticks this passage of play has run) — blending it
+        // AGAIN toward the raw ball zone re-introduces an effectively
+        // uncapped one-tick jump on top of an already-correct position, the
+        // exact mechanism behind Maynard's case: `event.zone` can legally
+        // jump a long way in one tick (that's the ball, correctly, per
+        // round 30's own `kickFlightDurationMs`), and this blend used to
+        // drag the receiver's RENDERED dot half that same raw distance
+        // regardless of how far their real, paced position had actually
+        // got. Fix: trust the real tracked position outright — only the
+        // small cosmetic tie-break/spread offsets apply, the same ones
+        // every other branch here already uses to stop two dots landing on
+        // the exact same pixel. The old ballX/avgAnchorY blend just below
+        // remains the correct behaviour for the one remaining case it can
+        // still fire for: an event with no tracked positions at all (a save
+        // from before round 28, or a hand-built test event).
+        all.set(id, { ...existing, x: existing.x + tieBreak * 8, y: existing.y + spread + tieBreak * 6, involved: true });
+        return;
+      }
       const groupX = event.playerIds.length > 1 ? avgAnchorX : existing.x;
       const x = groupX * 0.5 + ballX * 0.5;
       // BUG FIXED Aug 2026, round 3: found by this round's own scratch-script

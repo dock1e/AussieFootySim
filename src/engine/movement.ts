@@ -69,6 +69,21 @@ import { tacticGroupForSlot, defaultTacticForPosition, type Tactic, type TeamPla
  * that RENDERS visibly, without touching how any existing contest actually
  * resolves. A disclosed, deferred follow-up — see the vault's own writeup.
  *
+ * **Update, round 33**: `weightedKickTarget` closed part of this gap for
+ * itself — its two brand-new direction/distance terms now prefer real
+ * tracked positions, while its pre-existing `involvementWeight`/
+ * `spaceWeight` inputs stayed on the stateless estimate untouched, isolating
+ * the change to signals that didn't exist before round 33 in the first
+ * place. **Update, round 34**: `nearbyDefenders` now prefers real tracked
+ * positions too — a real, not just partial, closure this time, since that
+ * function's whole signal IS the eligibility/proximity distance this
+ * comment originally warned about disturbing. Verified specifically against
+ * that risk rather than assumed safe — see involvement.ts's own
+ * `nearbyDefenders` doc comment and `scripts/verify_round34_scratch.ts`.
+ * `weightedHandballTarget` remains the one genuinely open piece of this
+ * gap — still exclusively stateless, next in line per Tyler's own
+ * sequencing.
+ *
  * SCOPE THIS ROUND, disclosed: only `Defender`/`KeyForward`/`SmallForward`
  * tactic-group players (`tactics.ts`'s `tacticGroupForSlot`) get genuinely
  * new role behaviour (opponent-tracking, lead-vs-find-space). Midfield and

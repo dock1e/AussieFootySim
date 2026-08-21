@@ -1246,8 +1246,12 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // that subset is empty, there really is nobody there to contest this tick,
   // Row 2 of Tyler's own process-map diagram ("No players within range to
   // contest") built for real for the first time.
-  const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
-  const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos);
+  // Round 34: prefer the carrier's real, movement.ts-tracked position over
+  // the stateless estimate when one exists — same real-position-preference
+  // nearbyDefenders itself now applies to every candidate defender, see that
+  // function's own doc comment (involvement.ts).
+  const carrierPos = ctx.trackedPositions.get(carrier.PlayerID) ?? carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
+  const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions);
   const defender = tagger ?? nearby?.player ?? null;
 
   if (!defender) {
@@ -1656,8 +1660,10 @@ function runContest(ctx: Ctx, state: State): State {
   // press-shifted estimate. Pinning it exactly (rather than compounding two
   // fuzzy estimates against each other) is what a "the ball is right here"
   // fact should look like.
-  const attackerPos = carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone, attackingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos);
+  // Round 34: real tracked position preferred here too — see involvement.ts's
+  // nearbyDefenders doc comment.
+  const attackerPos = ctx.trackedPositions.get(attackerRep.PlayerID) ?? carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone, attackingTeam.positions);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos, ctx.trackedPositions);
   if (!nearby) {
     return resolveUncontestedGather(ctx, state, attackingSide, defendingSide, defendingTeam, attackerRep, contestType);
   }
@@ -1892,8 +1898,10 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   // identified via the same carrierPosition-for-the-ball-holder convention
   // runGeneralPlay/runContest already use once someone's position is a known
   // fact rather than a fuzzy estimate.
-  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos);
+  // Round 34: real tracked position preferred here too — see involvement.ts's
+  // nearbyDefenders doc comment.
+  const receiverPos = ctx.trackedPositions.get(receiver.PlayerID) ?? carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions);
   if (!nearby) return attemptUncontestedMark();
 
   const defender = nearby.player;
@@ -2044,8 +2052,10 @@ function runHandballContest(ctx: Ctx, state: State): State {
 
   if (proximityWeight(distance) === 0) return attemptCleanReceive();
 
-  const receiverPos = carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos);
+  // Round 34: real tracked position preferred here too — see involvement.ts's
+  // nearbyDefenders doc comment.
+  const receiverPos = ctx.trackedPositions.get(receiver.PlayerID) ?? carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions);
   if (!nearby) return attemptCleanReceive();
 
   const defender = nearby.player;

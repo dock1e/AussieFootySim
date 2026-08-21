@@ -229,13 +229,56 @@ export interface NearbyPick {
  *
  * `side`/`possession` follow the same raw convention every other function in
  * this file does — `proximityFor` does its own mirroring internally.
+ *
+ * `trackedPositions` (Aug 2026 round 34) — Tyler, straight after round 33's
+ * kick fix landed: "let's do the same thing for nearbyDefenders next."
+ * `movement.ts`'s own top-of-file doc comment named this exact function as a
+ * disclosed, deliberately deferred gap: "`nearbyDefenders`... calibrated
+ * against `positioning.ts`'s existing *stateless* proximity model...
+ * swapping in a laggier, stateful position underneath them would silently
+ * shift those already-tuned contest rates in a way this round doesn't
+ * attempt to re-calibrate." This round closes that gap for real, not just
+ * partially the way round 33 had to (round 33 could isolate its fix to two
+ * brand-new weighting terms and leave `involvementWeight`/`spaceWeight`'s
+ * existing inputs untouched; this function has no such spare signal to
+ * isolate the change into — the eligibility/weighting distance itself IS the
+ * one thing being asked to change), so this was verified specifically for
+ * exactly the risk `movement.ts`'s own comment warns about: whether the real
+ * position swap silently shifts the rounds 21-23 tackle/contest-eligibility
+ * calibration. Each candidate now prefers their real, `movement.ts`-tracked
+ * position (`trackedPositions.get(player.PlayerID)`) over the stateless
+ * `proximityFor` estimate when one exists, falling back per-player
+ * otherwise. `PROXIMITY_CLOSE_DISTANCE`/`PROXIMITY_RANGE_DISTANCE`
+ * themselves are deliberately NOT retuned here — `proximityWeight` is also
+ * called directly elsewhere in `match.ts` against the stateless estimate for
+ * unrelated uncontested-mark/handball-difficulty rolls, so changing the
+ * thresholds themselves would silently move signals Tyler didn't ask about
+ * this round; only this function's own inputs change. See
+ * `scripts/verify_round34_scratch.ts` and [[Contest Resolution Redesign]]'s
+ * round 34 section for the actual measured before/after shift and why the
+ * existing thresholds were confirmed to still hold up, not just assumed to.
+ * The `target` argument itself is unchanged in shape (still a plain
+ * `AbstractPosition`, still resolved by the caller) — every call site now
+ * prefers `ctx.trackedPositions.get(<that player's ID>)` before falling back
+ * to `carrierPosition(...)`, the same real-position-preference pattern, just
+ * applied at the call site since this function was never given that player's
+ * identity, only their already-resolved position.
  */
-export function nearbyDefenders(rng: Rng, side: Side, team: MatchTeam, zone: Zone, possession: Side, target: AbstractPosition): NearbyPick | null {
+export function nearbyDefenders(
+  rng: Rng,
+  side: Side,
+  team: MatchTeam,
+  zone: Zone,
+  possession: Side,
+  target: AbstractPosition,
+  trackedPositions: Map<number, AbstractPosition>,
+): NearbyPick | null {
   const pool = onGroundPlayers(team);
-  const withDistance = pool.map((player) => ({
-    player,
-    distance: distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions)),
-  }));
+  const withDistance = pool.map((player) => {
+    const estimated = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
+    const pos = trackedPositions.get(player.PlayerID) ?? estimated;
+    return { player, distance: distanceBetween(target, pos) };
+  });
   const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0);
   if (eligible.length === 0) return null;
   return weightedChoice(rng, eligible, (d) => involvementWeight(side, d.player, zone, team.positions?.get(d.player.PlayerID)) * proximityWeight(d.distance));

@@ -3,7 +3,17 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
 import { benchPlayers } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
-import { computeDotPositions, ballTargetFor, GROUND_WIDTH, GROUND_HEIGHT, GROUND_END_CAP_FRACTION, MAX_BALL_SPEED_PX_PER_SEC, type DotPosition, type BallTarget } from "../engine/ground";
+import {
+  computeDotPositions,
+  ballTargetFor,
+  GROUND_WIDTH,
+  GROUND_HEIGHT,
+  GROUND_END_CAP_FRACTION,
+  MAX_BALL_SPEED_PX_PER_SEC,
+  KICK_SPEED_MULTIPLIER,
+  type DotPosition,
+  type BallTarget,
+} from "../engine/ground";
 import { ACTIVE_GROUND } from "../data/grounds";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
 
@@ -98,6 +108,43 @@ const MAX_DOT_SPEED_PX_PER_SEC = 200;
 // at, rather than an independently-guessed one. See that constant's own doc
 // comment (ground.ts) for the full round-30 write-up, including the bug this
 // relocation was part of fixing.
+
+/**
+ * Drop-punt spin — Aug 2026 round 32 (Tyler: "when the ball travels through
+ * the air, can we make it look like the ball is rotating in the style of an
+ * AFL Drop Punt?"). `BALL_RESTING_ROTATION` is the ball's old, static tilt
+ * (previously a bare `Math.PI / 4` literal inside `drawBall` itself, applied
+ * unconditionally) — now the ball's *idle* orientation for every state this
+ * round doesn't touch (held, marked, dropped, a handball's own flight), so
+ * nothing changes visually outside an actual kick.
+ *
+ * `BALL_SPIN_RATE_RAD_PER_SEC` is a disclosed, reasoned-not-derived starting
+ * point, same status as `MAX_DOT_SPEED_PX_PER_SEC` above: a real drop punt
+ * spins fast enough that a viewer reads it as a tight spiral, not a lazy
+ * tumble, but this canvas draws the ball at a genuinely tiny size (an
+ * `rx`/`ry` of 7/5px) where too fast a spin just aliases into a blur rather
+ * than a legible rotation. 3 full rotations/second (2*pi*3 rad/s) was chosen
+ * by eye against that constraint, not against a cited real-world spin figure
+ * — the same "grounded in reality, tuned for what reads clearly at this
+ * scale" approach `MAX_DOT_SPEED_PX_PER_SEC`'s own doc comment already uses.
+ *
+ * Deliberately a flat rate, not scaled by the ball's own current travel
+ * speed (a harder torpedo punt spins faster than a short check-side kick in
+ * real life) — a real, disclosed simplification: this round has no
+ * calibrated basis for that relationship, and a flat rate already delivers
+ * the actual ask (a visibly spinning ball) without inventing an untuned
+ * speed-to-spin curve. Worth revisiting if Tyler wants that extra nuance
+ * later, same deferred-not-forgotten status `nudgeInvolvedPositions`
+ * (movement.ts) gives its own "no special burst speed" simplification.
+ *
+ * Scoped to KICKS only, not handballs (see `KICK_SPEED_MULTIPLIER`'s gating
+ * below) — "in the style of an AFL Drop Punt" names a kicking technique, and
+ * a handball (a punched, held-in-the-hand disposal) has no equivalent spiral
+ * in real football, so giving it the same spin would be inventing a visual
+ * that doesn't correspond to anything real.
+ */
+const BALL_RESTING_ROTATION = Math.PI / 4;
+const BALL_SPIN_RATE_RAD_PER_SEC = Math.PI * 2 * 3; // 3 rotations/sec
 
 /** Moves `prev` toward `target` by the exponential-ease step, but never further than `maxStep` in a straight line — the shared fix behind `MAX_DOT_SPEED_PX_PER_SEC`/`MAX_BALL_SPEED_PX_PER_SEC` above. Below the cap this is byte-identical to the plain exponential formula every caller used before this round. */
 function stepToward(prev: { x: number; y: number }, target: { x: number; y: number }, smoothing: number, maxStep: number): { x: number; y: number } {
@@ -667,15 +714,42 @@ function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition) {
  * `ballTargetFor` itself (above the head for a mark, at the feet for a
  * tackle, to the side toward the direction of travel for a kick/handball),
  * so this just draws at exactly the position it's given.
+ *
+ * `rotation` (Aug 2026 round 32 — Tyler: "when the ball travels through the
+ * air, can we make it look like the ball is rotating in the style of an AFL
+ * Drop Punt?") replaces the old fixed `Math.PI / 4` literal — see
+ * `BALL_RESTING_ROTATION`/`BALL_SPIN_RATE_RAD_PER_SEC` below for how the
+ * caller derives it. `BALL_RESTING_ROTATION` reproduces that exact old
+ * literal, so every non-kick state (held, marked, dropped, handballed) draws
+ * byte-identically to before this round.
+ *
+ * The lace mark is new this round too, and isn't purely decorative: a plain
+ * ellipse is visually symmetric every 180 degrees, so spinning *just* the
+ * ellipse would read as a slow wobble, not a genuine end-over-end spiral —
+ * this off-centre tick is the asymmetric reference point that makes the full
+ * 360-degree rotation actually legible frame to frame. Drawn at every call
+ * (not only while `rotation` is animating) since a real match ball always has
+ * visible laces — a small, deliberate bonus polish alongside the main ask,
+ * not a separate feature.
  */
-function drawBall(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }) {
+function drawBall(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }, rotation: number) {
+  ctx.save();
+  ctx.translate(pos.x, pos.y);
+  ctx.rotate(rotation);
   ctx.beginPath();
-  ctx.ellipse(pos.x, pos.y, 7, 5, Math.PI / 4, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, 7, 5, 0, 0, Math.PI * 2);
   ctx.fillStyle = "#f5d76e";
   ctx.fill();
   ctx.strokeStyle = "#8a6d1a";
   ctx.lineWidth = 1.5;
   ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-2.5, -3);
+  ctx.lineTo(-2.5, 3);
+  ctx.strokeStyle = "#8a6d1a";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
 }
 
 /**
@@ -815,6 +889,10 @@ export function MatchCanvas({
   // shared rate (see this file's top-of-file doc comment) so a kick can read
   // as visibly slower than a handball.
   const ballRenderedRef = useRef<{ x: number; y: number }>({ x: GROUND_WIDTH / 2, y: GROUND_HEIGHT / 2 });
+  // The ball's own current visual spin angle (Aug 2026 round 32) — persists
+  // across frames the same way ballRenderedRef's position does, so a kick's
+  // spin looks continuous rather than resetting every frame.
+  const ballRotationRef = useRef<number>(BALL_RESTING_ROTATION);
 
   // A genuinely new match-up (different clubs) should have its dots appear
   // where they belong immediately, not visibly fly in from wherever the
@@ -907,6 +985,24 @@ export function MatchCanvas({
       const maxBallStep = MAX_BALL_SPEED_PX_PER_SEC * (dt / 1000);
       ballRenderedRef.current = stepToward(ballRenderedRef.current, ballTarget, ballSmoothing, maxBallStep);
 
+      // Aug 2026 round 32 — `speedMultiplier === KICK_SPEED_MULTIPLIER` is
+      // true for exactly a kick's own launch tick AND its own marking-
+      // contest/neutral resolution tick (see `ballTargetFor`'s `kickTrajectory`,
+      // ground.ts) — i.e. every tick the ball is genuinely still crossing
+      // real distance on a kick, never a handball (always speedMultiplier 1)
+      // and never a tackle/fumble (`dropped`, always speedMultiplier 1
+      // unconditionally). Gated on `isPlayingRef` too, same as
+      // `driftElapsedRef` above, so a paused mid-kick frame holds its spin
+      // exactly where it was rather than continuing to spin while every dot
+      // on screen is frozen.
+      if (ballTarget.speedMultiplier === KICK_SPEED_MULTIPLIER) {
+        if (isPlayingRef.current) {
+          ballRotationRef.current = (ballRotationRef.current + BALL_SPIN_RATE_RAD_PER_SEC * (dt / 1000)) % (Math.PI * 2);
+        }
+      } else {
+        ballRotationRef.current = BALL_RESTING_ROTATION;
+      }
+
       const ctx = canvasRef.current?.getContext("2d");
       if (ctx) {
         drawGround(ctx);
@@ -917,7 +1013,7 @@ export function MatchCanvas({
         for (const dot of drawn) {
           if (dot.involved) drawDot(ctx, dot);
         }
-        drawBall(ctx, ballRenderedRef.current);
+        drawBall(ctx, ballRenderedRef.current, ballRotationRef.current);
       }
 
       requestAnimationFrame(frame);

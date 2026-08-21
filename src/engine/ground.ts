@@ -1155,7 +1155,50 @@ export function computeDotPositions(
         // remains the correct behaviour for the one remaining case it can
         // still fire for: an event with no tracked positions at all (a save
         // from before round 28, or a hand-built test event).
-        all.set(id, { ...existing, x: existing.x + tieBreak * 8, y: existing.y + spread + tieBreak * 6, involved: true });
+        //
+        // BUG FIXED Aug 2026 round 32 (Tyler, live testing, seed 734080630:
+        // "I found another bug where Van Rooyen is being pressured from
+        // McStay who is at the other end of the ground" — the play-by-play
+        // showed van Rooyen and McStay named together across many
+        // consecutive GENERAL_PLAY pressure/fumble ticks, while their two
+        // dots rendered at opposite ends of the ground). Root cause: the fix
+        // above trusts EACH tracked player's own `existing.x`/`existing.y`
+        // INDEPENDENTLY — correct for a single-named event, but for a
+        // genuine multi-player pairing (a tackle, a pressured disposal, a
+        // contest) this silently dropped the *other* half of round 19's own
+        // original fix (see the big comment on `avgAnchorX`/`avgAnchorY`
+        // below): pulling co-involved players toward their *shared* anchor,
+        // not just toward the ball. `nudgeInvolvedPositions` (movement.ts)
+        // DOES gradually pull a newly-paired defender's real tracked
+        // position toward the contest — but it's deliberately paced by the
+        // same realistic `maxStepFor` cap every tracked position obeys, so a
+        // defender picked *this* tick who was genuinely elsewhere a moment
+        // ago can take many ticks to actually arrive, during which the
+        // play-by-play already narrates them as directly pressuring/
+        // tackling their opponent. Round 31's fix rendered that real, still-
+        // converging gap completely literally — honest about the engine's
+        // own pacing, but reads exactly like Tyler's report: two named,
+        // "interacting" players visibly far apart.
+        //
+        // Fix: for 2+ tracked players in the same event, use `avgAnchorX`/
+        // `avgAnchorY` (already computed above from every involved player's
+        // own real anchor — see round 19's comment below) instead of each
+        // player's own `existing.x`/`existing.y` — the SAME group-cohesion
+        // pull round 19 already established for the fallback/no-tracked-data
+        // path, just restored for the tracked path too. Deliberately NOT a
+        // re-introduction of Maynard's round-31 bug: this only ever pulls a
+        // player toward *another real player's own already-paced position*,
+        // never toward `ballX` (`event.zone`'s raw, potentially-distant
+        // pixel) — bounded by however far apart two real tracked positions
+        // actually are, not by how far the ball itself just jumped. For a
+        // single-named event, `avgAnchorX`/`avgAnchorY` is numerically
+        // identical to that one player's own `existing.x`/`existing.y` (the
+        // "average" of one value), so this is a strict generalisation of
+        // round 31's fix, not a partial reversion of it — verified in
+        // `verify_round32_scratch.ts`.
+        const groupX = event.playerIds.length > 1 ? avgAnchorX : existing.x;
+        const groupY = event.playerIds.length > 1 ? avgAnchorY : existing.y;
+        all.set(id, { ...existing, x: groupX + tieBreak * 8, y: groupY + spread + tieBreak * 6, involved: true });
         return;
       }
       const groupX = event.playerIds.length > 1 ? avgAnchorX : existing.x;
@@ -1310,7 +1353,14 @@ const BALL_SIDE_OFFSET = 20; // px, kick/handball: to the side, toward wherever 
 const BALL_MARK_OFFSET_Y = -24; // px, above the head
 const BALL_DROPPED_OFFSET_Y = 16; // px, at/below the feet — fumbled
 const BALL_NEUTRAL_OFFSET_Y = -12; // px, held at about chest height — the STOPPAGE/groundBall-win/shot default
-const KICK_SPEED_MULTIPLIER = 3;
+// Exported Aug 2026 round 32 — `MatchCanvas.tsx`'s new drop-punt spin
+// animation (Tyler: "when the ball travels through the air, can we make it
+// look like the ball is rotating in the style of an AFL Drop Punt?") needs to
+// tell a genuine kick apart from a handball's own "flight" state (a handball
+// doesn't spiral) without re-deriving this number independently — same
+// single-source-of-truth reasoning `MAX_BALL_SPEED_PX_PER_SEC` above already
+// follows.
+export const KICK_SPEED_MULTIPLIER = 3;
 
 /**
  * The ball's own hard speed cap, in px/sec — `MatchCanvas.tsx`'s render loop

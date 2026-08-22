@@ -608,3 +608,91 @@ export function nearestCandidate<T extends { handballDistance: number }>(candida
   for (const c of candidates) if (c.handballDistance < nearest.handballDistance) nearest = c;
   return nearest;
 }
+
+/**
+ * Aug 2026 round 42 — Tyler: "do we currently consider the players position
+ * (and pressure) as a weighting into the shot? Shots from directly inside
+ * the goalsquare should have a 99% success rate, while shots from sharp
+ * angles or from 50 meters out should be less reliable." Answer at the time:
+ * no — `match.ts`'s `runShot` used a flat `SHOT_DIFFICULTY_MIN + rng() *
+ * SHOT_DIFFICULTY_RANGE` roll, completely blind to `state.zone`, let alone a
+ * real distance/angle to goal. This closes that half (see `runShot`'s own
+ * doc comment, match.ts, for the pressure half — deliberately scoped
+ * separately, a genuinely smaller and different-shaped gap).
+ *
+ * Reuses this file's own existing abstract coordinate space rather than
+ * `ground.ts`'s real pixel geometry — same circular-import constraint this
+ * file's own top-of-file doc comment already documents (`ground.ts` imports
+ * `match.ts`, `match.ts` needs this module, so the reverse import is out).
+ * The attacking goal sits at `zoneFrac = side === "home" ? 4 : 0, lane = 0`
+ * in this file's own convention — the same check `zones.ts`'s `isForward50`
+ * already makes, just mirrored into a continuous line-of-sight rather than a
+ * discrete in/out zone test. `depth` is how many `zoneFrac` units IN FRONT
+ * of that line the shooter currently is, using `MAX_KICK_DISTANCE`'s own
+ * established ~40m/unit scale (so 0.1 unit =~4m, comfortably inside a real
+ * goal square; 1.25 units =~50m). `angleSeverity` is the real shot angle off
+ * the goal-line centre (`atan2(|lane|, depth)`), normalised to 0 (dead
+ * square in front of goal) .. 1 (along the goal line itself — no real angle
+ * on goal at all). `GOAL_LINE_DEPTH_FLOOR` keeps `depth` (and therefore the
+ * angle denominator) safely away from a literal zero — not a scenario this
+ * engine actually generates, but the floor keeps the maths well-defined
+ * rather than relying on that being true by construction.
+ *
+ * Calibrated against real generated player data (`scripts/
+ * calibrate_shot_geometry.ts`, a throwaway analytical probe over real
+ * sampled forward ratings — not just derived on paper) before being wired
+ * into `match.ts`, same discipline as every other constant in this project:
+ * at goal-square depth/dead-square angle, EVERY real sampled rating
+ * (33-85, forward-line players) converts 97-99%, matching Tyler's "99%"
+ * framing to within a couple of points and staying genuinely near-uniform
+ * across skill the way an open-goal tap-through should be; at 50m dead
+ * square the same spread runs 33%-84% (skill now matters, matching real
+ * long-range shots being a genuine differentiator); a sharp angle (60°)
+ * close in independently drops that to 13%-64%, distinct from — not just a
+ * restatement of — the pure-distance case. Reasoned-not-derived, disclosed
+ * exactly like `MAX_KICK_DISTANCE`/`CONTEST_EXECUTION_DIFFICULTY` and every
+ * other placeholder constant here, pending Phase 6's balance simulator.
+ */
+export const GOAL_LINE_DEPTH_FLOOR = 0.05;
+
+/**
+ * Found investigating round 42's own real-data verification
+ * (`scripts/verify_round42_scratch.ts`, Section 5's first failing run): a
+ * receiver who wins a mark/groundball deep in forward 50 has their
+ * DISCRETE `state.zone` correct immediately (it's the gate `isForward50`
+ * already enforces before a SHOT can even happen) — but `ctx.
+ * trackedPositions`' fine-grained `zoneFrac` for that specific player can
+ * still be most of the way up the ground, having only had one or two
+ * bounded `nudgeInvolvedPositions` steps to close a gap built up while they
+ * weren't "involved" in any logged event (e.g. leading into space for
+ * several ticks before the kick that finds them). Real observed cases:
+ * `depth` computed as high as 3.46 zoneFrac-units (~140m) for a shot that,
+ * by construction, could only have started from a real mark/groundball win
+ * already inside forward 50. This is a pre-existing characteristic of
+ * `ctx.trackedPositions` — invisible before this round because no prior
+ * consumer (nearbyDefenders, weightedKickTarget, closestDefender, etc.)
+ * used it as an absolute geometric anchor the way a real distance-to-goal
+ * needs; every prior use was a relative player-to-player comparison, where
+ * a shared lag mostly cancels out. Fixing the lag itself is a materially
+ * bigger, separate change (movement.ts's own per-tick stepping) — this
+ * clamps the symptom at the one new call site that actually depends on
+ * absolute position being roughly right, reusing `MAX_KICK_DISTANCE`'s own
+ * already-established "~60m, the practical outer edge of a real kick"
+ * reference point (round 33) rather than inventing a new figure: a real
+ * shot at goal, gated on already being in forward 50, cannot genuinely be
+ * further out than that, so a raw reading beyond it is treated as "about as
+ * hard as it gets" rather than an absurd extrapolation.
+ */
+export interface ShotGeometry {
+  /** zoneFrac-units in front of the goal line — ~40m/unit, see this section's own doc comment. Clamped to [GOAL_LINE_DEPTH_FLOOR, MAX_KICK_DISTANCE]. */
+  depth: number;
+  /** 0 (dead square in front of goal) .. 1 (along the goal line — no real angle on goal). */
+  angleSeverity: number;
+}
+
+export function shotGeometry(pos: AbstractPosition, side: Side): ShotGeometry {
+  const rawDepth = side === "home" ? 4 - pos.zoneFrac : pos.zoneFrac;
+  const depth = Math.min(MAX_KICK_DISTANCE, Math.max(GOAL_LINE_DEPTH_FLOOR, rawDepth));
+  const angleSeverity = Math.atan2(Math.abs(pos.lane), depth) / (Math.PI / 2);
+  return { depth, angleSeverity };
+}

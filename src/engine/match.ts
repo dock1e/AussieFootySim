@@ -7,7 +7,7 @@ import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } f
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
 import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
-import { carrierPosition, proximityFor, distanceBetween, proximityWeight, SHORT_KICK_MAX_DISTANCE, type AbstractPosition } from "./positioning.ts";
+import { carrierPosition, proximityFor, distanceBetween, proximityWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
 import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
 import {
   tacticGroupForSlot,
@@ -324,9 +324,41 @@ const LONG_KICK_EXECUTION_DIFFICULTY = 25;
  * the defender a better look, floored at 0 by the caller.
  */
 const LONG_KICK_MISS_DISTANCE_PENALTY = 0.15;
-const P_GOAL_GIVEN_ON_TARGET = 0.58;
-const SHOT_DIFFICULTY_MIN = 40;
-const SHOT_DIFFICULTY_RANGE = 30;
+/**
+ * Aug 2026 round 42 — Tyler: "do we currently consider the players position
+ * (and pressure) as a weighting into the shot? Shots from directly inside
+ * the goalsquare should have a 99% success rate, while shots from sharp
+ * angles or from 50 meters out should be less reliable." Before this round,
+ * `runShot`'s `difficulty` was a flat `SHOT_DIFFICULTY_MIN + rng() *
+ * SHOT_DIFFICULTY_RANGE` roll (40-70) and `P_GOAL_GIVEN_ON_TARGET` was a
+ * single flat 0.58 — neither read `state.zone`, let alone a real distance/
+ * angle to goal. Both are now driven by `positioning.ts`'s new
+ * `shotGeometry` (see that function's own doc comment for the coordinate
+ * model, the ~40m/unit scale, and the real-data calibration this round's
+ * constants were checked against before being wired in here).
+ *
+ * Two separate rolls still exist (Aug 2026, pre-dates this round) —
+ * `onTarget` (below, this section) then goal-vs-behind given on target — so
+ * geometry is applied to BOTH, not just one: `SHOT_DIFFICULTY_BASE/DEPTH/
+ * ANGLE` make a shot genuinely harder to get on target at all as range/angle
+ * worsen (the dominant real-world effect — most long/angled misses sail wide
+ * or fall short, they don't sneak through for a narrowly-missed behind); the
+ * smaller `GOAL_ACCURACY_*` constants then additionally shrink the
+ * conditional goal-vs-behind chance for the same reason a tight angle is
+ * genuinely more likely to clip a post even once "on target" in the loose
+ * sense. `SHOT_DIFFICULTY_JITTER` keeps a small residual random component
+ * (was the ENTIRE 30-point spread pre-round-42) — real shots still have
+ * real execution variance beyond pure geometry+skill, just no longer the
+ * dominant term the way a flat 40-70 roll was.
+ */
+const SHOT_DIFFICULTY_BASE = -70;
+const SHOT_DEPTH_PENALTY_SCALE = 90;
+const SHOT_ANGLE_PENALTY_SCALE = 85;
+const SHOT_DIFFICULTY_JITTER = 8;
+const GOAL_ACCURACY_MAX = 0.995;
+const GOAL_ACCURACY_MIN = 0.3;
+const GOAL_ACCURACY_DEPTH_PENALTY = 0.07;
+const GOAL_ACCURACY_ANGLE_PENALTY = 0.5;
 /** See its own use in `runStoppage` — a real, cited correlation (AFL.com.au: ruckmen tap to a favoured side 75-80% of the time), expressed as a rating bonus since tap *direction* itself isn't modelled. */
 const FAVOURED_SIDE_CLEARANCE_BONUS = 1.3;
 /** See its own use in `runShot` — the share of a shot that "misses everything" (not a behind) that goes out of bounds for a throw-in, gap #73. */
@@ -2517,20 +2549,35 @@ function setShotProbability(shooter: Player, shotContext: State["shotContext"], 
 
 function runShot(ctx: Ctx, state: State): State {
   const shooter = state.carrier!;
+  const possessingTeam = teamOf(ctx, state.possession);
   const possessingPlan = planFor(ctx, state.possession);
   const defendingPlan = planFor(ctx, otherSide(state.possession));
-  const isSetShot = ctx.rng() < setShotProbability(shooter, state.shotContext, possessingPlan, teamOf(ctx, state.possession).positions);
+  const isSetShot = ctx.rng() < setShotProbability(shooter, state.shotContext, possessingPlan, possessingTeam.positions);
   const rating =
     (isSetShot
       ? computeContestRating(shooter, ["skill", "kickMaxDistance", "copeWithPressure", "confidence"])
       : computeContestRating(shooter, ["xFactor", "agility", "copeWithPressure"])) *
     conditionMultiplierFor(ctx, state.possession, shooter);
-  const difficulty = SHOT_DIFFICULTY_MIN + ctx.rng() * SHOT_DIFFICULTY_RANGE;
+  // Aug 2026 round 42 — real distance/angle to goal, not a flat random roll;
+  // see SHOT_DIFFICULTY_BASE's own doc comment. Same tracked-position-
+  // preferred, carrierPosition-as-fallback pattern this file already uses
+  // elsewhere (e.g. resolveUncontestedGather's receiver, above).
+  const shooterPos = ctx.trackedPositions.get(shooter.PlayerID) ?? carrierPosition(shooter, possessingTeam.positions?.get(shooter.PlayerID), state.zone, possessingTeam.positions);
+  const { depth, angleSeverity } = shotGeometry(shooterPos, state.possession);
+  const difficulty = SHOT_DIFFICULTY_BASE + SHOT_DEPTH_PENALTY_SCALE * depth + SHOT_ANGLE_PENALTY_SCALE * angleSeverity + (ctx.rng() - 0.5) * 2 * SHOT_DIFFICULTY_JITTER;
   const onTarget = resolveThreshold(rating, difficulty, ctx.rng);
 
   const line = lineFor(ctx, shooter);
   const scoreLine = state.possession === "home" ? ctx.score.home : ctx.score.away;
-  const goalChance = P_GOAL_GIVEN_ON_TARGET * opponentFloodGoalAccuracyMultiplier(styleFor(defendingPlan));
+  // Aug 2026 round 42 — the same geometry also shrinks the conditional
+  // goal-vs-behind chance (a tight angle is genuinely more likely to clip a
+  // post even once "on target" in the loose sense) — see SHOT_DIFFICULTY_
+  // BASE's own doc comment for why both rolls use it, not just one.
+  const geometryGoalAccuracy = Math.max(
+    GOAL_ACCURACY_MIN,
+    Math.min(GOAL_ACCURACY_MAX, GOAL_ACCURACY_MAX - GOAL_ACCURACY_DEPTH_PENALTY * depth - GOAL_ACCURACY_ANGLE_PENALTY * angleSeverity),
+  );
+  const goalChance = geometryGoalAccuracy * opponentFloodGoalAccuracyMultiplier(styleFor(defendingPlan));
 
   if (onTarget.success && ctx.rng() < goalChance) {
     line.goals += 1;

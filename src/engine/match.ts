@@ -1153,7 +1153,14 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     if (ctx.rng() < runChance) {
       const newZone = advanceZone(state.zone, state.possession);
       const verb = runTicksSoFar === 0 ? "finds space and runs it forward, bouncing along the way" : "keeps running, another bounce";
-      const carrierPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
+      // Round 36 — carrierPos itself now prefers the carrier's real
+      // movement.ts-tracked position over the stateless carrierPosition
+      // estimate, same pattern as the disposerPos fix rounds 33/35 already
+      // gave the kick/handball call sites just above. This is the SAME
+      // variable both the chaser-selection closestDefender call and the
+      // catch-probability distance calc below read, so fixing it here closes
+      // both real-position gaps at once.
+      const carrierPos = ctx.trackedPositions.get(carrier.PlayerID) ?? carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
 
       // Persistent chase — Aug 2026 round 24, see CHASE_PURSUIT_DISTANCE's
       // own doc comment. The SAME chaser (state.chaserId), re-looked-up by
@@ -1163,14 +1170,17 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       // plausibly close enough to be pursuing at all.
       let chaser = state.chaserId ? onGroundPlayers(defendingTeam).find((p) => p.PlayerID === state.chaserId) : undefined;
       if (!chaser) {
-        const closest = closestDefender(defendingSide, defendingTeam, state.zone, state.possession, carrierPos);
+        const closest = closestDefender(defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions);
         if (closest && closest.distance <= CHASE_PURSUIT_DISTANCE) chaser = closest.player;
       }
 
       if (chaser) {
+        // Round 36 — same real-preferred pattern for the chaser's own
+        // position feeding the catch-probability roll below.
         const distance = distanceBetween(
           carrierPos,
-          proximityFor(chaser, defendingSide, defendingTeam.positions?.get(chaser.PlayerID), state.zone, state.possession, undefined, defendingTeam.positions),
+          ctx.trackedPositions.get(chaser.PlayerID) ??
+            proximityFor(chaser, defendingSide, defendingTeam.positions?.get(chaser.PlayerID), state.zone, state.possession, undefined, defendingTeam.positions),
         );
         const chaserTactic = tacticFor(defendingPlan, chaser, defendingTeam.positions);
         const chaserInForwardHalf = isForward50(state.zone, defendingSide);

@@ -308,11 +308,43 @@ export function nearbyDefenders(
  * away to contest, which is exactly the question `nearbyDefenders`' own
  * null-when-empty contract can't answer.
  */
-export function closestDefender(side: Side, team: MatchTeam, zone: Zone, possession: Side, target: AbstractPosition): NearbyPick | null {
+/**
+ * Aug 2026 round 36 — Tyler: "Let's finish off the ClosestDefender function
+ * as well," closing the last of the three functions round 33 originally
+ * flagged as inconsistent with `weightedKickTarget`'s own new real-position
+ * preference (`weightedHandballTarget` closed round 35, `nearbyDefenders`
+ * closed round 34). Same real-preferred, stateless-fallback pattern as every
+ * round since: each opponent's distance from `target` is now computed from
+ * their real, `movement.ts`-tracked position when one exists in
+ * `trackedPositions`, falling back to the existing stateless `proximityFor`
+ * estimate otherwise. `target` itself was already being resolved
+ * real-preferred by every one of this function's own call sites before this
+ * round (each already has its own `trackedPositions.get(<player>) ?? ...`
+ * fallback chain) — this round closes the other half: the OPPONENTS being
+ * measured against were still exclusively stateless regardless of what
+ * `target` itself was.
+ *
+ * Lower risk than round 34's `nearbyDefenders` fix, structurally: this
+ * function's own result only ever feeds `spaceWeight` (`positioning.ts`), a
+ * soft, always-positive, capped preference curve — never a hard cutoff like
+ * `kickRangeWeight`/`handballRangeWeight`. There is no "zero eligible
+ * candidates" failure mode here the way round 35 hit, so no fallback design
+ * is needed on top of the real-position preference itself.
+ */
+export function closestDefender(
+  side: Side,
+  team: MatchTeam,
+  zone: Zone,
+  possession: Side,
+  target: AbstractPosition,
+  trackedPositions: Map<number, AbstractPosition>,
+): NearbyPick | null {
   const pool = onGroundPlayers(team);
   let best: NearbyPick | null = null;
   for (const player of pool) {
-    const distance = distanceBetween(target, proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions));
+    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
+    const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+    const distance = distanceBetween(target, rangePos);
     if (!best || distance < best.distance) best = { player, distance };
   }
   return best;
@@ -391,8 +423,13 @@ export function weightedKickTarget(
   const realDisposerPos = trackedPositions.get(disposer.PlayerID) ?? disposerPos;
   const candidates: (NearbyPick & { kickDistance: number; progress: number })[] = pool.map((player) => {
     const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
-    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
     const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+    // Round 36 — `rangePos` (real-preferred) rather than the stateless `pos`
+    // is now what "how open is this candidate" gets measured from too, same
+    // as it already was for `kickDistance`/`progress` — see
+    // `closestDefender`'s own doc comment (above, this file) for why the
+    // OPPONENT side of this question needed the same treatment.
+    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, rangePos, trackedPositions);
     return {
       player,
       distance: closest ? closest.distance : Infinity,
@@ -474,8 +511,11 @@ export function weightedHandballTarget(
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
   const candidates: (NearbyPick & { handballDistance: number })[] = pool.map((player) => {
     const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
-    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, pos);
     const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+    // Round 36 — same real-preferred `rangePos` now used for "how open is
+    // this candidate" too, not just handballDistance. See closestDefender's
+    // own doc comment (above, this file).
+    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, rangePos, trackedPositions);
     return {
       player,
       distance: closest ? closest.distance : Infinity,

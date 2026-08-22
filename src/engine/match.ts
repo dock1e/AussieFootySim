@@ -240,6 +240,33 @@ const P_DISPOSAL_BECOMES_CONTEST = 0.35;
  * plausible middle value pending balance-simulator tuning.
  */
 const P_FORWARD_MARK_IS_LEAD = 0.4;
+/**
+ * Aug 2026 round 41 — closes the "no reachable ground-ball-to-shot pathway"
+ * gap `verify_round38_scratch.ts` found and [[Match Realism Review]]'s own
+ * "Round 38 addition" logged: every forward-50 `CONTEST` used to be
+ * unconditionally a marking duel (`markContested`/`markLead`), because
+ * `contestType` below was a strict function of zone alone — `groundBall`
+ * only when NOT in forward 50. Real AFL's forward-50 contests aren't always
+ * a clean mark, though — a spoiled ball, a dribbled grubber, a rushed
+ * disposal that doesn't set up a genuine marking contest all leave a loose
+ * ball on the deck right where a crumbing forward can pounce on it, exactly
+ * the scenario Finding 3 was originally asked about. This constant is the
+ * chance a forward-50 `CONTEST` tick is one of those scrambles instead of a
+ * marking duel — rolled BEFORE the existing `P_FORWARD_MARK_IS_LEAD` split,
+ * so the two compose (lead/contested only decide the flavour of the
+ * remaining marking-duel share, same as before this round). Chosen as "less
+ * common than a clean mark, but a real, regular occurrence" — the same
+ * "plausible middle value pending balance-simulator tuning" status as every
+ * other P_ constant in this section, not derived from a cited real-AFL
+ * split. `contestType` staying `"groundBall"` here is what makes the rest of
+ * this mechanic free: the existing groundBall attribute set (skill/agility/
+ * readPlay), stat crediting (contestedPoss, not marks), execution roll, and
+ * — critically — `setShotProbability`'s already-correct
+ * `P_SET_SHOT_GIVEN_GROUNDBALL` branch (round 38) all just start firing for
+ * real the moment this makes `contestType === "groundBall"` reachable while
+ * `isForward50` is also true.
+ */
+const P_FORWARD50_CONTEST_IS_GROUNDBALL = 0.3;
 const P_KICK_VS_HANDBALL = 0.55;
 const P_SET_SHOT_VS_SNAP = 0.7;
 /**
@@ -982,31 +1009,26 @@ export interface State {
    * transition that forgets to set it degrades to the pre-round-38 behaviour
    * rather than throwing.
    *
-   * DISCLOSED GAP, found via real-data verification
-   * (verify_round38_scratch.ts), not assumed on paper: all 4 real sites
-   * currently set `"mark"` — `"groundBall"` is a fully correct, real branch
-   * of `setShotProbability` (and of this type), but is NOT reachable from any
-   * live code path today. `runMarkingContest`'s two sites are kick-reception
-   * marks by construction (`MARKING_CONTEST` only ever represents catching a
-   * kick — see that function's own doc comment), so "mark" is genuinely
-   * correct there. `runContest`'s two sites were ORIGINALLY written as
-   * `contestType === "groundBall" ? "groundBall" : "mark"`, matching this
-   * round's original design intent — but `runContest`'s own `contestType`
-   * assignment (a few lines above in that function) can only ever be
-   * "groundBall" when `!isForward50(state.zone, attackingSide)`, while the
-   * SHOT-routing gate immediately guarding both of `runContest`'s SHOT
-   * returns requires `isForward50(state.zone, attackingSide)` on that exact
-   * same, unchanged zone/side — a pre-existing (round 23-era) structural
-   * coupling this round didn't intend to touch, which makes those two
-   * conditions mutually exclusive. A ground-ball recovery in this engine
-   * therefore always becomes a new `GENERAL_PLAY` carry (advance, then
-   * dispose again) rather than an immediate shot; only a mark ever leads
-   * straight to `SHOT`. Closing this for real — a genuine "scrambled
-   * ground-ball snap right near goal" moment — needs a new, disclosed
-   * mechanic (e.g. an independent, small shot-chance roll on a `groundBall`
-   * contest win), out of scope for this round's approved "small, context/
-   * player-suitability" piece; logged as a new, named gap in [[Match Realism
-   * Review]] rather than silently designed around.
+   * Aug 2026 round 41 — the `"groundBall"` branch above is now genuinely
+   * reachable, closing a gap rounds 38-40 disclosed rather than assumed
+   * away. `runMarkingContest`'s two sites are kick-reception marks by
+   * construction (`MARKING_CONTEST` only ever represents catching a kick),
+   * so `"mark"` is genuinely correct there, unchanged. `runContest`'s two
+   * sites used to be structurally unable to produce `"groundBall"` at all:
+   * its own `contestType` assignment was a strict function of zone
+   * (`groundBall` only when NOT in forward 50), while the SHOT-routing gate
+   * guarding both of its SHOT returns required forward 50 on that same
+   * zone — mutually exclusive by construction (confirmed via
+   * `verify_round38_scratch.ts`'s own real-data finding: 0 groundBall-
+   * preceded goals across 60 matches, not a sampling fluke). Closed by
+   * `P_FORWARD50_CONTEST_IS_GROUNDBALL` (see its own doc comment, right
+   * above `runContest`'s `contestType` assignment): a forward-50 `CONTEST`
+   * can now genuinely resolve as a scramble instead of a marking duel — a
+   * spoiled ball, a dribbled grubber, a rushed disposal that a crumbing
+   * forward pounces on, exactly the moment Finding 3 was originally asked
+   * about. Both of `runContest`'s SHOT returns read `contestType` to set
+   * this field correctly now (`resolveUncontestedGather`'s own site
+   * previously hardcoded `"mark"`, fixed to match its sibling site).
    */
   shotContext?: "mark" | "groundBall";
 }
@@ -1959,15 +1981,11 @@ function resolveUncontestedGather(
   );
   if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
     // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment.
-    // Always "mark", not conditional on contestType — `contestType` can only
-    // be "groundBall" when `!isForward50(state.zone, attackingSide)` (this
-    // function's own contestType assignment above), and this branch only
-    // runs when `isForward50(state.zone, attackingSide)` is true on that SAME
-    // unchanged zone/side — the two can never co-occur, so a groundBall win
-    // never reaches this return at all. Caught via real-data verification
-    // (verify_round38_scratch.ts), not assumed — see State.shotContext's own
-    // doc comment for the full disclosed gap this reveals.
-    return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep, shotContext: "mark" };
+    // Aug 2026 round 41 — `contestType` CAN be "groundBall" here now (see
+    // P_FORWARD50_CONTEST_IS_GROUNDBALL's own doc comment), so this can no
+    // longer hardcode "mark" the way round 38 correctly did back when the
+    // two were still mutually exclusive by construction.
+    return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep, shotContext: contestType === "groundBall" ? "groundBall" : "mark" };
   }
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep, carrierUncontested: true };
 }
@@ -1981,10 +1999,14 @@ function runContest(ctx: Ctx, state: State): State {
   const defendingPlan = planFor(ctx, defendingSide);
 
   // markLead split Aug 2026 — see P_FORWARD_MARK_IS_LEAD's own doc comment.
+  // groundBall-in-forward-50 split Aug 2026 round 41 — see
+  // P_FORWARD50_CONTEST_IS_GROUNDBALL's own doc comment.
   const contestType: "markContested" | "markLead" | "groundBall" = isForward50(state.zone, attackingSide)
-    ? ctx.rng() < P_FORWARD_MARK_IS_LEAD
-      ? "markLead"
-      : "markContested"
+    ? ctx.rng() < P_FORWARD50_CONTEST_IS_GROUNDBALL
+      ? "groundBall"
+      : ctx.rng() < P_FORWARD_MARK_IS_LEAD
+        ? "markLead"
+        : "markContested"
     : "groundBall";
   // The attacking rep is still weighted by involvement at the contest's own
   // zone (see engine/involvement.ts) rather than a uniform pick — e.g. a
@@ -2118,6 +2140,9 @@ function runContest(ctx: Ctx, state: State): State {
     );
     if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
       // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment.
+      // This ternary was write-only until round 41 (contestType could never
+      // actually be "groundBall" here before then) — now genuinely reachable,
+      // see P_FORWARD50_CONTEST_IS_GROUNDBALL's own doc comment.
       return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep, shotContext: contestType === "groundBall" ? "groundBall" : "mark" };
     }
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep };
@@ -2471,13 +2496,12 @@ function runHandballContest(ctx: Ctx, state: State): State {
  * accuracy), and even a clean uncontested mark occasionally gets played on
  * quickly rather than squared up in the box.
  *
- * `shotContext` is "mark" for every real SHOT tick in the current engine —
- * see `State.shotContext`'s own doc comment for the disclosed, real-data-
- * verified reason "groundBall" isn't reachable from any live path yet. This
- * function's own groundBall branch is still fully correct and exercised
- * directly (not through match simulation) in `verify_round38_scratch.ts`'s
- * Section 5 — ready the moment a future round adds a real ground-ball-to-
- * shot pathway.
+ * `shotContext` was "mark" for every real SHOT tick through rounds 38-40 —
+ * `P_FORWARD50_CONTEST_IS_GROUNDBALL` (Aug 2026 round 41, see its own doc
+ * comment) closed the structural gap that made "groundBall" unreachable, so
+ * this function's own groundBall branch — exercised directly since round 38
+ * (`verify_round38_scratch.ts`'s Section 5) but never through real match
+ * simulation until now — is live for real as of round 41.
  */
 function setShotProbability(shooter: Player, shotContext: State["shotContext"], plan: TeamPlan | null, positions?: Map<number, Position>): number {
   const base =

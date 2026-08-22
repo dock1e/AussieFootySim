@@ -1331,6 +1331,33 @@ function resolveLongKickExecution(ctx: Ctx, carrier: Player, receiverPick: KickP
   return { distance: Math.max(0, receiverPick.distance - LONG_KICK_MISS_DISTANCE_PENALTY), missed: true };
 }
 
+/**
+ * Aug 2026 round 43 — Tyler, live testing: a Full Back (Moore) received a
+ * forward-50 kick and shot on goal; a spoil (Petty) rendered at the wrong
+ * end of the ground. Root cause, shared by both: `ctx.trackedPositions` is
+ * now real-distance ground truth for `weightedKickTarget`/`nearbyDefenders`
+ * (rounds 33-36) and round 42's own `shotGeometry`, but several places in
+ * this file assign a player as the carrier/representative AT a given zone
+ * without that player's own tracked position ever being confirmed — or
+ * set — to actually match it. Two call sites do this (Run and Carry's own
+ * player-driven zone advance, and `runContest`'s zone-only-weighted
+ * `attackerRep` pick — see each call site's own comment for why); this is
+ * the one shared primitive both use to close the gap the same way: a hard
+ * set, not a bounded nudge, because both call sites are exactly the moment
+ * this engine gains concrete, authoritative knowledge of where that player
+ * now is — there's nothing fuzzy left to blend toward. `zoneFrac`/`Zone`
+ * share the same 0-4 home-relative scale directly (the same convention
+ * `carrierPosition`, positioning.ts, already relies on), so no mirroring is
+ * needed here either. Six further `weightedPlayerChoice` call sites (free
+ * kick takers, loose-ball recoverers, the kick-in taker) share the identical
+ * gap — narrower blast radius (much rarer events), disclosed as a follow-up
+ * rather than folded into this round, see ROADMAP.
+ */
+function snapTrackedZone(ctx: Ctx, playerId: number, zone: Zone): void {
+  const existing = ctx.trackedPositions.get(playerId);
+  ctx.trackedPositions.set(playerId, { zoneFrac: zone, lane: existing?.lane ?? 0 });
+}
+
 function resolveUnpressuredDisposal(
   ctx: Ctx,
   state: State,
@@ -1510,6 +1537,16 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       // catch-probability distance calc below read, so fixing it here closes
       // both real-position gaps at once.
       const carrierPos = ctx.trackedPositions.get(carrier.PlayerID) ?? carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
+
+      // Aug 2026 round 43 — see snapTrackedZone's own doc comment for why:
+      // `advanceZone` just above moves the discrete zone a full unit (~40m)
+      // to represent this bounce, but ctx.trackedPositions only followed the
+      // carrier via nudgeInvolvedPositions' paced, rendering-calibrated
+      // maxStepFor cap — 3-6x too slow to keep pace, compounding every
+      // consecutive run tick. Other players' own tracked positions are
+      // deliberately left untouched here — teammates and opponents genuinely
+      // haven't moved just because the carrier bounced past them.
+      snapTrackedZone(ctx, carrier.PlayerID, newZone);
 
       // Persistent chase — Aug 2026 round 24, see CHASE_PURSUIT_DISTANCE's
       // own doc comment. The SAME chaser (state.chaserId), re-looked-up by
@@ -2045,6 +2082,16 @@ function runContest(ctx: Ctx, state: State): State {
   // marking contest inside forward 50 now actually favours a Key Forward as
   // the attacking rep, not any of the 22 equally.
   const attackerRep = weightedPlayerChoice(ctx.rng, attackingSide, attackingTeam, state.zone);
+  // Aug 2026 round 43 — see snapTrackedZone's own doc comment. Unlike
+  // weightedKickTarget/nearbyDefenders, weightedPlayerChoice picks purely by
+  // positional/zone fit with no real-distance check at all, so attackerRep's
+  // own tracked position can be nowhere near state.zone at the moment
+  // they're chosen to represent a contest happening there. The very next
+  // line reads that position as the real target nearbyDefenders searches
+  // around — left stale, a defender genuinely near the attacker's old spot
+  // (not this contest's actual zone) could "win" the spoil, rendering at the
+  // wrong end of the ground the way Tyler reported for Petty.
+  snapTrackedZone(ctx, attackerRep.PlayerID, state.zone);
 
   // Real distance-driven eligibility check — Aug 2026 round 23, same
   // positioning.ts primitives as runGeneralPlay's own defender check (see

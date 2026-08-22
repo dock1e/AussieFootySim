@@ -290,6 +290,25 @@ export interface KickPick extends NearbyPick {
  * to `carrierPosition(...)`, the same real-position-preference pattern, just
  * applied at the call site since this function was never given that player's
  * identity, only their already-resolved position.
+ *
+ * `groundedUntilTick`/`tick` (Aug 2026 round 39) — Tyler, watching the ball
+ * bounce between the same two named players over and over: "The player who
+ * is tackled should be prevented from contesting the next ball even though
+ * it is right next to them (this player was pulled to the ground, hence
+ * their inability to contest)." `match.ts` populates `groundedUntilTick`
+ * (`Ctx`'s own new field) at the two places a player is genuinely put to
+ * ground — a landed tackle, a persistent-chase run-down — with the tick
+ * number their hold-down expires; this is the one, single choke point every
+ * one of those call sites' "who can contest the ball right now" pool passes
+ * through, so filtering it here closes the gap everywhere at once rather
+ * than at each call site separately. Deliberately the SAME distance-style
+ * exclusion `proximityWeight(d.distance) > 0` already uses — a grounded
+ * player reads as "genuinely not available to contest this tick," not a
+ * zero-weighted-but-still-eligible candidate, so `weightedChoice` never even
+ * sees them. `closestDefender` (below) is deliberately NOT given this same
+ * filter — it answers "who's closing in on this carrier" / "how open is this
+ * receiver," not "who's eligible to contest," and a grounded opponent still
+ * occupies real ground for those questions.
  */
 export function nearbyDefenders(
   rng: Rng,
@@ -299,6 +318,8 @@ export function nearbyDefenders(
   possession: Side,
   target: AbstractPosition,
   trackedPositions: Map<number, AbstractPosition>,
+  groundedUntilTick: Map<number, number>,
+  tick: number,
 ): NearbyPick | null {
   const pool = onGroundPlayers(team);
   const withDistance = pool.map((player) => {
@@ -306,7 +327,7 @@ export function nearbyDefenders(
     const pos = trackedPositions.get(player.PlayerID) ?? estimated;
     return { player, distance: distanceBetween(target, pos) };
   });
-  const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0);
+  const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0 && (groundedUntilTick.get(d.player.PlayerID) ?? -Infinity) < tick);
   if (eligible.length === 0) return null;
   return weightedChoice(rng, eligible, (d) => involvementWeight(side, d.player, zone, team.positions?.get(d.player.PlayerID)) * proximityWeight(d.distance));
 }

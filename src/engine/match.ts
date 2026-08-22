@@ -396,6 +396,31 @@ const MAX_CONSECUTIVE_RUN_TICKS = 2;
 const TACKLE_ATTEMPT_HANDICAP = 37;
 
 /**
+ * Aug 2026 round 39 — Tyler, watching the ball bounce between the same two
+ * named players over and over: "We need to include a kind of hold down
+ * timer, especially for tackles. The player who is tackled should be
+ * prevented from contesting the next ball even though it is right next to
+ * them (this player was pulled to the ground, hence their inability to
+ * contest)." Set on `Ctx.groundedUntilTick` (see that field's own doc
+ * comment) at the two places a player is genuinely put to ground — a landed
+ * tackle (`runGeneralPlay`) and a persistent-chase run-down (also
+ * `runGeneralPlay`) — as `ctx.tick + TACKLE_HOLD_DOWN_TICKS`, read by
+ * `involvement.ts`'s `nearbyDefenders`. `2` is reasoned, not derived from any
+ * citation (same disclosed-placeholder status as every other constant in
+ * this section): `ctx.tick` advances once per resolved phase-step regardless
+ * of phase type (`simulateQuarter`), not a fixed real-world time slice, so
+ * "2 ticks" isn't literally "2 seconds" — it's simply enough to guarantee the
+ * grounded player can't be the very next contest candidate (round 39's own
+ * bug, needing only 1) with a little real margin on top for "getting back to
+ * your feet plausibly takes more than the blink of an eye." Deliberately NOT
+ * applied to a fumble/spilled-execution turnover (`resolveLooseBall` below)
+ * — evading a tackle attempt but then still spraying the disposal, or
+ * dropping a mark/ground-ball gather, isn't the same physical moment as being
+ * pulled to ground, so neither leaves anyone grounded.
+ */
+const TACKLE_HOLD_DOWN_TICKS = 2;
+
+/**
  * Contest execution roll — Aug 2026 round 22, Tyler's process-map diagram
  * (Rows 1/3: "Roll: Gather the ball"/"Roll: Mark the ball", ~99% success /
  * 1% fail). Once `resolveContest` has already decided who wins the
@@ -551,6 +576,19 @@ export interface Ctx {
   trackedPositions: Map<number, AbstractPosition>;
   /** Each defender/forward's assigned direct opponent, both directions — resolved once at match start (`resolveMatchups`, `movement.ts`) and held for the whole match; see that function's own doc comment for exactly how a matchup is decided. */
   matchups: Map<number, number>;
+  /**
+   * Aug 2026 round 39 — playerId -> the `tick` their tackle hold-down expires
+   * (inclusive), populated wherever a player is genuinely put to ground (see
+   * `TACKLE_HOLD_DOWN_TICKS`'s own doc comment). A plain `Map` rather than a
+   * `State` field on purpose: unlike `chaserId`/`stoppageTapWentToHand`,
+   * being grounded isn't scoped to one specific phase-transition chain — it
+   * has to survive into whatever the very next phase happens to be (usually
+   * `GENERAL_PLAY`, but not guaranteed), so it lives on `Ctx` alongside
+   * `matchups`/`trackedPositions`, the other cross-tick, player-identity-keyed
+   * facts about the match. Read by `involvement.ts`'s `nearbyDefenders` — see
+   * that function's own doc comment for the full picture.
+   */
+  groundedUntilTick: Map<number, number>;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
@@ -682,6 +720,110 @@ function recordContest(ctx: Ctx, type: ContestType, winner: Player, loser: Playe
     { playerId: winner.PlayerID, stat: fields.wins, delta: 1 },
     { playerId: loser.PlayerID, stat: fields.attempts, delta: 1 },
   ];
+}
+
+/**
+ * Aug 2026 round 39 — the genuine scramble that decides who picks up a ball
+ * that's just come loose (a disposal fumbled under evaded-tackle pressure, a
+ * spilled contested-mark/ground-ball execution, a spilled handball
+ * reception). Tyler's own diagnosis, watching the exact bug this fixes: "The
+ * ball has been fumbled, it is now a loose ball which both Van Rooyen and
+ * Moore are contesting. Van Rooyen wins the contest and gathers the hard
+ * ball get. Now Moore is applying pressure to Van Rooyen on Van Rooyen's
+ * disposal - all of this makes sense, but then if Moore's pressure results
+ * in a fumble and Moore wins the next hard ball get that's the strangeness
+ * ... it is speed/agility/endurance etc which determines which of the two
+ * players is more likely to win the hardball get after the ball was
+ * fumbled." Every one of this function's 4 real call sites used to hand the
+ * loose ball straight to whichever named opponent had been applying
+ * pressure, unconditionally — a real, provable dead certainty, not just an
+ * unfair coin flip, which is exactly what let the same two players trade the
+ * ball back and forth forever (see [[Match Realism Review]]'s own round 39
+ * section for the full before/after).
+ *
+ * Deliberately a manual `resolveThreshold` check, not `resolveContest` —
+ * same reasoning `runGeneralPlay`'s own tackle-attempt roll gives for itself
+ * (see `TACKLE_ATTEMPT_HANDICAP`'s doc comment): this needs a plain,
+ * symmetric two-player probability roll, not a named `ContestType` wired
+ * through `CONTEST_STAT_FIELDS`/`recordContest`'s attempts/wins bookkeeping
+ * (deliberately not extended for this — see this function's own round-39
+ * ROADMAP/Match Realism Review writeup for why that was scoped out). Rates
+ * on `speed`/`agility`/`endurance` specifically — Tyler's own named
+ * attributes, and genuinely distinct from every other roll already
+ * surrounding a loose ball in this file (the tackle-attempt roll's
+ * tenacity/strengthManOnMan/aggression vs. agility/acceleration/xFactor is
+ * about winning the CONTACT; the groundBall `ContestType`'s
+ * strengthGroundLevel/agility/courage is about winning a PACK; this is
+ * neither — just two players reacting to an unpredictable bouncing ball,
+ * which is a foot-speed/reflexes/fitness question before it's a
+ * strength-and-hardness one). `conditionMultiplierFor` applies the same
+ * fatigue discount every other roll in this file already gets.
+ *
+ * The winner is credited `contestedPoss` (an existing `BoxScoreLine` field —
+ * deliberately no new stat category for this, keeping the change additive
+ * rather than rippling into `ratings.ts`/the stats-modal UI the way a new
+ * `ContestType` pairing would have, see `BoxScoreLine`'s own doc comment for
+ * why that ripple is real); the loser gets nothing extra, callers still
+ * credit whatever attempt-tracking their own contest type already used
+ * (`fields.attempts`, `markContestedAttempts`, `tackleAttempts`) unconditionally,
+ * since that already happened regardless of who wins this second roll.
+ *
+ * Deliberately does NOT model a literal ball displacement — Tyler's own
+ * framing ("the ball needs to move a small distance/direction away from the
+ * players") is the intuition for why this shouldn't be a deterministic
+ * hand-off, not a request for a new continuous ball-position coordinate this
+ * engine doesn't have today (position is tracked per-PLAYER via
+ * `ctx.trackedPositions`, never a separate ball entity — see `movement.ts`'s
+ * own top comment). A genuine, fair, attribute-driven contest for who reacts
+ * first delivers the actual gameplay fix; a rendered scatter animation on
+ * top is a disclosed possible future round, not built here.
+ */
+function resolveLooseBall(ctx: Ctx, sideA: Side, playerA: Player, sideB: Side, playerB: Player): { player: Player; side: Side } {
+  const ratingA = computeContestRating(playerA, ["speed", "agility", "endurance"]) * conditionMultiplierFor(ctx, sideA, playerA);
+  const ratingB = computeContestRating(playerB, ["speed", "agility", "endurance"]) * conditionMultiplierFor(ctx, sideB, playerB);
+  return resolveThreshold(ratingA, ratingB, ctx.rng).success ? { player: playerA, side: sideA } : { player: playerB, side: sideB };
+}
+
+/**
+ * Aug 2026 round 39 — text variety for `resolveLooseBall`'s own 4 call
+ * sites, Tyler's own direct ask: "We should also introduce more variety into
+ * the text script; perhaps it could be 'fumbled' or 'the ball is knocked
+ * loose in the tackle' or 'Moore Smothers the kick' or 'The ball spills
+ * free'." Two separate small pools rather than one shared one: `DISPOSAL_
+ * FUMBLE_PHRASES` covers `runGeneralPlay`'s own disposal-under-pressure
+ * spill, where the spiller is genuinely mid-kick-or-handball, so "smothers
+ * the disposal" (real AFL term for blocking a kicking action specifically)
+ * fairly applies; `RECEPTION_FUMBLE_PHRASES` covers the other 3 sites
+ * (`runContest`/`runMarkingContest`'s execution fumbles, `runHandballContest`'s
+ * contested-fail), where the spiller is gathering/marking/catching, not
+ * disposing — "smothers" wouldn't fit there, nobody's kicking anything.
+ * `describeLooseBall` below picks one at random (`ctx.rng`, same
+ * determinism contract as every other roll in this file) and appends a
+ * recovery clause naming whichever of the two actually won `resolveLooseBall`
+ * above.
+ */
+const DISPOSAL_FUMBLE_PHRASES: ((spiller: string, presser: string) => string)[] = [
+  (c, d) => `${c} fumbles it under pressure from ${d}`,
+  (c, d) => `${d} knocks the ball loose in the tackle on ${c}`,
+  (_c, d) => `${d} smothers the disposal, the ball spills free`,
+  (_c, d) => `The ball spills free under pressure from ${d}`,
+  (c, d) => `${c} can't hold on under pressure from ${d}`,
+];
+const RECEPTION_FUMBLE_PHRASES: ((spiller: string, presser: string) => string)[] = [
+  (c, d) => `${c} can't hang on under pressure from ${d}`,
+  (c, d) => `${c} spills it under pressure from ${d}`,
+  (_c, d) => `The ball comes loose under pressure from ${d}`,
+  (c, d) => `${c} fumbles it under pressure from ${d}`,
+];
+function describeLooseBall(
+  ctx: Ctx,
+  phrases: readonly ((spiller: string, presser: string) => string)[],
+  spillerName: string,
+  presserName: string,
+  winnerIsSpiller: boolean,
+): string {
+  const phrase = phrases[Math.floor(ctx.rng() * phrases.length)](spillerName, presserName);
+  return winnerIsSpiller ? `${phrase} — ${spillerName} recovers it first` : `${phrase} — ${presserName} pounces on the loose ball`;
 }
 
 export interface State {
@@ -1305,7 +1447,21 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       let chaser = state.chaserId ? onGroundPlayers(defendingTeam).find((p) => p.PlayerID === state.chaserId) : undefined;
       if (!chaser) {
         const closest = closestDefender(defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions);
-        if (closest && closest.distance <= CHASE_PURSUIT_DISTANCE) chaser = closest.player;
+        // Aug 2026 round 39 — closestDefender itself is deliberately NOT
+        // grounding-aware (see nearbyDefenders' own doc comment,
+        // involvement.ts): it also drives kick/handball space scoring, where
+        // a downed player still genuinely occupies ground. But THIS use is
+        // different — freshly assigning who's about to chase someone down —
+        // and a just-grounded player obviously can't be that, so this one
+        // call site needs its own explicit check. Found by this round's own
+        // real-data verification (scripts/verify_round39_scratch.ts Section
+        // 2): a player dragged to ground could still be identified as the
+        // NEW chaser 2 ticks later and immediately run someone else down.
+        // Only the fresh lookup needs this — `state.chaserId`'s re-lookup
+        // above is always the tackler continuing an existing chase, never
+        // the one who was just put to ground.
+        const closestIsGrounded = closest && (ctx.groundedUntilTick.get(closest.player.PlayerID) ?? -Infinity) >= ctx.tick;
+        if (closest && !closestIsGrounded && closest.distance <= CHASE_PURSUIT_DISTANCE) chaser = closest.player;
       }
 
       if (chaser) {
@@ -1331,6 +1487,8 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
           tacklerLine.tackles += 1;
           tacklerLine.tackleAttempts += 1;
           tacklerLine.tackleWins += 1;
+          // Aug 2026 round 39 — genuinely put to ground, see TACKLE_HOLD_DOWN_TICKS's own doc comment.
+          ctx.groundedUntilTick.set(carrier.PlayerID, ctx.tick + TACKLE_HOLD_DOWN_TICKS);
           log(
             ctx,
             state.zone,
@@ -1395,7 +1553,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // nearbyDefenders itself now applies to every candidate defender, see that
   // function's own doc comment (involvement.ts).
   const carrierPos = ctx.trackedPositions.get(carrier.PlayerID) ?? carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
-  const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions);
+  const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
   const defender = tagger ?? nearby?.player ?? null;
 
   if (!defender) {
@@ -1477,6 +1635,8 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     const tacklerLine = lineFor(ctx, defender);
     tacklerLine.tackles += 1;
     tacklerLine.tackleWins += 1;
+    // Aug 2026 round 39 — genuinely put to ground, see TACKLE_HOLD_DOWN_TICKS's own doc comment.
+    ctx.groundedUntilTick.set(carrier.PlayerID, ctx.tick + TACKLE_HOLD_DOWN_TICKS);
     log(
       ctx,
       state.zone,
@@ -1517,17 +1677,26 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
 
   if (!result.success) {
+    // Aug 2026 round 39 — a genuine loose-ball scramble, not an automatic
+    // hand-off to whoever was applying pressure. See resolveLooseBall's own
+    // doc comment for the full diagnosis (Tyler's own Van Rooyen/Moore
+    // example is exactly this branch).
+    const winner = resolveLooseBall(ctx, state.possession, carrier, defendingSide, defender);
+    lineFor(ctx, winner.player).contestedPoss += 1;
     log(
       ctx,
       state.zone,
-      state.possession,
+      winner.side,
       "GENERAL_PLAY",
-      `${carrier.lname} fumbles it under pressure from ${defender.lname}`,
+      describeLooseBall(ctx, DISPOSAL_FUMBLE_PHRASES, carrier.lname, defender.lname, winner.player.PlayerID === carrier.PlayerID),
       [defender.PlayerID, carrier.PlayerID],
-      [...gatherDeltas, { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 }],
+      [
+        ...gatherDeltas,
+        { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
+        { playerId: winner.player.PlayerID, stat: "contestedPoss", delta: 1 },
+      ],
     );
-    const newSide = otherSide(state.possession);
-    return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: defender };
+    return { phase: "GENERAL_PLAY", zone: state.zone, possession: winner.side, carrier: winner.player };
   }
 
   const line = lineFor(ctx, carrier);
@@ -1823,7 +1992,7 @@ function runContest(ctx: Ctx, state: State): State {
   // Round 34: real tracked position preferred here too — see involvement.ts's
   // nearbyDefenders doc comment.
   const attackerPos = ctx.trackedPositions.get(attackerRep.PlayerID) ?? carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone, attackingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos, ctx.trackedPositions);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
   if (!nearby) {
     return resolveUncontestedGather(ctx, state, attackingSide, defendingSide, defendingTeam, attackerRep, contestType);
   }
@@ -1871,30 +2040,33 @@ function runContest(ctx: Ctx, state: State): State {
       // not a clean win for either side. Both get the *attempt* they
       // genuinely made (recordContest's own attempts-to-both shape,
       // applied by hand since neither side actually "won" this one); no
-      // marks/contestedMarks/contestedPoss to anyone — real AFL doesn't
-      // credit a mark for a spilled contested grab either. The other rep
-      // scoops up the spill, mirroring the "spoils it and takes control"
-      // shape just below for a lost position battle.
-      const fumbleLabel = contestType === "groundBall" ? "can't hang onto the ground ball" : "spills the mark";
-      // Deltas below are a parallel ledger for the event log, not the source
-      // of truth — ctx.box must be mutated directly too (recordContest's own
-      // pattern), or fold-verification of events against the final box score
-      // mismatches by exactly one attempt per player per fumble.
+      // marks/contestedMarks to anyone — real AFL doesn't credit a mark for
+      // a spilled contested grab either. Aug 2026 round 39 — WHO recovers
+      // the spill is now a genuine `resolveLooseBall` scramble rather than
+      // an automatic hand-off to `defenderRep`; see that function's own doc
+      // comment. Deltas below are a parallel ledger for the event log, not
+      // the source of truth — ctx.box must be mutated directly too
+      // (recordContest's own pattern), or fold-verification of events
+      // against the final box score mismatches by exactly one attempt per
+      // player per fumble.
       (lineFor(ctx, attackerRep)[fields.attempts] as number) += 1;
       (lineFor(ctx, defenderRep)[fields.attempts] as number) += 1;
+      const looseBallWinner = resolveLooseBall(ctx, attackingSide, attackerRep, defendingSide, defenderRep);
+      lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
       log(
         ctx,
         state.zone,
-        defendingSide,
+        looseBallWinner.side,
         "CONTEST",
-        `${attackerRep.lname} ${fumbleLabel} — ${defenderRep.lname} scoops up the loose ball`,
+        describeLooseBall(ctx, RECEPTION_FUMBLE_PHRASES, attackerRep.lname, defenderRep.lname, looseBallWinner.player.PlayerID === attackerRep.PlayerID),
         [attackerRep.PlayerID, defenderRep.PlayerID],
         [
           { playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 },
           { playerId: defenderRep.PlayerID, stat: fields.attempts, delta: 1 },
+          { playerId: looseBallWinner.player.PlayerID, stat: "contestedPoss", delta: 1 },
         ],
       );
-      return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: defenderRep };
+      return { phase: "GENERAL_PLAY", zone: state.zone, possession: looseBallWinner.side, carrier: looseBallWinner.player };
     }
 
     const line = lineFor(ctx, attackerRep);
@@ -2063,7 +2235,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   // Round 34: real tracked position preferred here too — see involvement.ts's
   // nearbyDefenders doc comment.
   const receiverPos = ctx.trackedPositions.get(receiver.PlayerID) ?? carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
   if (!nearby) return attemptUncontestedMark();
 
   const defender = nearby.player;
@@ -2089,22 +2261,27 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       // fumble, mirroring runContest's own identical-shaped branch: both get
       // the attempt they genuinely made, applied by hand since neither side
       // actually "won" this one (recordContest's own shape doesn't fit a
-      // fumble either side of).
+      // fumble either side of). Aug 2026 round 39 — WHO recovers the spill
+      // is now a genuine `resolveLooseBall` scramble, not an automatic
+      // hand-off to `defender`; see that function's own doc comment.
       lineFor(ctx, receiver).markContestedAttempts += 1;
       lineFor(ctx, defender).markContestedAttempts += 1;
+      const looseBallWinner = resolveLooseBall(ctx, possessingSide, receiver, defendingSide, defender);
+      lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
       log(
         ctx,
         zone,
-        defendingSide,
+        looseBallWinner.side,
         "MARKING_CONTEST",
-        `${receiver.lname} spills the mark under pressure from ${defender.lname} — ${defender.lname} scoops up the loose ball`,
+        describeLooseBall(ctx, RECEPTION_FUMBLE_PHRASES, receiver.lname, defender.lname, looseBallWinner.player.PlayerID === receiver.PlayerID),
         [receiver.PlayerID, defender.PlayerID],
         [
           { playerId: receiver.PlayerID, stat: "markContestedAttempts", delta: 1 },
           { playerId: defender.PlayerID, stat: "markContestedAttempts", delta: 1 },
+          { playerId: looseBallWinner.player.PlayerID, stat: "contestedPoss", delta: 1 },
         ],
       );
-      return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
+      return { phase: "GENERAL_PLAY", zone, possession: looseBallWinner.side, carrier: looseBallWinner.player };
     }
     const deltas = [...recordContest(ctx, "markContested", receiver, defender)];
     lineFor(ctx, receiver).marks += 1;
@@ -2218,7 +2395,7 @@ function runHandballContest(ctx: Ctx, state: State): State {
   // Round 34: real tracked position preferred here too — see involvement.ts's
   // nearbyDefenders doc comment.
   const receiverPos = ctx.trackedPositions.get(receiver.PlayerID) ?? carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
   if (!nearby) return attemptCleanReceive();
 
   const defender = nearby.player;
@@ -2239,17 +2416,21 @@ function runHandballContest(ctx: Ctx, state: State): State {
     return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver };
   }
 
-  lineFor(ctx, defender).contestedPoss += 1;
+  // Aug 2026 round 39 — WHO recovers a spilled handball reception is now a
+  // genuine `resolveLooseBall` scramble, not an automatic hand-off to
+  // `defender`; see that function's own doc comment.
+  const looseBallWinner = resolveLooseBall(ctx, possessingSide, receiver, defendingSide, defender);
+  lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
   log(
     ctx,
     zone,
-    defendingSide,
+    looseBallWinner.side,
     "HANDBALL_CONTEST",
-    `${defender.lname} closes down the handball and scoops up the loose ball`,
+    describeLooseBall(ctx, RECEPTION_FUMBLE_PHRASES, receiver.lname, defender.lname, looseBallWinner.player.PlayerID === receiver.PlayerID),
     [defender.PlayerID, receiver.PlayerID],
-    [{ playerId: defender.PlayerID, stat: "contestedPoss", delta: 1 }],
+    [{ playerId: looseBallWinner.player.PlayerID, stat: "contestedPoss", delta: 1 }],
   );
-  return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
+  return { phase: "GENERAL_PLAY", zone, possession: looseBallWinner.side, carrier: looseBallWinner.player };
 }
 
 /**
@@ -2412,6 +2593,7 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
     // movement.ts`'s own top comment for the full design.
     matchups: resolveMatchups(home, away),
     trackedPositions: initialPositions(home, away, styleFor(homePlan), styleFor(awayPlan), MIDFIELD, "home"),
+    groundedUntilTick: new Map(),
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.

@@ -480,8 +480,41 @@ export function directionWeight(progress: number): number {
  */
 export const MAX_KICK_DISTANCE = 1.5;
 
+/**
+ * Aug 2026 round 38 — Match Realism Review Finding 2: Tyler's own field
+ * notes described real kicking as having genuine short/long variety (a
+ * 15-30m possession kick reads very differently from a 45-60m clearance
+ * kick), but `kickRangeWeight` below previously only expressed the far
+ * end of that range as a hard cutoff — every target inside `MAX_KICK_DISTANCE`
+ * was weighted identically regardless of whether it was 10m or 55m away.
+ * `SHORT_KICK_MAX_DISTANCE` = 0.75 lands at ~30m via the same ~40m/unit
+ * conversion `MAX_KICK_DISTANCE`'s own doc comment above establishes,
+ * marking the boundary between Tyler's "short" and "long" bands. This
+ * doesn't change target selection by itself (see `kickRangeWeight`'s new
+ * taper below) — it's also reused by `match.ts` to classify a kick's real
+ * travel distance for the new long-kick execution check (Finding 2), and
+ * `weightedKickTarget`'s new `KickPick.kickDistance` field is what makes
+ * that real per-candidate distance available to classify.
+ */
+export const SHORT_KICK_MAX_DISTANCE = 0.75;
+
+/**
+ * Aug 2026 round 38 — companion to `SHORT_KICK_MAX_DISTANCE` above: a kick
+ * target beyond it isn't wrong, just less preferred purely on distance
+ * grounds (a genuine long kick is a real, valid football play, not a
+ * mistake) — so this floors the taper rather than cutting to zero, the same
+ * "soft preference, not a hard cutoff" shape `spaceWeight`'s and
+ * `directionWeight`'s own doc comments above already establish for sibling
+ * weight functions in this file.
+ */
+export const KICK_RANGE_FLOOR = 0.35;
+
 export function kickRangeWeight(distance: number): number {
-  return distance <= MAX_KICK_DISTANCE ? 1 : 0;
+  if (distance > MAX_KICK_DISTANCE) return 0;
+  if (distance <= SHORT_KICK_MAX_DISTANCE) return 1;
+  const span = MAX_KICK_DISTANCE - SHORT_KICK_MAX_DISTANCE;
+  const taperFrac = (distance - SHORT_KICK_MAX_DISTANCE) / span;
+  return 1 - taperFrac * (1 - KICK_RANGE_FLOOR);
 }
 
 /**

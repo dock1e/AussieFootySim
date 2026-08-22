@@ -221,6 +221,22 @@ export interface NearbyPick {
 }
 
 /**
+ * Aug 2026 round 38 — Match Realism Review Finding 2. `weightedKickTarget`
+ * below already computed each candidate's real travel distance from the
+ * disposer (`kickDistance`, used internally to drive `kickRangeWeight`) but
+ * discarded it once `weightedChoice` picked a winner — callers only ever saw
+ * the winner's distance-to-nearest-DEFENDER (`NearbyPick.distance`, a
+ * different, contest-classification distance, not the kick's own length).
+ * `KickPick` exposes the real winning kick's travel distance too, so
+ * `match.ts` can classify short vs long (against `positioning.ts`'s new
+ * `SHORT_KICK_MAX_DISTANCE`) and run a genuine long-kick execution check —
+ * see `weightedKickTarget`'s own doc comment below for the full picture.
+ */
+export interface KickPick extends NearbyPick {
+  kickDistance: number;
+}
+
+/**
  * Aug 2026 round 23 — the real distance-driven replacement for a plain
  * `weightedPlayerChoice` wherever "who's actually close enough to contest
  * this" matters (see `positioning.ts`'s own doc comment, and [[Contest
@@ -417,7 +433,7 @@ export function weightedKickTarget(
   opponentTeam: MatchTeam,
   disposerPos: AbstractPosition,
   trackedPositions: Map<number, AbstractPosition>,
-): NearbyPick {
+): KickPick {
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
   const realDisposerPos = trackedPositions.get(disposer.PlayerID) ?? disposerPos;

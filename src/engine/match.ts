@@ -6,8 +6,8 @@ import type { ContestType } from "./contestTypes.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers } from "./team.ts";
-import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget } from "./involvement.ts";
-import { carrierPosition, proximityFor, distanceBetween, proximityWeight, type AbstractPosition } from "./positioning.ts";
+import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
+import { carrierPosition, proximityFor, distanceBetween, proximityWeight, SHORT_KICK_MAX_DISTANCE, type AbstractPosition } from "./positioning.ts";
 import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
 import {
   tacticGroupForSlot,
@@ -225,6 +225,61 @@ const P_DISPOSAL_BECOMES_CONTEST = 0.35;
 const P_FORWARD_MARK_IS_LEAD = 0.4;
 const P_KICK_VS_HANDBALL = 0.55;
 const P_SET_SHOT_VS_SNAP = 0.7;
+/**
+ * Aug 2026 round 38 — Match Realism Review Finding 3 ("the snap-shot
+ * mechanic needs to be context-aware"). Replaces the flat coin-weighted
+ * `P_SET_SHOT_VS_SNAP` above (kept only as `setShotProbability`'s own
+ * fallback for a `State.shotContext`-less SHOT tick) with two context base
+ * rates: a clean mark gives a shooter time to play on and square up, so a
+ * set shot is the overwhelming default; a scrambled ground-ball pickup
+ * usually doesn't allow that, so a snap becomes the default instead. Both
+ * "deliberately roughed in," same disclosed-placeholder status as every
+ * other P_ constant in this section — real splits pending the balance
+ * simulator, not derived from a cited source.
+ */
+const P_SET_SHOT_GIVEN_MARK = 0.9;
+const P_SET_SHOT_GIVEN_GROUNDBALL = 0.3;
+/**
+ * Aug 2026 round 38 — Finding 3's player-suitability half. A Small Forward
+ * stationed inside 50 at all is more live for exactly this kind of shot than
+ * a Key Forward is, regardless of their individually assigned `Tactic` — see
+ * `setShotProbability`'s own doc comment below for the full reasoning and
+ * how this combines with `CRUMBING_SNAP_BONUS`.
+ */
+const SMALL_FORWARD_SNAP_BONUS = 0.12;
+/** Aug 2026 round 38 — on top of `SMALL_FORWARD_SNAP_BONUS`: a player specifically playing the Crumbing tactic (tactics.ts's `SMALL_FORWARD_TACTICS`) is explicitly built around exactly this shot, not just positioned near it. */
+const CRUMBING_SNAP_BONUS = 0.1;
+/**
+ * Aug 2026 round 38 — Match Realism Review Finding 2 ("field kicking needs
+ * short/long distance variety"). `SHORT_KICK_MAX_DISTANCE` (positioning.ts,
+ * ~30m via that file's own ~40m/unit conversion) already softly discounts a
+ * long target in `kickRangeWeight` — this is the second half: a long kick
+ * (`KickPick.kickDistance` beyond it) is a materially harder physical
+ * execution than a routine short chip, so it earns one extra, purely
+ * additive check `resolveLongKickExecution` (below) rolls once the real
+ * target/distance is already known. `55` is this file's own established
+ * "plausible league-average" reference point (see `CONTEST_EXECUTION_
+ * DIFFICULTY`'s own doc comment above) — winProbability(55, 25) ≈ 0.86, a
+ * genuinely competitive-but-usually-fine bar for a 45-60m kick, not a coin
+ * flip. Checked against real generated player data in
+ * `scripts/verify_round38_scratch.ts`, not just derived on paper, per this
+ * file's own established discipline.
+ */
+const LONG_KICK_EXECUTION_DIFFICULTY = 25;
+/**
+ * A failed long-kick execution roll doesn't fumble the disposal outright —
+ * the kick's already been counted (line 1004/1401's `line.kicks += 1`
+ * fires regardless, same "it happened" precedent `P_KICK_GOES_OUT_ON_FULL`'s
+ * own doc comment establishes) — it just doesn't reach the intended leading
+ * target as cleanly. `markContestDistance` is receiver-to-nearest-DEFENDER,
+ * not this kick's own travel distance (see `KickPick`'s own doc comment,
+ * involvement.ts) — SHRINKING it on a miss is deliberate, not a typo: per
+ * `runMarkingContest`'s own `proximityWeight(distance) === 0` uncontested-
+ * mark branch, a LARGER distance is what currently reads as "found the clean
+ * target," so a sprayed kick needs to move distance DOWN to genuinely give
+ * the defender a better look, floored at 0 by the caller.
+ */
+const LONG_KICK_MISS_DISTANCE_PENALTY = 0.15;
 const P_GOAL_GIVEN_ON_TARGET = 0.58;
 const SHOT_DIFFICULTY_MIN = 40;
 const SHOT_DIFFICULTY_RANGE = 30;
@@ -746,6 +801,53 @@ export interface State {
    * `markContestDistance`.
    */
   handballContestDistance?: number;
+  /**
+   * Aug 2026 round 38 — Match Realism Review Finding 3 ("the snap-shot
+   * mechanic needs to be context-aware and player-aware"). `runShot` (below)
+   * previously picked set-shot-vs-snap via one flat constant
+   * (`P_SET_SHOT_VS_SNAP`) regardless of how the shooter actually got the
+   * ball — a clean mark and a scrambled ground-ball pickup read identically.
+   * The obvious source for that context, `markContestIsShotChance`, does
+   * NOT survive to `SHOT` (reset by omission the instant `runMarkingContest`
+   * returns a fresh `GENERAL_PLAY`/`SHOT` object that doesn't mention it —
+   * same convention every field on this interface follows), and no
+   * `ContestType` is threaded onto `State` at all, so this is a genuinely
+   * new field, not a rename of an existing one. Set at all 4 real
+   * `phase: "SHOT"` return sites in this file — see `setShotProbability`'s
+   * own doc comment for how `runShot` reads it. `undefined` outside a
+   * `SHOT`-phase state, same reset-by-omission convention as every other
+   * field here; `runShot` falls back to the existing flat
+   * `P_SET_SHOT_VS_SNAP` when it's missing, so a hypothetical future SHOT
+   * transition that forgets to set it degrades to the pre-round-38 behaviour
+   * rather than throwing.
+   *
+   * DISCLOSED GAP, found via real-data verification
+   * (verify_round38_scratch.ts), not assumed on paper: all 4 real sites
+   * currently set `"mark"` — `"groundBall"` is a fully correct, real branch
+   * of `setShotProbability` (and of this type), but is NOT reachable from any
+   * live code path today. `runMarkingContest`'s two sites are kick-reception
+   * marks by construction (`MARKING_CONTEST` only ever represents catching a
+   * kick — see that function's own doc comment), so "mark" is genuinely
+   * correct there. `runContest`'s two sites were ORIGINALLY written as
+   * `contestType === "groundBall" ? "groundBall" : "mark"`, matching this
+   * round's original design intent — but `runContest`'s own `contestType`
+   * assignment (a few lines above in that function) can only ever be
+   * "groundBall" when `!isForward50(state.zone, attackingSide)`, while the
+   * SHOT-routing gate immediately guarding both of `runContest`'s SHOT
+   * returns requires `isForward50(state.zone, attackingSide)` on that exact
+   * same, unchanged zone/side — a pre-existing (round 23-era) structural
+   * coupling this round didn't intend to touch, which makes those two
+   * conditions mutually exclusive. A ground-ball recovery in this engine
+   * therefore always becomes a new `GENERAL_PLAY` carry (advance, then
+   * dispose again) rather than an immediate shot; only a mark ever leads
+   * straight to `SHOT`. Closing this for real — a genuine "scrambled
+   * ground-ball snap right near goal" moment — needs a new, disclosed
+   * mechanic (e.g. an independent, small shot-chance roll on a `groundBall`
+   * contest win), out of scope for this round's approved "small, context/
+   * player-suitability" piece; logged as a new, named gap in [[Match Realism
+   * Review]] rather than silently designed around.
+   */
+  shotContext?: "mark" | "groundBall";
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
@@ -989,6 +1091,31 @@ function runClearance(ctx: Ctx, state: State): State {
  * a completely unpressured player in open space doesn't fumble a routine
  * disposal to nobody, so this always succeeds.
  */
+/**
+ * Aug 2026 round 38 — Finding 2's actual execution-risk roll, shared by all
+ * 4 real kick-launch call sites (`resolveUnpressuredDisposal`'s two
+ * branches, the pressured-disposal path's two branches below — see each
+ * site's own comment for why there are exactly 4). A short kick
+ * (`receiverPick.kickDistance <= SHORT_KICK_MAX_DISTANCE`) is assumed
+ * reliable — the disposal already succeeded to even be kicking at all (a
+ * real, already-credited event by this point), so this doesn't re-roll
+ * that. Deliberately NOT folded into the existing pressured-disposal
+ * `disposalRating` roll a few hundred lines below (or added to
+ * `resolveUnpressuredDisposal`, which has no roll at all) — that roll fires
+ * before the kick/handball type or receiver/distance are even decided, and
+ * is shared with handballs, so conditioning it on kick-distance would be
+ * incoherent. This is a wholly separate, purely additive check positioned
+ * safely after `weightedKickTarget` has already picked a real target and
+ * `KickPick.kickDistance` reveals its real travel distance.
+ */
+function resolveLongKickExecution(ctx: Ctx, carrier: Player, receiverPick: KickPick): { distance: number; missed: boolean } {
+  if (receiverPick.kickDistance <= SHORT_KICK_MAX_DISTANCE) return { distance: receiverPick.distance, missed: false };
+  const executionRating = computeContestRating(carrier, ["kickMaxDistance", "skill"]);
+  const result = resolveThreshold(executionRating, LONG_KICK_EXECUTION_DIFFICULTY, ctx.rng);
+  if (result.success) return { distance: receiverPick.distance, missed: false };
+  return { distance: Math.max(0, receiverPick.distance - LONG_KICK_MISS_DISTANCE_PENALTY), missed: true };
+}
+
 function resolveUnpressuredDisposal(
   ctx: Ctx,
   state: State,
@@ -1060,9 +1187,14 @@ function resolveUnpressuredDisposal(
     // so both are visible in flight together, not just the receiver alone.
     const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
-    const kickLabel =
-      proximityWeight(receiverPick.distance) === 0
-        ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
+    const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
+    const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    const kickLabel = missed
+      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      : proximityWeight(markDistance) === 0
+        ? isLongKick
+          ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
+          : `${carrier.lname} finds ${receiver.lname} leading into space inside 50`
         : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
@@ -1070,7 +1202,7 @@ function resolveUnpressuredDisposal(
       zone: newZone,
       possession: state.possession,
       carrier: receiver,
-      markContestDistance: receiverPick.distance,
+      markContestDistance: markDistance,
       markContestIsShotChance: true,
     };
   }
@@ -1092,8 +1224,10 @@ function resolveUnpressuredDisposal(
   if (isKick) {
     const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
-    const kickLabel =
-      proximityWeight(receiverPick.distance) === 0
+    const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    const kickLabel = missed
+      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      : proximityWeight(markDistance) === 0
         ? `${carrier.lname} finds ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
@@ -1102,7 +1236,7 @@ function resolveUnpressuredDisposal(
       zone: newZone,
       possession: state.possession,
       carrier: receiver,
-      markContestDistance: receiverPick.distance,
+      markContestDistance: markDistance,
     };
   }
   const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
@@ -1477,9 +1611,14 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // Resolution Redesign]] item 4.
     const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
-    const kickLabel =
-      proximityWeight(receiverPick.distance) === 0
-        ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
+    const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
+    const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    const kickLabel = missed
+      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      : proximityWeight(markDistance) === 0
+        ? isLongKick
+          ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
+          : `${carrier.lname} finds ${receiver.lname} leading into space inside 50`
         : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
@@ -1487,7 +1626,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       zone: newZone,
       possession: state.possession,
       carrier: receiver,
-      markContestDistance: receiverPick.distance,
+      markContestDistance: markDistance,
       markContestIsShotChance: true,
     };
   }
@@ -1507,8 +1646,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   if (isKick) {
     const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
-    const kickLabel =
-      proximityWeight(receiverPick.distance) === 0
+    const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    const kickLabel = missed
+      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      : proximityWeight(markDistance) === 0
         ? `${carrier.lname} finds ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
@@ -1517,7 +1658,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       zone: newZone,
       possession: state.possession,
       carrier: receiver,
-      markContestDistance: receiverPick.distance,
+      markContestDistance: markDistance,
     };
   }
   const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
@@ -1629,7 +1770,16 @@ function resolveUncontestedGather(
     deltas,
   );
   if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
-    return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep };
+    // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment.
+    // Always "mark", not conditional on contestType — `contestType` can only
+    // be "groundBall" when `!isForward50(state.zone, attackingSide)` (this
+    // function's own contestType assignment above), and this branch only
+    // runs when `isForward50(state.zone, attackingSide)` is true on that SAME
+    // unchanged zone/side — the two can never co-occur, so a groundBall win
+    // never reaches this return at all. Caught via real-data verification
+    // (verify_round38_scratch.ts), not assumed — see State.shotContext's own
+    // doc comment for the full disclosed gap this reveals.
+    return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep, shotContext: "mark" };
   }
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep, carrierUncontested: true };
 }
@@ -1776,7 +1926,8 @@ function runContest(ctx: Ctx, state: State): State {
       deltas,
     );
     if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
-      return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep };
+      // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment.
+      return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep, shotContext: contestType === "groundBall" ? "groundBall" : "mark" };
     }
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep };
   }
@@ -1881,7 +2032,8 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       log(ctx, zone, possessingSide, "MARKING_CONTEST", `${receiver.lname} marks it, leading into space`, [receiver.PlayerID], [
         { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
       ]);
-      if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+      // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment. Always "mark" — this function only ever resolves a kick reception, never a ground ball.
+      if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver, shotContext: "mark" };
       // Aug 2026 round 27 — a clean mark outside a shot chance simply
       // continues general play, receiver as the new carrier. `carrierUncontested`
       // matters here in a way it never did for this branch before this round:
@@ -1975,7 +2127,8 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     // already credited directly above, matching every other contest-win
     // return path in this file (see State.carrierUncontested's own doc
     // comment: "false/omitted whenever they won it instead").
-    if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver };
+    // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment. Always "mark" — a contested-mark win is never a ground ball.
+    if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver, shotContext: "mark" };
     return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver };
   }
 
@@ -2099,10 +2252,50 @@ function runHandballContest(ctx: Ctx, state: State): State {
   return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
 }
 
+/**
+ * Aug 2026 round 38 — Match Realism Review Finding 3, both pieces combined.
+ * `shotContext` (`State.shotContext` — see its own doc comment) picks the
+ * base rate: `P_SET_SHOT_GIVEN_MARK` for a clean mark, `P_SET_SHOT_GIVEN_
+ * GROUNDBALL` for a scrambled ground-ball pickup, falling back to the flat
+ * pre-round-38 `P_SET_SHOT_VS_SNAP` for the (should-never-happen, but
+ * defensively handled — see State.shotContext's own doc comment)
+ * `undefined` case. `plan`/`positions` resolve the shooter's own real
+ * suitability for a snap on top of that base rate: `tacticGroupForSlot`
+ * checks whether they're actually stationed as a Small Forward at all
+ * (positional suitability), `tacticFor` checks whether their own assigned
+ * `Tactic` is specifically `"Crumbing"` (role suitability) — additive, not
+ * either/or, since a Small Forward running Crumbing is doubly suited to
+ * exactly this shot. Clamped to `[0.05, 0.98]`: even the most suitable
+ * snap-shot specialist off a ground ball still sometimes has time to settle
+ * into a genuine set shot (worth more on the scoreboard via higher
+ * accuracy), and even a clean uncontested mark occasionally gets played on
+ * quickly rather than squared up in the box.
+ *
+ * `shotContext` is "mark" for every real SHOT tick in the current engine —
+ * see `State.shotContext`'s own doc comment for the disclosed, real-data-
+ * verified reason "groundBall" isn't reachable from any live path yet. This
+ * function's own groundBall branch is still fully correct and exercised
+ * directly (not through match simulation) in `verify_round38_scratch.ts`'s
+ * Section 5 — ready the moment a future round adds a real ground-ball-to-
+ * shot pathway.
+ */
+function setShotProbability(shooter: Player, shotContext: State["shotContext"], plan: TeamPlan | null, positions?: Map<number, Position>): number {
+  const base =
+    shotContext === "mark" ? P_SET_SHOT_GIVEN_MARK : shotContext === "groundBall" ? P_SET_SHOT_GIVEN_GROUNDBALL : P_SET_SHOT_VS_SNAP;
+  const position = positions?.get(shooter.PlayerID);
+  const group = tacticGroupForSlot(position, shooter.archetype as Archetype);
+  const tactic = tacticFor(plan, shooter, positions);
+  let suitabilityDiscount = 0;
+  if (group === "SmallForward") suitabilityDiscount += SMALL_FORWARD_SNAP_BONUS;
+  if (tactic === "Crumbing") suitabilityDiscount += CRUMBING_SNAP_BONUS;
+  return Math.max(0.05, Math.min(0.98, base - suitabilityDiscount));
+}
+
 function runShot(ctx: Ctx, state: State): State {
   const shooter = state.carrier!;
+  const possessingPlan = planFor(ctx, state.possession);
   const defendingPlan = planFor(ctx, otherSide(state.possession));
-  const isSetShot = ctx.rng() < P_SET_SHOT_VS_SNAP;
+  const isSetShot = ctx.rng() < setShotProbability(shooter, state.shotContext, possessingPlan, teamOf(ctx, state.possession).positions);
   const rating =
     (isSetShot
       ? computeContestRating(shooter, ["skill", "kickMaxDistance", "copeWithPressure", "confidence"])

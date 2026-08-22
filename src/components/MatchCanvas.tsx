@@ -6,6 +6,7 @@ import type { MatchEvent, BoxScoreLine } from "../engine/match";
 import {
   computeDotPositions,
   ballTargetFor,
+  attackingGoalX,
   GROUND_WIDTH,
   GROUND_HEIGHT,
   GROUND_END_CAP_FRACTION,
@@ -492,7 +493,6 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   // 50m arc geometry, computed here - ahead of where it's actually drawn,
   // further down - so the centre square (next) can size itself to provably
   // clear it. See the arc's own doc comment below for why these formulas.
-  const turfCapInset = turfRx * GROUND_END_CAP_FRACTION;
   // Round 9 (Tyler, live testing: "the 50 meter arc is a bit too high and needs to come back
   // towards the goal line by about 7%"): a straight 7% pullback multiplier on top of round 4's own
   // "70% of the goal-line-to-centre distance" sizing, rather than picking a new base fraction from
@@ -506,8 +506,16 @@ function drawGround(ctx: CanvasRenderingContext2D) {
   const ARC_RADIUS_PULLBACK = ACTIVE_GROUND.arcRadiusPullback;
   const arcRadius = turfRx * 0.7 * ARC_RADIUS_PULLBACK;
   const arcAnchorInset = turfRx * 0.02; // a tiny nudge off the exact goal line, not a depth control
-  const leftGoalLineX = cx - (turfRx - turfCapInset);
-  const rightGoalLineX = cx + (turfRx - turfCapInset);
+  // Aug 2026 round 40 — relocated to a shared `ground.ts` export
+  // (`attackingGoalX`) so the new shot-flight animation can aim at the exact
+  // same goal-line pixel this draws at, rather than an independent copy that
+  // could drift out of sync — see that function's own doc comment.
+  // Numerically identical to the old local `cx +- (turfRx - turfCapInset)`:
+  // `attackingGoalX`'s own `turfRx` is `GROUND_WIDTH / 2 - MARGIN_X`, and
+  // `MARGIN_X`'s doc comment (engine/ground.ts) already establishes that's
+  // the same combined 2px outer + 5px turf-gap inset used here.
+  const leftGoalLineX = attackingGoalX("away");
+  const rightGoalLineX = attackingGoalX("home");
   const leftArcX = leftGoalLineX + arcAnchorInset;
   const rightArcX = rightGoalLineX - arcAnchorInset;
 
@@ -893,6 +901,14 @@ export function MatchCanvas({
   // across frames the same way ballRenderedRef's position does, so a kick's
   // spin looks continuous rather than resetting every frame.
   const ballRotationRef = useRef<number>(BALL_RESTING_ROTATION);
+  // Aug 2026 round 40 — real ms since `currentEvent` itself became the tick
+  // on screen, for `ballTargetFor`'s new snap-shot windup beat (that
+  // function's own `elapsedMs` param doc comment). Reset whenever the event
+  // object changes; otherwise just keeps counting up off the same rAF `now`
+  // every other per-frame ref here already uses — the same "reset on
+  // change, count up between" shape `driftElapsedRef` uses for the whole-
+  // match version of this idea, just scoped to one tick instead.
+  const eventSinceRef = useRef<{ event: MatchEvent | null; sinceMs: number }>({ event: null, sinceMs: 0 });
 
   // A genuinely new match-up (different clubs) should have its dots appear
   // where they belong immediately, not visibly fly in from wherever the
@@ -926,6 +942,10 @@ export function MatchCanvas({
       const currentAway = awayRef.current;
       const currentEvent = eventRef.current;
       const currentNextEvent = nextEventRef.current;
+      if (eventSinceRef.current.event !== currentEvent) {
+        eventSinceRef.current = { event: currentEvent, sinceMs: now };
+      }
+      const elapsedSinceEventMs = now - eventSinceRef.current.sinceMs;
       const targets = computeDotPositions(
         currentHome,
         currentAway,
@@ -979,7 +999,7 @@ export function MatchCanvas({
       // the companion fix (useMatchPlayback.ts holding a kick/handball's
       // resolution tick on screen long enough, in real time, for even this
       // now-correctly-fast ball to actually finish a long flight).
-      const ballTarget: BallTarget = ballTargetFor(easedTargets, currentEvent, currentNextEvent);
+      const ballTarget: BallTarget = ballTargetFor(easedTargets, currentEvent, currentNextEvent, elapsedSinceEventMs);
       const ballHalfLife = SMOOTHING_HALF_LIFE_MS * ballTarget.speedMultiplier;
       const ballSmoothing = 1 - Math.pow(0.5, dt / ballHalfLife);
       const maxBallStep = MAX_BALL_SPEED_PX_PER_SEC * (dt / 1000);

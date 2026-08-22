@@ -202,6 +202,38 @@ export function maxHalfHeightAt(x: number): number {
   return Math.max(MIN_HALF_HEIGHT, b * Math.sqrt(t));
 }
 
+/**
+ * The x pixel of the goal line the given side is ATTACKING (i.e. shooting
+ * at) — Aug 2026 round 40. Relocated here from a local-only computation
+ * inside `MatchCanvas.tsx`'s `drawGround` (`leftGoalLineX`/`rightGoalLineX`)
+ * so `ballTargetFor`'s new shot-flight target below can share the exact same
+ * goal-line pixel the ground is actually drawn at, rather than an
+ * independent guess that could silently drift out of sync with it — the
+ * same single-source-of-truth reasoning `GROUND_HEIGHT`/
+ * `GROUND_END_CAP_FRACTION`/`MAX_BALL_SPEED_PX_PER_SEC` above already follow.
+ * `turfRx` here is deliberately `GROUND_WIDTH / 2 - MARGIN_X`, not a fresh
+ * `rx`/`turfRx` pair with its own 2px/5px insets — `MARGIN_X`'s own doc
+ * comment already states the two are the same combined inset, so this stays
+ * numerically identical to `MatchCanvas.tsx`'s own `turfRx` without
+ * duplicating the two magic numbers that make it up. `MatchCanvas.tsx`'s
+ * `drawGround` now calls this too, rather than keeping its own parallel
+ * copy — see that file's own `leftGoalLineX`/`rightGoalLineX`.
+ *
+ * Home attacks the +x (right) goal, away attacks -x (left) — the same
+ * `possession === "home" ? 1 : -1` convention `ballTargetFor`'s own `dirX`
+ * already uses for kicks/handballs below, just applied to the goal line
+ * itself instead of a general kick direction. Ground-independent (no
+ * `ACTIVE_GROUND` read): `GROUND_WIDTH` is the one dimension held flat
+ * across all 12 configured grounds — only `GROUND_HEIGHT` varies per-ground.
+ */
+export function attackingGoalX(possession: Side): number {
+  const cx = GROUND_WIDTH / 2;
+  const turfRx = GROUND_WIDTH / 2 - MARGIN_X;
+  const turfCapInset = turfRx * GROUND_END_CAP_FRACTION;
+  const halfSpan = turfRx - turfCapInset;
+  return possession === "home" ? cx + halfSpan : cx - halfSpan;
+}
+
 export let CENTER_Y = GROUND_HEIGHT / 2;
 
 /**
@@ -982,6 +1014,17 @@ function driftOffset(playerId: number, driftTime: number): { dx: number; dy: num
  * `src/engine/match.ts` are completely unaffected by anything in this file;
  * it only changes what a UI *renders*, never what actually happened.
  */
+// Aug 2026 round 40 — how far (px) a snap shot's shooter dot drifts away
+// from goal during the windup beat (`isSnapShotWindup` inside
+// `computeDotPositions` below). Small enough to read as a real player
+// stepping/angling away, not a teleport — same scale as this file's other
+// rendering offsets (`BALL_SIDE_OFFSET` 20, `BALL_MARK_OFFSET_Y` -24). X
+// dominates since "away from goal" is the primary framing Tyler described;
+// Y is smaller, just enough to make the retreat read as diagonal rather than
+// a straight backpedal.
+const SNAP_WINDUP_DOT_OFFSET_X = 34;
+const SNAP_WINDUP_DOT_OFFSET_Y = 20;
+
 export function computeDotPositions(
   home: MatchTeam,
   away: MatchTeam,
@@ -1118,6 +1161,33 @@ export function computeDotPositions(
         // from the carrier (and from whoever's attending them) stays
         // visible for the one tick the ball is actually travelling.
         all.set(id, { ...existing, x: existing.x + tieBreak * 8, y: existing.y + tieBreak * 6, involved: true });
+        return;
+      }
+      // Aug 2026 round 40 (Tyler: "the shooter visibly moves away from goal
+      // at an angle, then 'snaps' the ball back over their shoulder toward
+      // goal") — a rendering-only override, same status as every other
+      // branch in this loop: the shooter's REAL engine-tracked position
+      // (`existing.x/y`, from `movement.ts` via the `tracked` branch just
+      // below) is untouched, only where this event's own dot gets DRAWN.
+      // Checked ahead of the `tracked?.has(id)` branch below so it actually
+      // takes priority for the one player it applies to, the same ordering
+      // `isCentreBounce`/`isDisposalInFlight` above already use to override
+      // that branch's default trust-the-tracked-position behaviour.
+      // `event.isSetShot` is real, structured `MatchEvent` data (round 40 —
+      // see that field's own doc comment in match.ts) rather than text-
+      // matched off `description`, so this fires for a snap's Behind/Miss
+      // outcomes too, not just a Goal.
+      const isSnapShotWindup = event.phase === "SHOT" && event.isSetShot === false;
+      if (isSnapShotWindup) {
+        const goalX = attackingGoalX(event.possession);
+        const awayDirX = existing.x < goalX ? -1 : 1; // away from the goal this shooter is attacking
+        const awayDirY = existing.y < CENTER_Y ? -1 : 1; // and further from the corridor's own centre line - a diagonal retreat, not a straight backpedal
+        all.set(id, {
+          ...existing,
+          x: existing.x + awayDirX * SNAP_WINDUP_DOT_OFFSET_X,
+          y: existing.y + awayDirY * SNAP_WINDUP_DOT_OFFSET_Y,
+          involved: true,
+        });
         return;
       }
       if (tracked?.has(id)) {
@@ -1479,7 +1549,63 @@ export function kickFlightDurationMs(prevEvent: MatchEvent | null, currentEvent:
   return (pixelDistance / MAX_BALL_SPEED_PX_PER_SEC) * 1000 + FLIGHT_ARRIVAL_BUFFER_MS;
 }
 
-export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nextEvent: MatchEvent | null): BallTarget {
+// Aug 2026 round 40 — real, additional hold time (ms) a snap's windup beat
+// gets before the ball's target jumps to goal (`ballTargetFor`'s own
+// `isSnap` branch) — a flat UX-feel constant, same disclosed status as
+// `FLIGHT_ARRIVAL_BUFFER_MS` above, not a derived figure. `SNAP_WINDUP_BALL_OFFSET`
+// is deliberately smaller than `computeDotPositions`'s own
+// `SNAP_WINDUP_DOT_OFFSET_X` (34) so the ball reads as held near the
+// winding-up shooter, not detached from them.
+const SNAP_WINDUP_MS = 550;
+const SNAP_WINDUP_BALL_OFFSET = 14;
+
+/**
+ * Real, additional hold time (ms) a SHOT tick needs on screen for the ball
+ * to actually finish flying from the shooter to goal — the shot-flight
+ * counterpart to `kickFlightDurationMs` above, needed for exactly the same
+ * reason (round 30's own finding: a flat `BASE_TICK_MS` was never long
+ * enough in real time for even a correctly-fast-capped ball to finish
+ * crossing a real on-screen distance) — except a shot resolves within its
+ * OWN single tick (no separate launch tick to diff against, unlike a kick's
+ * `MARKING_CONTEST` split — see `runShot`'s own doc comment in match.ts),
+ * so "from" comes from this SAME event's own `trackedPositions` snapshot of
+ * the shooter (their real position at the moment of the shot) rather than a
+ * previous event's. "to" is the real goal-line pixel (`attackingGoalX`), not
+ * a receiving player, since a shot has no receiver. A snap additionally gets
+ * `SNAP_WINDUP_MS` on top, since that beat plays out BEFORE the flight even
+ * starts, sequentially, within this same tick's hold — see `ballTargetFor`'s
+ * own `isSnap` branch. Returns 0 for anything that isn't a SHOT tick, or
+ * where the shooter's tracked position is missing (an older save predating
+ * round 28's `trackedPositions`), same graceful-degradation convention
+ * `kickFlightDurationMs` already follows.
+ */
+export function shotFlightDurationMs(currentEvent: MatchEvent | null): number {
+  if (!currentEvent || currentEvent.phase !== "SHOT") return 0;
+  const shooterId = currentEvent.playerIds[0];
+  const shooterTracked = currentEvent.trackedPositions?.find((t) => t.playerId === shooterId);
+  if (!shooterTracked) return 0;
+  const from = trackedPixel({ zoneFrac: shooterTracked.zoneFrac, lane: shooterTracked.lane });
+  const to = { x: attackingGoalX(currentEvent.possession), y: CENTER_Y };
+  const pixelDistance = Math.hypot(to.x - from.x, to.y - from.y);
+  const flightMs = (pixelDistance / MAX_BALL_SPEED_PX_PER_SEC) * 1000 + FLIGHT_ARRIVAL_BUFFER_MS;
+  return currentEvent.isSetShot === false ? SNAP_WINDUP_MS + flightMs : flightMs;
+}
+
+export function ballTargetFor(
+  dots: DotPosition[],
+  event: MatchEvent | null,
+  nextEvent: MatchEvent | null,
+  // Aug 2026 round 40 — real ms since `event` itself became the current tick
+  // (MatchCanvas.tsx's own `frame()` loop tracks this via a small new ref,
+  // the same "reset on event change, otherwise keep counting" shape
+  // `driftElapsedRef` already uses for the whole-match version of this
+  // idea). Only consulted for the new snap-shot windup branch below — every
+  // other branch in this function is still a pure function of `dots`/
+  // `event`/`nextEvent` alone, so every existing call site (there's only
+  // the one, but written defensively regardless) keeps working unchanged at
+  // the default.
+  elapsedMs = 0,
+): BallTarget {
   if (!event) {
     return { x: zoneToX(MIDFIELD), y: CENTER_Y, state: "neutral", speedMultiplier: 1 };
   }
@@ -1517,6 +1643,44 @@ export function ballTargetFor(dots: DotPosition[], event: MatchEvent | null, nex
       state: "dropped",
       speedMultiplier: 1,
     };
+  }
+
+  // Aug 2026 round 40 (Tyler: "let's move on to the visualisation piece for
+  // the snaps on goal") — before this, a SHOT event fell all the way through
+  // to this function's final default `"neutral"` branch below: the ball just
+  // sat held near the shooter's own anchor for the entire tick, no flight
+  // toward goal at all, for EVERY shot (set or snap) — a real, previously
+  // undocumented gap, not something only snaps were missing. Fixed here for
+  // both: the ball now always flies toward the real goal-line pixel
+  // (`attackingGoalX`, this file, also relocated from `MatchCanvas.tsx`'s
+  // own local copy) at kick pace, over genuinely extended real time
+  // (`shotFlightDurationMs` below, mirroring `kickFlightDurationMs`'s own
+  // established distance-derived approach).
+  //
+  // A snap (`event.isSetShot === false` — real structured data since round
+  // 40, see that field's own doc comment in match.ts) additionally gets a
+  // windup beat first: for `SNAP_WINDUP_MS`, the ball stays held near the
+  // shooter's OWN current anchor (`anchorX`/`anchorY` above, which already
+  // reflects `computeDotPositions`'s matching `isSnapShotWindup` override —
+  // so as that dot visibly drifts away from goal at an angle, the ball
+  // drifts with it) rather than flying yet. Only once that beat elapses does
+  // the target jump to the fixed goal point at kick speed — the literal
+  // "snap it back over the shoulder" beat Tyler described. A set shot (or
+  // any older event with no `isSetShot` at all) skips the windup entirely
+  // and flies straight at goal for the whole tick, same as any other kick.
+  if (event.phase === "SHOT") {
+    const goalX = attackingGoalX(event.possession);
+    const isSnap = event.isSetShot === false;
+    if (isSnap && elapsedMs < SNAP_WINDUP_MS) {
+      const awayDirX = anchorX < goalX ? -1 : 1;
+      return {
+        x: anchorX + awayDirX * SNAP_WINDUP_BALL_OFFSET,
+        y: anchorY + BALL_NEUTRAL_OFFSET_Y,
+        state: "neutral",
+        speedMultiplier: 1,
+      };
+    }
+    return { x: goalX, y: CENTER_Y, state: "flight", speedMultiplier: KICK_SPEED_MULTIPLIER };
   }
 
   // Aug 2026 round 26 — a shot-chance kick's own stat credit (kicks+1)

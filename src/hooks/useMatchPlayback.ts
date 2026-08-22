@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MatchResult, MatchEvent, BoxScoreLine } from "../engine/match";
-import { kickFlightDurationMs } from "../engine/ground";
+import { kickFlightDurationMs, shotFlightDurationMs } from "../engine/ground";
 
 /**
  * Turns a fully- or partially-simulated MatchResult into a controllable
@@ -133,7 +133,12 @@ export function useMatchPlayback(result: MatchResult | null, homeIds: Set<number
     // time for the ball's flight to visibly finish.
     const currentEv = result.events[currentIndex] ?? null;
     const prevEv = currentIndex > 0 ? result.events[currentIndex - 1] : null;
-    const holdMs = Math.max(BASE_TICK_MS, kickFlightDurationMs(prevEv, currentEv));
+    // Aug 2026 round 40 — `shotFlightDurationMs` is this same idea's shot-at-
+    // goal counterpart (see its own doc comment, engine/ground.ts): a SHOT
+    // tick previously got no extra hold at all, so the ball's new flight-to-
+    // goal animation would have been cut off mid-flight by the very next
+    // tick advancing on schedule. Purely additive, same `Math.max` shape.
+    const holdMs = Math.max(BASE_TICK_MS, kickFlightDurationMs(prevEv, currentEv), shotFlightDurationMs(currentEv));
     timerRef.current = setTimeout(() => {
       setCurrentIndex((i) => Math.min(i + 1, result.events.length - 1));
     }, holdMs / speed);

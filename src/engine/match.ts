@@ -157,6 +157,23 @@ export interface MatchEvent {
    * whenever this is absent.
    */
   trackedPositions?: TrackedPosition[];
+  /**
+   * Aug 2026 round 40 — true for a set shot, false for a snap, undefined for
+   * anything that isn't a SHOT-phase event at all (or an older save
+   * predating this field — same optional-field convention `trackedPositions`
+   * above already established). Before this, `isSetShot` was only ever
+   * `runShot`'s own local variable, reflected solely in the GOAL branch's
+   * free-text description ("(set shot)"/"(snap)") — the Behind and Miss
+   * branches had no distinction at all, so a rendering decision would have
+   * had to text-match `description` (exactly what this file's own
+   * established "structured data, not description-text matching" principle,
+   * see ground.ts's `ballTargetFor` comments, rules out) AND could only ever
+   * fire for a goal. Real, structured data now drives ground.ts's snap-shot
+   * visual (Tyler: "the shooter visibly moves away from goal at an angle,
+   * then snaps the ball back") for all three outcomes, since the visual is
+   * about the ATTEMPT, not the result.
+   */
+  isSetShot?: boolean;
 }
 
 export interface TeamResult {
@@ -665,6 +682,7 @@ function log(
   playerIds: number[],
   statDeltas: StatDelta[] = [],
   skipPositionNudge = false,
+  isSetShot?: boolean,
 ) {
   // Runs regardless of `recordEvents` (same discipline `simulateQuarter`'s
   // own `stepTickPositions` already uses) — tracked-position evolution
@@ -686,6 +704,7 @@ function log(
     playerIds,
     statDeltas,
     trackedPositions: snapshotPositions(ctx.trackedPositions),
+    isSetShot,
   });
 }
 
@@ -2500,6 +2519,8 @@ function runShot(ctx: Ctx, state: State): State {
       `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`,
       [shooter.PlayerID],
       [{ playerId: shooter.PlayerID, stat: "goals", delta: 1 }],
+      false,
+      isSetShot,
     );
     return { phase: "STOPPAGE", zone: MIDFIELD, possession: state.possession, carrier: null };
   }
@@ -2515,9 +2536,11 @@ function runShot(ctx: Ctx, state: State): State {
       `Behind to ${shooter.lname}`,
       [shooter.PlayerID],
       [{ playerId: shooter.PlayerID, stat: "behinds", delta: 1 }],
+      false,
+      isSetShot,
     );
   } else {
-    log(ctx, state.zone, state.possession, "SHOT", `${shooter.lname}'s shot misses everything`, [shooter.PlayerID]);
+    log(ctx, state.zone, state.possession, "SHOT", `${shooter.lname}'s shot misses everything`, [shooter.PlayerID], [], false, isSetShot);
     // Aug 2026, gap #73 closed — Tyler: "If Cameron has handballed the ball
     // out of bounds (missed everything) then it should have been a boundary
     // throw in at that point." A shot that misses everything sailing out of

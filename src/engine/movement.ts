@@ -101,6 +101,13 @@ import { tacticGroupForSlot, defaultTacticForPosition, type Tactic, type TeamPla
  * (Lead & Replace, Box Set-Up — [[Tactics and Positional Play]]'s own
  * "Slice E") remain their own, separately-scoped, more research-dependent
  * piece, not attempted here.
+ *
+ * **Update, round 37**: the "Midfield and Ruck... target is still the
+ * plain... anchor" sentence above no longer holds — see `midfieldTarget`'s
+ * own round-37 update comment further down this file. `resolveMatchups`'s
+ * own scope (no fixed matchup for Midfield/Ruck) is otherwise unchanged;
+ * round 37 differentiates Midfield/Ruck movement by TACTIC and by the
+ * live carrier, same as before, never by a fixed matchup.
  */
 
 /**
@@ -399,10 +406,121 @@ function resolvedTactic(plan: TeamPlan | null, player: Player, position: Positio
 const MIDFIELD_CONTEST_RANGE = 0.5;
 const MIDFIELD_CONTEST_PULL_MAX = 0.85;
 
-function midfieldTarget(home: AbstractPosition, carrierPos: AbstractPosition): AbstractPosition {
+/**
+ * Midfield/Ruck TACTIC differentiation — Aug 2026 round 37, the first of
+ * [[Match Realism Review]]'s three findings Tyler picked to build ("the
+ * four midfielders of each team seem to move as a joint line rather than
+ * moving independently... I want the player movement decisions to be based
+ * upon a combination of using the ball / their opponents / tactics to
+ * determine their positions"). Mirrors `DEFENDER_TRACK_WEIGHT`/
+ * `FORWARD_LEAD_WEIGHT` above exactly — round 28's own tables are the
+ * template this reuses, not a new mechanism.
+ *
+ * `MIDFIELD_TRACK_WEIGHT` multiplies `midfieldTarget`'s own pre-existing
+ * distance-scaled pull (round 31) rather than replacing it — a tactic never
+ * makes a mid crash from OUTSIDE `MIDFIELD_CONTEST_RANGE` (that gate is
+ * unchanged), it only changes how hard they close once a carrier is already
+ * within range. "Attacking" and Ruck's "Follow the Ball" push above the old
+ * flat 1.0 baseline — literally the most contest-hungry reading of either
+ * name. "Defensive" and Ruck's "Hold Position" pull back — holding
+ * structure over crashing every contest, read literally. "Run Two Ways"
+ * sits at exactly 1.0, becoming the old flat pre-round-37 behaviour's new
+ * home rather than an arbitrary middle value — it's also
+ * `DEFAULT_MIDFIELD_TACTIC`, what an undefined/unrecognised tactic falls
+ * back to, same convention `DEFAULT_DEFENDER_TACTIC`/`DEFAULT_FORWARD_TACTIC`
+ * already established. Ruck's "Aerial Target" reads as a marking-target
+ * HABIT (present early for a contest, the ruck equivalent of a forward's
+ * Leading Target) rather than a crash preference, so it sits just under the
+ * default, not near "Follow the Ball."
+ *
+ * "Tagging" (`MIDFIELD_TACTICS`) deliberately has NO entry, same convention
+ * `KEY_FORWARD_TACTICS`'s "Contested Marking"/"Bring Ball to Ground" already
+ * use above — it falls through to `DEFAULT_MIDFIELD_TACTIC`'s own Run Two
+ * Ways numbers. Real tag-following movement (shadowing one specific named
+ * opponent everywhere, not just pulling toward whoever currently holds the
+ * ball) would need that opponent's own identity threaded into this module,
+ * which nothing here does today — a distinctly larger, separate piece, not
+ * attempted this round. Confirmed safe to leave unbuilt for now, not just
+ * assumed: `resolveTagger` (`match.ts`) already picks a tagger's contest
+ * matchup entirely independently of `movement.ts`'s own tracked positions
+ * ("a tagger bypasses this entirely... resolveTagger's whole point is a
+ * deterministic 1-on-1 assignment regardless of where anyone actually is,"
+ * that call site's own comment) — so a Tagging mid defaulting to Run Two
+ * Ways' movement doesn't fight or undermine `resolveTagger`'s own,
+ * separately-correct contest resolution at all, it's just not yet visually
+ * distinctive.
+ */
+const MIDFIELD_TRACK_WEIGHT: Partial<Record<Tactic, number>> = {
+  Attacking: 1.15,
+  Defensive: 0.65,
+  "Run Two Ways": 1.0,
+  "Follow the Ball": 1.25,
+  "Aerial Target": 0.9,
+  "Hold Position": 0.5,
+};
+const DEFAULT_MIDFIELD_TACTIC: Tactic = "Run Two Ways";
+
+/**
+ * Own-team spacing — the second half of round 37. Tactic weight alone still
+ * lets a side's own mids read the SAME carrier distance and pull equally
+ * hard when they happen to be similarly placed — the literal "joint line"
+ * Tyler described — since `MIDFIELD_TRACK_WEIGHT` only varies pull by
+ * TACTIC and personal distance, never by what a player's own teammates are
+ * doing. `MIDFIELD_RANK_TAPER` adds the missing third input: `midfieldRanks`
+ * (below) ranks a side's own on-ground Midfield/Ruck TACTIC-GROUP players —
+ * `POSITION_TACTIC_GROUP` puts both wings in "Midfield" alongside C/ROV/RR,
+ * so this is genuinely six players in a standard lineup (W, W, C, ROV, RR,
+ * R), not the literal four Tyler named (his own wording named the four
+ * central-square positions specifically, the ones usually closest to a live
+ * contest and so usually the ones this taper's low-rank/high-weight end
+ * actually governs; the wings are real members of the same tactic group and
+ * ranked the same way, just usually — not always, a wing running the
+ * corridor can rank low too — further from a central contest to begin
+ * with) — by current distance to the carrier once per side per tick, and
+ * this array tapers pull by that rank: index 0/1 (the two closest, whoever
+ * they are) keep their tactic's full weight, index 2 onward get scaled
+ * down, so the near ones genuinely close it down while the rest hold a
+ * spread structure instead of converging on the same point too. A rank
+ * past the array's own last index (5 real candidates in a standard
+ * lineup, only 4 taper entries) clamps to that last entry rather than
+ * reading past the array — every player from the 3rd-closest down shares
+ * the same, most conservative taper, a deliberate simplification rather
+ * than a 6-entry table tuned per exact rank.
+ */
+const MIDFIELD_RANK_TAPER = [1, 1, 0.55, 0.3];
+
+/**
+ * Ranks one side's own on-ground Midfield/Ruck players by CURRENT distance
+ * to the (opponent) carrier — rank 0 is closest, rank 3 (or however many
+ * there are) is furthest. Computed once per side per tick (`stepSide`,
+ * below) rather than independently per player, since a rank is inherently
+ * relative to teammates, not derivable from one player's own state alone —
+ * the one genuinely new shape this round adds to `targetFor`'s otherwise
+ * per-player-independent design. Only ever called when the carrier is a
+ * genuine opponent of `team` (`stepSide`'s own `carrierIsOpponent` gate,
+ * same precondition `midfieldTarget` itself already required before round
+ * 37) — a side ranking itself against its OWN carrier would be meaningless.
+ */
+function midfieldRanks(team: MatchTeam, carrierPos: AbstractPosition, current: Map<number, AbstractPosition>): Map<number, number> {
+  const ranks = new Map<number, number>();
+  const withDistance = onGroundPlayers(team)
+    .filter((p) => {
+      const group = tacticGroupForSlot(team.positions?.get(p.PlayerID), p.archetype as Archetype);
+      return group === "Midfield" || group === "Ruck";
+    })
+    .map((p) => ({ id: p.PlayerID, distance: distanceBetween(current.get(p.PlayerID) ?? carrierPos, carrierPos) }))
+    .sort((a, b) => a.distance - b.distance);
+  withDistance.forEach((entry, i) => ranks.set(entry.id, i));
+  return ranks;
+}
+
+function midfieldTarget(home: AbstractPosition, carrierPos: AbstractPosition, tactic: Tactic | undefined, rank: number | undefined): AbstractPosition {
   const distance = distanceBetween(home, carrierPos);
   if (distance > MIDFIELD_CONTEST_RANGE) return home;
-  const pull = MIDFIELD_CONTEST_PULL_MAX * (1 - distance / MIDFIELD_CONTEST_RANGE);
+  const key = tactic && MIDFIELD_TRACK_WEIGHT[tactic] !== undefined ? tactic : DEFAULT_MIDFIELD_TACTIC;
+  const trackWeight = MIDFIELD_TRACK_WEIGHT[key] as number;
+  const taper = MIDFIELD_RANK_TAPER[Math.min(rank ?? 0, MIDFIELD_RANK_TAPER.length - 1)];
+  const pull = Math.min(1, MIDFIELD_CONTEST_PULL_MAX * (1 - distance / MIDFIELD_CONTEST_RANGE) * trackWeight * taper);
   return { zoneFrac: lerp(home.zoneFrac, carrierPos.zoneFrac, pull), lane: lerp(home.lane, carrierPos.lane, pull) };
 }
 
@@ -417,13 +535,14 @@ function targetFor(
   opponentPos: AbstractPosition | undefined,
   teamPositions: Map<number, Position> | undefined,
   opponentCarrierPos: AbstractPosition | undefined,
+  midfieldRank: number | undefined,
 ): AbstractPosition {
   const home = proximityFor(player, side, position, zone, possession, style, teamPositions);
   const group = tacticGroupForSlot(position, player.archetype as Archetype);
   const tactic = resolvedTactic(plan, player, position);
   if (group === "Defender" && opponentPos) return defenderTarget(side, home, opponentPos, tactic, zone);
   if ((group === "KeyForward" || group === "SmallForward") && opponentPos) return forwardTarget(side, home, opponentPos, tactic, zone, possession);
-  if ((group === "Midfield" || group === "Ruck") && opponentCarrierPos) return midfieldTarget(home, opponentCarrierPos);
+  if ((group === "Midfield" || group === "Ruck") && opponentCarrierPos) return midfieldTarget(home, opponentCarrierPos, tactic, midfieldRank);
   return home; // a defender/forward with no resolvable opponent this match, or nobody currently carries the ball
 }
 
@@ -440,11 +559,12 @@ function stepSide(
   carrierPos: AbstractPosition | undefined,
 ): void {
   const carrierIsOpponent = carrierPos !== undefined && possession !== side;
+  const ranks = carrierIsOpponent ? midfieldRanks(team, carrierPos, current) : undefined;
   for (const player of onGroundPlayers(team)) {
     const position = team.positions?.get(player.PlayerID);
     const opponentId = matchups.get(player.PlayerID);
     const opponentPos = opponentId !== undefined ? current.get(opponentId) : undefined;
-    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions, carrierIsOpponent ? carrierPos : undefined);
+    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions, carrierIsOpponent ? carrierPos : undefined, ranks?.get(player.PlayerID));
     const from = current.get(player.PlayerID) ?? target;
     out.set(player.PlayerID, stepToward(from, target, maxStepFor(player)));
   }

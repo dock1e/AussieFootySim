@@ -1348,10 +1348,16 @@ function resolveLongKickExecution(ctx: Ctx, carrier: Player, receiverPick: KickP
  * now is — there's nothing fuzzy left to blend toward. `zoneFrac`/`Zone`
  * share the same 0-4 home-relative scale directly (the same convention
  * `carrierPosition`, positioning.ts, already relies on), so no mirroring is
- * needed here either. Six further `weightedPlayerChoice` call sites (free
- * kick takers, loose-ball recoverers, the kick-in taker) share the identical
- * gap — narrower blast radius (much rarer events), disclosed as a follow-up
- * rather than folded into this round, see ROADMAP.
+ * needed here either.
+ *
+ * Aug 2026 round 44 — extended to the six remaining `weightedPlayerChoice`
+ * call sites disclosed as gap #85 when this function was first built: free
+ * kick takers (x2, out-of-bounds-on-the-full), loose-ball recoverers (x3,
+ * fumbled contested-mark/groundball/handball receptions), and the kick-in
+ * taker. Same reasoning applies at every one — each picks a player by pure
+ * positional/zone fit with no real-distance check, then immediately hands
+ * them the ball as carrier at that zone. Every genuine `weightedPlayerChoice`
+ * call site in this file is now paired with a `snapTrackedZone` call.
  */
 function snapTrackedZone(ctx: Ctx, playerId: number, zone: Zone): void {
   const existing = ctx.trackedPositions.get(playerId);
@@ -1386,6 +1392,10 @@ function resolveUnpressuredDisposal(
     const newSide = otherSide(state.possession);
     lineFor(ctx, carrier).freeKicksAgainst += 1;
     const freeKickTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), newZone);
+    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
+    // The taker is standing wherever the ball crossed the line (newZone),
+    // not wherever their own tracked position last happened to settle.
+    snapTrackedZone(ctx, freeKickTaker.PlayerID, newZone);
     lineFor(ctx, freeKickTaker).freeKicksFor += 1;
     log(
       ctx,
@@ -1840,6 +1850,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     const newSide = otherSide(state.possession);
     lineFor(ctx, carrier).freeKicksAgainst += 1;
     const freeKickTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), newZone);
+    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
+    // The taker is standing wherever the ball crossed the line (newZone),
+    // not wherever their own tracked position last happened to settle.
+    snapTrackedZone(ctx, freeKickTaker.PlayerID, newZone);
     lineFor(ctx, freeKickTaker).freeKicksFor += 1;
     log(
       ctx,
@@ -2011,6 +2025,8 @@ function resolveUncontestedGather(
     // stat at all — they didn't contest anything, they just reacted first to
     // a loose ball after the fact.
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
+    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
+    snapTrackedZone(ctx, recoverer.PlayerID, state.zone);
     (lineFor(ctx, attackerRep)[fields.attempts] as number) += 1;
     const fumbleLabel = contestType === "groundBall" ? "can't hang onto the ground ball" : "spills the mark";
     log(
@@ -2338,6 +2354,8 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
     }
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
+    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
+    snapTrackedZone(ctx, recoverer.PlayerID, zone);
     log(
       ctx,
       zone,
@@ -2502,6 +2520,8 @@ function runHandballContest(ctx: Ctx, state: State): State {
       return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
     }
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
+    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
+    snapTrackedZone(ctx, recoverer.PlayerID, zone);
     log(
       ctx,
       zone,
@@ -2684,6 +2704,8 @@ function runShot(ctx: Ctx, state: State): State {
   // actually the likely kick-in taker, not any of the 22 equally.
   const newSide = otherSide(state.possession);
   const kickInTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), state.zone);
+  // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
+  snapTrackedZone(ctx, kickInTaker.PlayerID, state.zone);
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: kickInTaker, carrierUncontested: true };
 }
 

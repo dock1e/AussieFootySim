@@ -174,6 +174,21 @@ export interface MatchEvent {
    * about the ATTEMPT, not the result.
    */
   isSetShot?: boolean;
+  /**
+   * Aug 2026 round 45 — true when this GENERAL_PLAY disposal is the specific
+   * "carrier evades the tackle attempt, then disposes despite residual
+   * pressure" outcome (`runGeneralPlay`'s post-tackle-attempt branch);
+   * undefined for every other event, including the OTHER "finds space with a
+   * kick/handball" text that fires when nobody contested at all. Tyler's own
+   * round-40 follow-up question — "what about a tackled player's body
+   * twisted one way while the ball goes another?" — is what this field
+   * exists to answer: same "structured data, not description-text matching"
+   * principle `isSetShot` above already established, now driving a second,
+   * smaller windup on ground.ts's `computeDotPositions`/`ballTargetFor` for
+   * the disposing player only (the tackler isn't touched — they're rendered
+   * exactly as before).
+   */
+  isPressured?: boolean;
 }
 
 export interface TeamResult {
@@ -742,6 +757,7 @@ function log(
   statDeltas: StatDelta[] = [],
   skipPositionNudge = false,
   isSetShot?: boolean,
+  isPressured?: boolean,
 ) {
   // Runs regardless of `recordEvents` (same discipline `simulateQuarter`'s
   // own `stepTickPositions` already uses) — tracked-position evolution
@@ -764,6 +780,7 @@ function log(
     statDeltas,
     trackedPositions: snapshotPositions(ctx.trackedPositions),
     isSetShot,
+    isPressured,
   });
 }
 
@@ -1887,6 +1904,9 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
       { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
     ],
+    false,
+    undefined,
+    true,
   );
 
   // Aug 2026: a shot can only ever come off a kick (Tyler: "A shot on goal

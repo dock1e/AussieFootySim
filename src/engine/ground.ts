@@ -1025,6 +1025,14 @@ function driftOffset(playerId: number, driftTime: number): { dx: number; dy: num
 const SNAP_WINDUP_DOT_OFFSET_X = 34;
 const SNAP_WINDUP_DOT_OFFSET_Y = 20;
 
+// Aug 2026 round 45 — same idea as the snap-shot dot offset just above,
+// scaled down for a tackle-evasion twist rather than a deliberate shooting
+// retreat: a real body-lean away from the tackler, not a teleport, but
+// visibly smaller/subtler than the shooter's own diagonal retreat since this
+// is an instinctive flinch mid-tackle, not a composed step backward.
+const PRESSURED_HANDBALL_DOT_OFFSET_X = 16;
+const PRESSURED_HANDBALL_DOT_OFFSET_Y = 10;
+
 export function computeDotPositions(
   home: MatchTeam,
   away: MatchTeam,
@@ -1268,6 +1276,60 @@ export function computeDotPositions(
         // `verify_round32_scratch.ts`.
         const groupX = event.playerIds.length > 1 ? avgAnchorX : existing.x;
         const groupY = event.playerIds.length > 1 ? avgAnchorY : existing.y;
+        // Aug 2026 round 45 (Tyler, following on from round 40's snap-shot
+        // windup: "what about a tackled player's body twisted one way while
+        // the ball goes another?") — layered ON TOP of round 32's group-
+        // cohesion pull just above, not instead of it: the carrier still
+        // reads as genuinely near their tackler (round 32's own Van Rooyen/
+        // McStay fix stays intact for this pairing), just offset a little
+        // further away from them specifically, toward whichever side the
+        // carrier's own real anchor already leans. `event.isPressured` is
+        // real, structured `MatchEvent` data (match.ts, the one
+        // `runGeneralPlay` post-tackle-attempt-evaded log call) — same
+        // "structured data, not description-text matching" principle
+        // `isSnapShotWindup` below already established. Scoped to handballs
+        // only (`hasStat`), matching Tyler's own ask ("handball mechanics")
+        // — a pressured kick's carrier renders exactly as before.
+        //
+        // Direction is measured against the defender's own PREDICTED final
+        // position — `groupX/groupY` plus the exact tie-break/spread terms
+        // the defender's own pass through this same branch will apply below
+        // — not their raw pre-blend anchor. First attempt at this (caught by
+        // `verify_round45_scratch.ts`'s own geometry section, not live play)
+        // compared against the raw anchor instead: mathematically equivalent
+        // to comparing against `groupX`/`groupY` (the midpoint) for a 2-
+        // player event, but blind to the defender's own few-px tie-break
+        // jitter — invisible for a well-separated pairing, but enough to
+        // occasionally flip the *actual* nearer/farther outcome for a
+        // genuinely close tackle pairing, exactly the case this exists for.
+        const isPressuredHandballCarrier = event.isPressured === true && hasStat(event, "handballs") && id === event.playerIds[0];
+        if (isPressuredHandballCarrier) {
+          const defenderId = event.playerIds[1];
+          const defenderTieBreak = hashPlayer(defenderId, 4) - 0.5;
+          const defenderFinalX = groupX + defenderTieBreak * 8;
+          const awayDirX = existing.x < defenderFinalX ? -1 : 1;
+          // Y deliberately does NOT mirror X's real-position comparison.
+          // `spread` two lines above already separates this pairing in Y by
+          // a fixed +-14px (carrier always -14, defender always +14 — this
+          // event always orders playerIds as [carrier, defender]) — a
+          // bigger, more reliable signal than the real tracked gap for a
+          // pairing that, being mid-tackle, is often genuinely close
+          // together. A position-based Y direction can point the *opposite*
+          // way to that existing bias often enough to partially cancel it
+          // (caught by `verify_round45_scratch.ts`'s geometry section: a
+          // first, fully position-based attempt at this still produced a
+          // handful of cases *closer* together than no offset at all) —
+          // reinforcing `spread`'s own sign instead guarantees this offset
+          // only ever adds to the existing separation, never fights it.
+          const awayDirY = -1;
+          all.set(id, {
+            ...existing,
+            x: groupX + awayDirX * PRESSURED_HANDBALL_DOT_OFFSET_X + tieBreak * 8,
+            y: groupY + awayDirY * PRESSURED_HANDBALL_DOT_OFFSET_Y + spread + tieBreak * 6,
+            involved: true,
+          });
+          return;
+        }
         all.set(id, { ...existing, x: groupX + tieBreak * 8, y: groupY + spread + tieBreak * 6, involved: true });
         return;
       }
@@ -1559,6 +1621,15 @@ export function kickFlightDurationMs(prevEvent: MatchEvent | null, currentEvent:
 const SNAP_WINDUP_MS = 550;
 const SNAP_WINDUP_BALL_OFFSET = 14;
 
+// Aug 2026 round 45 — same windup-then-release shape as the snap shot just
+// above, scaled down for a handball's much shorter real range: a flat,
+// disclosed UX-feel constant (not derived), short enough that it — plus the
+// release-drift that follows it within the same tick — comfortably fits
+// inside `BASE_TICK_MS` (450ms, useMatchPlayback.ts) with no `holdMs`
+// extension needed, unlike `shotFlightDurationMs` below (a shot's full
+// cross-ground flight genuinely can't fit in one ordinary tick).
+const PRESSURED_HANDBALL_WINDUP_MS = 200;
+
 /**
  * Real, additional hold time (ms) a SHOT tick needs on screen for the ball
  * to actually finish flying from the shooter to goal — the shot-flight
@@ -1681,6 +1752,23 @@ export function ballTargetFor(
       };
     }
     return { x: goalX, y: CENTER_Y, state: "flight", speedMultiplier: KICK_SPEED_MULTIPLIER };
+  }
+
+  // Aug 2026 round 45 (Tyler: "what about a tackled player's body twisted
+  // one way while the ball goes another?") — same windup-then-release shape
+  // as the snap-shot beat just above: for `PRESSURED_HANDBALL_WINDUP_MS`,
+  // the ball holds near the carrier's own anchor — which, thanks to
+  // `computeDotPositions`'s matching override just above in this file,
+  // already reads as visibly twisted away from the tackler — rather than
+  // immediately drifting toward the receiver. Once that beat elapses, this
+  // falls through unchanged to the ordinary `isHandball` look-ahead branch
+  // below for the rest of the tick, same "ball goes another way" beat the
+  // dot offset sets up. Scoped to handballs only (`hasStat`), matching
+  // Tyler's own ask — a pressured kick gets no windup and renders exactly as
+  // it already did.
+  const isPressuredHandballWindup = event.isPressured === true && hasStat(event, "handballs");
+  if (isPressuredHandballWindup && elapsedMs < PRESSURED_HANDBALL_WINDUP_MS) {
+    return { x: anchorX, y: anchorY + BALL_NEUTRAL_OFFSET_Y, state: "neutral", speedMultiplier: 1 };
   }
 
   // Aug 2026 round 26 — a shot-chance kick's own stat credit (kicks+1)

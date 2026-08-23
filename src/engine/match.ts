@@ -242,7 +242,8 @@ const DEFAULT_TICKS_PER_QUARTER = 130;
 // --- Placeholder probabilities — "deliberately roughed in" per Engine.md's own framing of
 // every other tactics/game-style number, and exactly what the balance simulator (see
 // scripts/simulate.ts, Engine.md "Balance simulator") exists to tune. ---
-const P_SHOT_WHEN_ENTERING_FORWARD_50 = 0.45;
+// P_SHOT_WHEN_ENTERING_FORWARD_50 (was 0.45, flat) replaced round 46 — see
+// SHOT_CHANCE_ON_ENTRY_MAX's own doc comment, near SHOT_DIFFICULTY_BASE below.
 const P_DISPOSAL_BECOMES_CONTEST = 0.35;
 /**
  * Of all forward-50 marking contests, the share that resolve as a leading
@@ -374,6 +375,44 @@ const GOAL_ACCURACY_MAX = 0.995;
 const GOAL_ACCURACY_MIN = 0.3;
 const GOAL_ACCURACY_DEPTH_PENALTY = 0.07;
 const GOAL_ACCURACY_ANGLE_PENALTY = 0.5;
+/**
+ * Aug 2026 round 46 — ROADMAP backlog item #26, diagnosed round 43. Tyler,
+ * live testing: "It seems nobody is willing to take a shot, including
+ * Membrey... who has a clear line to goal but finds space with a kick
+ * instead." The old `P_SHOT_WHEN_ENTERING_FORWARD_50 = 0.45` was a single
+ * flat roll applied to every kick landing in forward 50 regardless of how
+ * central or close the eventual receiver ended up — a goal-square lead and
+ * a sharp 50m-out angle were equally likely to even become a shot attempt.
+ * Round 43 diagnosed *why* a drop-in geometry multiplier couldn't fix this:
+ * the roll fired inside `resolveUnpressuredDisposal`/`runGeneralPlay` BEFORE
+ * `weightedKickTarget` had picked a receiver at all, so there was no real
+ * position yet to compute geometry from — needed the decision order itself
+ * restructured, not just a new formula. `pickForward50KickReceiver` (below,
+ * near `resolveLongKickExecution`) is that restructure: it picks the
+ * receiver first, then feeds THEIR real predicted landing position into
+ * round 42's own `shotGeometry`, the same `depth`/`angleSeverity` primitive
+ * `runShot`'s own on-target/goal-accuracy rolls already use — so a shot
+ * attempt is now driven by the same real geometry a shot's own SUCCESS
+ * chance already was, not a separate, disconnected flat number.
+ *
+ * Same clamped-probability shape as `GOAL_ACCURACY_*` just above (a real
+ * [0,1] chance, not a `resolveThreshold` difficulty score like
+ * `SHOT_DIFFICULTY_*`) — angle weighted roughly 3.5x depth, matching that
+ * constant's own established ratio (a shot from a sharp angle is a much
+ * more marginal attempt than one merely a bit deep but square-on). Reasoned,
+ * not derived — placeholder in the same disclosed sense as every other
+ * constant in this section, pending Phase 6's balance simulator — but
+ * checked against real match data (`scripts/verify_round46_scratch.ts`)
+ * before shipping: a goal-square, square-on entry lands near
+ * `SHOT_CHANCE_ON_ENTRY_MAX`; a deep, sharp-angle entry lands near
+ * `SHOT_CHANCE_ON_ENTRY_MIN`; the old flat 0.45 now sits roughly mid-range
+ * for a moderately central, moderately deep entry, rather than applying
+ * uniformly to every entry regardless of quality.
+ */
+const SHOT_CHANCE_ON_ENTRY_MAX = 0.85;
+const SHOT_CHANCE_ON_ENTRY_MIN = 0.1;
+const SHOT_CHANCE_ON_ENTRY_DEPTH_PENALTY = 0.15;
+const SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY = 0.55;
 /** See its own use in `runStoppage` — a real, cited correlation (AFL.com.au: ruckmen tap to a favoured side 75-80% of the time), expressed as a rating bonus since tap *direction* itself isn't modelled. */
 const FAVOURED_SIDE_CLEARANCE_BONUS = 1.3;
 /** See its own use in `runShot` — the share of a shot that "misses everything" (not a behind) that goes out of bounds for a throw-in, gap #73. */
@@ -1324,6 +1363,71 @@ function runClearance(ctx: Ctx, state: State): State {
  * disposal to nobody, so this always succeeds.
  */
 /**
+ * Aug 2026 round 46 — ROADMAP backlog item #26. Shared by both real
+ * forward-50 kick-launch call sites (`resolveUnpressuredDisposal`'s own
+ * branch, and `runGeneralPlay`'s pressured-disposal tail below — the exact
+ * same duplication `resolveLongKickExecution`'s own doc comment just below
+ * already describes for the other 2 of "4 real kick-launch call sites").
+ * Picks the receiver via `weightedKickTarget` exactly once, then — only for
+ * a genuine forward-50 entry — decides shot-chance from THEIR real
+ * predicted position (`SHOT_CHANCE_ON_ENTRY_MAX`'s own doc comment, above,
+ * has the full diagnosis of why this couldn't be a drop-in multiplier on
+ * the old flat roll). The caller reuses the SAME `receiverPick` for the
+ * actual mark resolution whichever way `isShotChance` comes back — a real,
+ * incidental correctness fix over the old code, which only ever picked a
+ * receiver once GIVEN the flat roll already succeeded, so there was no risk
+ * of two different `weightedKickTarget` calls landing on two different
+ * receivers for the same tick the way a naive "roll first, maybe pick
+ * twice" restructure could have introduced.
+ *
+ * Receiver position for the geometry check itself: real tracked position if
+ * this player already has one, else the same `proximityFor` estimate
+ * `weightedKickTarget` used internally to judge their own openness — not
+ * yet their exact final mark spot (that depends on `resolveLongKickExecution`,
+ * which hasn't run yet at this point in the pipeline), but the same
+ * already-established proxy this file trusts elsewhere for "roughly where
+ * is this player."
+ */
+function pickForward50KickReceiver(
+  ctx: Ctx,
+  state: State,
+  possessingTeam: MatchTeam,
+  possessingPlan: TeamPlan | null,
+  defendingSide: Side,
+  defendingTeam: MatchTeam,
+  carrier: Player,
+  newZone: Zone,
+  disposerPos: AbstractPosition,
+): { receiverPick: KickPick; isShotChance: boolean } {
+  const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  if (!isForward50(newZone, state.possession)) return { receiverPick, isShotChance: false };
+  const receiverPos =
+    ctx.trackedPositions.get(receiverPick.player.PlayerID) ??
+    proximityFor(receiverPick.player, state.possession, possessingTeam.positions?.get(receiverPick.player.PlayerID), newZone, state.possession, undefined, possessingTeam.positions);
+  const { depth, angleSeverity } = shotGeometry(receiverPos, state.possession);
+  const geometryShotChance = shotChanceOnEntry(depth, angleSeverity) * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
+  return { receiverPick, isShotChance: ctx.rng() < geometryShotChance };
+}
+
+/**
+ * Aug 2026 round 46 — the actual geometry-to-probability formula, pulled out
+ * of `pickForward50KickReceiver` into its own small pure function so
+ * `scripts/verify_round46_scratch.ts` can test the formula directly (a
+ * goal-square/square-on `depth`/`angleSeverity` pair genuinely produces
+ * `SHOT_CHANCE_ON_ENTRY_MAX`, a deep/sharp-angle pair genuinely produces
+ * `SHOT_CHANCE_ON_ENTRY_MIN`, monotonic in between) without needing a fake
+ * `Ctx` — the same reasoning that led `shotGeometry` itself (positioning.ts,
+ * round 42) to be its own exported function rather than inlined. Exported
+ * for that reason alone; every real call site still goes through
+ * `pickForward50KickReceiver` above.
+ */
+export function shotChanceOnEntry(depth: number, angleSeverity: number): number {
+  return Math.max(
+    SHOT_CHANCE_ON_ENTRY_MIN,
+    Math.min(SHOT_CHANCE_ON_ENTRY_MAX, SHOT_CHANCE_ON_ENTRY_MAX - SHOT_CHANCE_ON_ENTRY_DEPTH_PENALTY * depth - SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY * angleSeverity),
+  );
+}
+/**
  * Aug 2026 round 38 — Finding 2's actual execution-risk roll, shared by all
  * 4 real kick-launch call sites (`resolveUnpressuredDisposal`'s two
  * branches, the pressured-disposal path's two branches below — see each
@@ -1446,15 +1550,22 @@ function resolveUnpressuredDisposal(
     ],
   );
 
-  const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
-  if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
+  // Round 46 — receiver (and, only for a genuine forward-50 entry,
+  // shot-chance) decided ONCE here via pickForward50KickReceiver, not
+  // separately inside each branch below — see that function's own doc
+  // comment for the full diagnosis (ROADMAP backlog item #26).
+  let receiverPick: KickPick | null = null;
+  let isShotChance = false;
+  if (isKick) {
+    ({ receiverPick, isShotChance } = pickForward50KickReceiver(ctx, state, possessingTeam, possessingPlan, defendingSide, defendingTeam, carrier, newZone, disposerPos));
+  }
+  if (receiverPick && isShotChance) {
     // Aug 2026 round 26 — the mark itself no longer resolves on this same
     // tick; see `runMarkingContest`'s own doc comment / [[Contest Resolution
     // Redesign]] item 4. `weightedKickTarget` (round 24) already reveals the
     // receiver's real space situation right here — this tick only launches
     // the kick and shows it; the carrier stays named alongside the receiver
     // so both are visible in flight together, not just the receiver alone.
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
     const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
@@ -1490,8 +1601,10 @@ function resolveUnpressuredDisposal(
   // differently-shaped `runHandballContest` instead (see that function's own
   // doc comment for why a handball reception isn't a dueling contest the way
   // a mark is).
-  if (isKick) {
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  if (receiverPick) {
+    // Round 46 — same pick from pickForward50KickReceiver above (isKick was
+    // true to get here; receiverPick is only ever set in that branch), not a
+    // second independent weightedKickTarget call.
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
@@ -1508,10 +1621,10 @@ function resolveUnpressuredDisposal(
       markContestDistance: markDistance,
     };
   }
-  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
-  const receiver = receiverPick.player;
+  const handballPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  const receiver = handballPick.player;
   const handballLabel =
-    proximityWeight(receiverPick.distance) === 0
+    proximityWeight(handballPick.distance) === 0
       ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
       : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
   log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
@@ -1520,7 +1633,7 @@ function resolveUnpressuredDisposal(
     zone: newZone,
     possession: state.possession,
     carrier: receiver,
-    handballContestDistance: receiverPick.distance,
+    handballContestDistance: handballPick.distance,
   };
 }
 
@@ -1916,13 +2029,21 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // 50 first, weighted the same way as every other reception, who marks it
   // and *then* shoots — not the disposer teleporting straight into a shot off
   // their own kick.
-  const shotChance = P_SHOT_WHEN_ENTERING_FORWARD_50 * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
-  if (isKick && isForward50(newZone, state.possession) && ctx.rng() < shotChance) {
+  // Round 46 — receiver (and, only for a genuine forward-50 entry,
+  // shot-chance) decided ONCE here via pickForward50KickReceiver, same as
+  // resolveUnpressuredDisposal's own identical restructure above — see that
+  // function's own doc comment for the full diagnosis (ROADMAP backlog
+  // item #26).
+  let receiverPick: KickPick | null = null;
+  let isShotChance = false;
+  if (isKick) {
+    ({ receiverPick, isShotChance } = pickForward50KickReceiver(ctx, state, possessingTeam, possessingPlan, defendingSide, defendingTeam, carrier, newZone, disposerPos));
+  }
+  if (receiverPick && isShotChance) {
     // Aug 2026 round 26 — same treatment as resolveUnpressuredDisposal's own
     // identical shot-chance branch above: the mark no longer resolves this
     // same tick, see runMarkingContest's own doc comment / [[Contest
     // Resolution Redesign]] item 4.
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
     const receiver = receiverPick.player;
     const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
@@ -1956,8 +2077,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // uses — see that function's own doc comment. A kick's own receiver pool is,
   // as of round 24, additionally weighted by genuine space from the nearest
   // opponent (weightedKickTarget) — see that function's own doc comment.
-  if (isKick) {
-    const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  if (receiverPick) {
+    // Round 46 — same pick from pickForward50KickReceiver above (isKick was
+    // true to get here; receiverPick is only ever set in that branch), not a
+    // second independent weightedKickTarget call.
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
@@ -1974,10 +2097,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       markContestDistance: markDistance,
     };
   }
-  const receiverPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
-  const receiver = receiverPick.player;
+  const handballPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  const receiver = handballPick.player;
   const handballLabel =
-    proximityWeight(receiverPick.distance) === 0
+    proximityWeight(handballPick.distance) === 0
       ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
       : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
   log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
@@ -1986,7 +2109,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     zone: newZone,
     possession: state.possession,
     carrier: receiver,
-    handballContestDistance: receiverPick.distance,
+    handballContestDistance: handballPick.distance,
   };
 }
 

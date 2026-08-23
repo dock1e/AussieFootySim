@@ -102,7 +102,13 @@ export default function App() {
       </header>
 
       <main key={poolVersion}>
-        {screen === "dashboard" && <Dashboard />}
+        {screen === "dashboard" && (
+          <Dashboard
+            onGoToSelection={() => setScreen("selection")}
+            onGoToContracts={() => setScreen("contracts")}
+            onGoToSeason={() => setScreen("season")}
+          />
+        )}
         {screen === "squad" && <SquadList players={squad} liveCondition={liveCondition} />}
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}

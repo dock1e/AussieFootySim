@@ -7,8 +7,40 @@ import { clubById } from "../types/club";
  * a glance in an 18-row table, same idea as the rest of User Interface.md's
  * "make your own club legible at a glance" pattern (e.g. the Dashboard's
  * line-rating bars).
+ *
+ * `previousLadder` (Aug 2026 round 50, [[Dashboard Redesign]]) is optional
+ * and purely additive — every pre-existing call site (SeasonHub) is
+ * unaffected. When supplied (e.g. `engine/seasonSummary.ts`'s
+ * `previousLadder(season)`), each row gets a ▲/▼/– indicator comparing this
+ * club's ladder position now vs. immediately before the last simulated
+ * round, computed by the caller rather than this component — `LadderTable`
+ * itself stays a pure render of whatever two ladders it's handed.
+ *
+ * `windowClubIds` (Aug 2026 round 50) is also optional and additive — when
+ * supplied, only clubs in the set are actually rendered as `<tr>`s, but
+ * `ladder` itself must still be the FULL, untrimmed ladder. This is
+ * deliberate: rank numbers, the top-8 finals marker, and the movement arrow
+ * all need each row's TRUE league-wide index (`i` from mapping the full
+ * array), not its position within a pre-trimmed slice — a real bug caught
+ * live this round (Dashboard's compact ladder showed Melbourne, actually
+ * 9th, numbered "4" with an inflated ▲8, because the caller was slicing the
+ * array down to 7 rows *before* handing it to this component, so `i` reset
+ * to 0 at the top of that slice instead of staying at Melbourne's true
+ * rank). Filtering which rows render, rather than filtering the array the
+ * caller passes in, keeps `i` correct throughout.
  */
-export function LadderTable({ ladder, highlightClubId }: { ladder: LadderRow[]; highlightClubId?: number }) {
+export function LadderTable({
+  ladder,
+  highlightClubId,
+  previousLadder,
+  windowClubIds,
+}: {
+  ladder: LadderRow[];
+  highlightClubId?: number;
+  previousLadder?: LadderRow[];
+  windowClubIds?: Set<number>;
+}) {
+  const previousRank = previousLadder ? new Map(previousLadder.map((r, i) => [r.clubId, i + 1])) : null;
   return (
     <div className="card overflow-x-auto">
       <table className="w-full text-sm">
@@ -28,6 +60,7 @@ export function LadderTable({ ladder, highlightClubId }: { ladder: LadderRow[]; 
         </thead>
         <tbody>
           {ladder.map((row, i) => {
+            if (windowClubIds && !windowClubIds.has(row.clubId)) return null;
             const club = clubById(row.clubId);
             const isMine = row.clubId === highlightClubId;
             const isFinals = i < 8;
@@ -39,6 +72,7 @@ export function LadderTable({ ladder, highlightClubId }: { ladder: LadderRow[]; 
                 <td className="px-3 py-2 tabular-nums text-slate-400">
                   {i + 1}
                   {isFinals && <span className="ml-1 text-accent-light">•</span>}
+                  {previousRank && <LadderMovement now={i + 1} before={previousRank.get(row.clubId)} />}
                 </td>
                 <td className={`px-3 py-2 ${isMine ? "font-semibold text-accent-light" : "font-medium"}`}>
                   <span className="inline-flex items-center gap-2">
@@ -70,4 +104,32 @@ export function LadderTable({ ladder, highlightClubId }: { ladder: LadderRow[]; 
       </div>
     </div>
   );
+}
+
+/** `before` is `undefined` for a club with no prior-ladder entry (shouldn't happen in practice — `previousLadder` always returns a full 18-row ladder — but degrades to no arrow rather than a crash). */
+function LadderMovement({ now, before }: { now: number; before: number | undefined }) {
+  if (before === undefined || before === now) return <span className="ml-1 text-slate-600">–</span>;
+  return before > now ? (
+    <span className="ml-1 text-good" title={`Up from ${before}${ordinalSuffix(before)}`}>
+      ▲{before - now}
+    </span>
+  ) : (
+    <span className="ml-1 text-bad" title={`Down from ${before}${ordinalSuffix(before)}`}>
+      ▼{now - before}
+    </span>
+  );
+}
+
+function ordinalSuffix(n: number): string {
+  if (n % 100 >= 11 && n % 100 <= 13) return "th";
+  switch (n % 10) {
+    case 1:
+      return "st";
+    case 2:
+      return "nd";
+    case 3:
+      return "rd";
+    default:
+      return "th";
+  }
 }

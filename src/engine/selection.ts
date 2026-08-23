@@ -1,6 +1,6 @@
 import type { Player } from "../types/player.ts";
 import type { Archetype } from "../types/archetype.ts";
-import { POSITIONS, suitabilityFor, type Position, type Suitability } from "../types/archetype.ts";
+import { POSITIONS, suitabilityFor, defaultEligiblePositions, type Position, type Suitability } from "../types/archetype.ts";
 import type { MatchTeam } from "./team.ts";
 import { pickBest22 } from "./team.ts";
 
@@ -97,8 +97,27 @@ export function lineupPlayerIds(lineup: Lineup): number[] {
  * on-ground — they're standing in for a real position that would otherwise be
  * empty, the same reasoning that already puts them in `players` at all rather
  * than leaving the team short.
+ *
+ * Aug 2026, round 48 — [[Interchange Rotation]]: also populates
+ * `MatchTeam.interchangeEligibility` for every picked player (not just the 5
+ * who started on `INT` — see that field's own doc comment for why a starter
+ * needs one too). `eligibilityOverrides` is the coach's own saved per-player
+ * edits from Selection Committee (`useSelectionStore`, keyed by PlayerID);
+ * anyone not present there — which is everyone, until a coach actually opens
+ * the new eligibility editor — gets `defaultEligiblePositions(archetype)`
+ * unioned with their own assigned slot, so a coach who never touches this
+ * screen still gets a fully-formed, sensible eligibility map, not an empty
+ * one (same "a coach who touches nothing still gets a real plan" precedent
+ * `sanitizePlan` already established for tactics). A top-up player (no real
+ * assigned slot) gets the archetype default with nothing to union in, same
+ * as their `positions` entry being absent too.
  */
-export function lineupToMatchTeam(clubName: string, lineup: Lineup, allClubPlayers: readonly Player[]): MatchTeam {
+export function lineupToMatchTeam(
+  clubName: string,
+  lineup: Lineup,
+  allClubPlayers: readonly Player[],
+  eligibilityOverrides?: Record<number, Position[]>,
+): MatchTeam {
   const byId = new Map(allClubPlayers.map((p) => [p.PlayerID, p]));
   const picked: Player[] = [];
   const pickedIds = new Set<number>();
@@ -123,7 +142,18 @@ export function lineupToMatchTeam(clubName: string, lineup: Lineup, allClubPlaye
       onGround.add(p.PlayerID);
     }
   }
-  return { name: clubName, players: picked.slice(0, 23), positions, onGround };
+  const interchangeEligibility = new Map<number, Set<Position>>();
+  for (const p of picked) {
+    const override = eligibilityOverrides?.[p.PlayerID];
+    if (override && override.length > 0) {
+      interchangeEligibility.set(p.PlayerID, new Set(override));
+      continue;
+    }
+    const assigned = positions.get(p.PlayerID);
+    const defaults = defaultEligiblePositions(p.archetype as Archetype);
+    interchangeEligibility.set(p.PlayerID, new Set(assigned ? [...defaults, assigned] : defaults));
+  }
+  return { name: clubName, players: picked.slice(0, 23), positions, onGround, interchangeEligibility };
 }
 
 /** Convenience: the existing pickBest22 stand-in, exposed here too so callers can offer "reset to auto-pick" without importing team.ts directly. */

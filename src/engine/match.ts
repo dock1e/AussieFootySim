@@ -5,7 +5,7 @@ import { computeContestRating, resolveContest, resolveThreshold } from "./contes
 import type { ContestType } from "./contestTypes.ts";
 import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
-import { bestByRating, onGroundPlayers } from "./team.ts";
+import { bestByRating, onGroundPlayers, benchPlayers } from "./team.ts";
 import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
 import { carrierPosition, proximityFor, distanceBetween, proximityWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
 import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
@@ -606,6 +606,37 @@ const TACKLE_ATTEMPT_HANDICAP = 37;
 const TACKLE_HOLD_DOWN_TICKS = 2;
 
 /**
+ * Aug 2026 round 48 — [[Interchange Rotation]]. Tyler: "During the match sim
+ * this should therefore periodically interchange the player with the lowest
+ * fitness off, give him a moment to recharge and then interchange him back
+ * on for the new lowest fitness in his group." A genuinely new, in-match-only
+ * meter — deliberately separate from `progression.ts`'s `condition`, which is
+ * a round-to-round season concept and stays completely untouched by any of
+ * this (see `Ctx.homeFitness`/`awayFitness`'s own doc comment). Every number
+ * below is a disclosed, reasoned-not-derived starting point, same status as
+ * `TACKLE_HOLD_DOWN_TICKS` above and every other placeholder constant in this
+ * file — checked against real matches in `scripts/verify_round48_scratch.ts`,
+ * not fitted to any citation.
+ */
+/**
+ * Exported (like round 47's SHOT_* constants) purely so verify scripts can
+ * test the real production values directly rather than guessing/copying
+ * them — see this section's own top doc comment.
+ */
+/** How often (in ticks) automatic rotation is even considered — not every tick, so a swap reads as a periodic, deliberate-feeling interchange rather than a jittery tick-by-tick fitness chase. Comfortably more than one full check needs to land inside a quarter (DEFAULT_TICKS_PER_QUARTER = 130) to feel "periodic... during the match", not just "once at the very end". */
+export const FITNESS_CHECK_INTERVAL_TICKS = 15;
+/** Fitness lost per tick spent on-ground. Calibrated so a fresh (100) player run flat-out for a whole quarter with no rotation at all lands in the high-50s — comfortably below FITNESS_ROTATION_THRESHOLD, never actually reaching FITNESS_FLOOR on its own within one quarter. */
+export const ON_GROUND_FITNESS_DRAIN = 0.3;
+/** Fitness recovered per tick spent on the bench — several times the drain rate, Tyler's own "give him a moment to recharge": a real rest stint should visibly matter within the span of a few checks, not merely edge ahead of continuing to play. */
+export const BENCH_FITNESS_RECOVERY = 1.2;
+/** Below this, a group's lowest on-ground player becomes a genuine automatic-rotation candidate (subject to an eligible, sufficiently-rested bench replacement actually being available — see `rotateSideForFitness`). */
+export const FITNESS_ROTATION_THRESHOLD = 70;
+/** Minimum ticks a player must have spent on the bench before being eligible to rotate back on — stops an immediate ping-pong swap-back the very next check once they've barely recovered. Deliberately more than one FITNESS_CHECK_INTERVAL_TICKS cycle. */
+export const MIN_BENCH_REST_TICKS = 25;
+/** A floor so a player stuck on-ground with no eligible replacement available degrades, not breaks — same "meaningfully worse, never zeroed out" spirit as progression.ts's MIN_CONDITION. */
+export const FITNESS_FLOOR = 20;
+
+/**
  * Contest execution roll — Aug 2026 round 22, Tyler's process-map diagram
  * (Rows 1/3: "Roll: Gather the ball"/"Roll: Mark the ball", ~99% success /
  * 1% fail). Once `resolveContest` has already decided who wins the
@@ -774,6 +805,31 @@ export interface Ctx {
    * that function's own doc comment for the full picture.
    */
   groundedUntilTick: Map<number, number>;
+  /**
+   * Aug 2026 round 48 — [[Interchange Rotation]]: PlayerID -> current
+   * in-match fitness (0-100, starts at 100 for everyone at kick-off).
+   * Deliberately separate from `homeCondition`/`awayCondition` above —
+   * `condition` is a round-to-round season concept, static for the whole
+   * duration of any one match; this is the new *within-a-match* meter that
+   * actually moves tick by tick (see `ON_GROUND_FITNESS_DRAIN`/
+   * `BENCH_FITNESS_RECOVERY`'s own doc comment), driving automatic
+   * fitness-triggered rotation. Always populated (not optional/nullable like
+   * `homeCondition`) — unlike condition, which only some callers opt into
+   * supplying, every match now runs this meter regardless, since automatic
+   * rotation is meant to be a real, always-on part of the sim, not an
+   * opt-in overlay.
+   */
+  homeFitness: Map<number, number>;
+  awayFitness: Map<number, number>;
+  /**
+   * Aug 2026 round 48 — [[Interchange Rotation]]: PlayerID -> the tick a
+   * benched player becomes eligible to rotate back on (inclusive), set by
+   * `performInterchangeSwap` whenever a player comes off. Same idiom as
+   * `groundedUntilTick` above (a "when do they become available again"
+   * timer map living on `Ctx` since it has to survive across whatever phase
+   * happens to be running when it's checked) — see `MIN_BENCH_REST_TICKS`.
+   */
+  restUntilTick: Map<number, number>;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
@@ -2982,6 +3038,12 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
     matchups: resolveMatchups(home, away),
     trackedPositions: initialPositions(home, away, styleFor(homePlan), styleFor(awayPlan), MIDFIELD, "home"),
     groundedUntilTick: new Map(),
+    // Aug 2026 round 48 — [[Interchange Rotation]]: everyone kicks off at
+    // full fitness, regardless of which 18 start on-ground vs. the 5 who
+    // start on the bench — see homeFitness/awayFitness's own doc comment.
+    homeFitness: new Map(home.players.map((p) => [p.PlayerID, 100])),
+    awayFitness: new Map(away.players.map((p) => [p.PlayerID, 100])),
+    restUntilTick: new Map(),
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.
@@ -2989,6 +3051,168 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
 
   const state: State = { phase: "STOPPAGE", zone: MIDFIELD, possession: "home", carrier: null };
   return { ctx, state, seed, ticksPerQuarter };
+}
+
+// --- Interchange rotation — Aug 2026 round 48, [[Interchange Rotation]] ------------------------
+
+/** Every tick's fitness update — drains every on-ground player a little, recovers every bench player rather more (Tyler's own "give him a moment to recharge"). Runs unconditionally each tick (not gated on the periodic rotation check below), same "the meter itself is continuous, only the DECISION to act on it is periodic" split `groundedUntilTick` doesn't need but this genuinely does. */
+function stepFitness(ctx: Ctx): void {
+  stepFitnessSide(ctx.home, ctx.homeFitness);
+  stepFitnessSide(ctx.away, ctx.awayFitness);
+}
+function stepFitnessSide(team: MatchTeam, fitness: Map<number, number>): void {
+  for (const p of onGroundPlayers(team)) {
+    fitness.set(p.PlayerID, Math.max(FITNESS_FLOOR, (fitness.get(p.PlayerID) ?? 100) - ON_GROUND_FITNESS_DRAIN));
+  }
+  for (const p of benchPlayers(team)) {
+    fitness.set(p.PlayerID, Math.min(100, (fitness.get(p.PlayerID) ?? 100) + BENCH_FITNESS_RECOVERY));
+  }
+}
+
+/**
+ * Executes one interchange swap: `outgoing` (currently at `position` on
+ * `team`) goes to the bench, `incoming` (already confirmed eligible for
+ * `position` by the caller) takes their exact slot — Engine.md's original
+ * "like-for-like interchange swaps" read literally: the incoming player
+ * inherits the outgoing player's precise real slot, nothing more elaborate.
+ * Shared by automatic fitness-driven rotation (`rotateSideForFitness` below)
+ * and manual interchange (the exported `attemptInterchange`) — one execution
+ * path for both, so neither can drift out of sync with the other on what a
+ * swap actually does.
+ *
+ * `ctx.matchups`/`ctx.trackedPositions` are deliberately NOT hand-patched
+ * for the two named players — `movement.ts`'s `resolveMatchups`/`stepSide`
+ * both key off `team.onGround`/`team.positions` fresh (not a frozen
+ * snapshot), so recomputing `matchups` wholesale here, and simply leaving
+ * `trackedPositions` for the very next tick's ordinary `stepPositions` call
+ * to fill in (its own `current.get(id) ?? target` fallback already handles a
+ * brand-new on-ground entrant by starting them right at their tactical
+ * anchor), is both simpler and more obviously correct than trying to copy
+ * individual map entries across by hand.
+ */
+function performInterchangeSwap(ctx: Ctx, team: MatchTeam, outgoing: Player, incoming: Player, position: Position, state: State, reason: "fitness" | "manual"): void {
+  if (!team.onGround || !team.positions) return; // defensive — callers already guard this, see rotateSideForFitness/attemptInterchange
+  team.onGround.delete(outgoing.PlayerID);
+  team.onGround.add(incoming.PlayerID);
+  team.positions.set(outgoing.PlayerID, "INT");
+  team.positions.set(incoming.PlayerID, position);
+  ctx.restUntilTick.set(outgoing.PlayerID, ctx.tick + MIN_BENCH_REST_TICKS);
+  ctx.matchups = resolveMatchups(ctx.home, ctx.away);
+
+  const fitness = team === ctx.home ? ctx.homeFitness : ctx.awayFitness;
+  const outFitness = Math.round(fitness.get(outgoing.PlayerID) ?? 100);
+  const description =
+    reason === "fitness"
+      ? `${incoming.lname} replaces ${outgoing.lname} at ${position} — ${outgoing.lname}'s legs are heavy (${outFitness}% fitness), heads to the bench for a breather.`
+      : `${team.name} make a change: ${incoming.lname} on for ${outgoing.lname} at ${position}.`;
+  // skipPositionNudge: true — this isn't an on-ball moment, the two named
+  // players aren't "together near the ball", see nudgeInvolvedPositions'
+  // own doc comment for why that nudge is deliberately opt-out here.
+  log(ctx, state.zone, state.possession, state.phase, description, [outgoing.PlayerID, incoming.PlayerID], [], true);
+}
+
+/** Every `FITNESS_CHECK_INTERVAL_TICKS`, considers one automatic swap per side — see this section's own top doc comment for the full mechanism. */
+function maybeRotateForFitness(ctx: Ctx, state: State): void {
+  if (ctx.tick % FITNESS_CHECK_INTERVAL_TICKS !== 0) return;
+  rotateSideForFitness(ctx, ctx.home, ctx.homeFitness, state);
+  rotateSideForFitness(ctx, ctx.away, ctx.awayFitness, state);
+}
+
+/**
+ * Aug 2026 round 48 — the first version of this function only ever looked at
+ * the SINGLE lowest-fitness on-ground player and gave up for the whole check
+ * if nobody on the bench happened to be eligible for that one player's exact
+ * slot — even when a DIFFERENT, genuinely tired on-ground player (in a
+ * different, actually-covered position) had a real replacement sitting ready.
+ * `scripts/verify_round48_scratch.ts`'s Section 5 caught this directly: real
+ * matches converged to every on-ground player pinned at FITNESS_FLOOR and
+ * every bench player sitting untouched at 100 — rotation had effectively
+ * stalled almost everywhere except whichever one slot happened to have
+ * bench cover AND happened to also be the global minimum at a given check.
+ * Fixed by walking every below-threshold on-ground player tiredest-first and
+ * taking the first one that actually has an available replacement, rather
+ * than stopping dead at the single tiredest. A position with genuinely no
+ * bench cover at all (a real, expected limit of a 5-player bench covering 18
+ * on-ground slots — see MatchTeam.interchangeEligibility's own doc comment)
+ * is still correctly left alone; it just no longer blocks every OTHER,
+ * coverable position from rotating too.
+ */
+function rotateSideForFitness(ctx: Ctx, team: MatchTeam, fitness: Map<number, number>, state: State): void {
+  // No real position/eligibility data for this side (e.g. a pickBest22
+  // stand-in with no Selection Committee lineup behind it) — nothing safe to
+  // rotate, same "no bench distinction" degradation onGroundPlayers/
+  // benchPlayers already apply. See MatchTeam.interchangeEligibility's own
+  // doc comment.
+  if (!team.onGround || !team.positions || !team.interchangeEligibility) return;
+
+  const tiredCandidates = onGroundPlayers(team)
+    .map((p) => ({ player: p, position: team.positions!.get(p.PlayerID), fitness: fitness.get(p.PlayerID) ?? 100 }))
+    // Only a real, known slot (a top-up player with no assigned position is
+    // left alone — there's no clean "like-for-like" slot to hand an incoming
+    // player), and only genuinely below the rotation threshold.
+    .filter((c): c is { player: Player; position: Position; fitness: number } => !!c.position && c.position !== "INT" && c.fitness < FITNESS_ROTATION_THRESHOLD)
+    .sort((a, b) => a.fitness - b.fitness);
+
+  for (const candidate of tiredCandidates) {
+    // The freshest eligible, sufficiently-rested bench replacement for this
+    // exact position — "the new lowest fitness in his group" read as "among
+    // whoever's actually allowed to fill this slot", Tyler's own worked
+    // examples (a small defender never eligible for a tall defender's Back
+    // Pocket) are exactly what `interchangeEligibility` exists to enforce
+    // here.
+    let replacement: Player | null = null;
+    let replacementFitness = -Infinity;
+    for (const b of benchPlayers(team)) {
+      if (!team.interchangeEligibility.get(b.PlayerID)?.has(candidate.position)) continue;
+      if (ctx.tick < (ctx.restUntilTick.get(b.PlayerID) ?? 0)) continue; // still recharging
+      const f = fitness.get(b.PlayerID) ?? 100;
+      if (f > replacementFitness) {
+        replacementFitness = f;
+        replacement = b;
+      }
+    }
+    if (replacement) {
+      performInterchangeSwap(ctx, team, candidate.player, replacement, candidate.position, state, "fitness");
+      return; // one swap per side per check, same as before
+    }
+  }
+  // Every currently-tired on-ground player either has no eligible bench
+  // cover at all, or their only eligible cover is still recharging — nobody
+  // rotates this check, and the tired players just keep playing.
+}
+
+/**
+ * Manual interchange — quarter-time (Coach's Call) and, in a later round,
+ * mid-quarter pause (see [[Interchange Rotation]]'s staging notes). Validates
+ * the swap is legal (both players real, on the sides this function expects,
+ * and `incomingId` is actually eligible for `outgoingId`'s current slot)
+ * before executing it through the exact same `performInterchangeSwap` path
+ * automatic rotation uses — a manual swap can never do anything an
+ * automatic one couldn't.
+ */
+export function attemptInterchange(match: MatchInProgress, side: Side, outgoingId: number, incomingId: number): { ok: true } | { ok: false; reason: string } {
+  const team = side === "home" ? match.ctx.home : match.ctx.away;
+  if (!team.onGround || !team.positions || !team.interchangeEligibility) {
+    return { ok: false, reason: "This team has no real position data to interchange within." };
+  }
+  const outgoing = team.players.find((p) => p.PlayerID === outgoingId);
+  const incoming = team.players.find((p) => p.PlayerID === incomingId);
+  if (!outgoing || !incoming) return { ok: false, reason: "Player not found on this team." };
+  if (!team.onGround.has(outgoingId)) return { ok: false, reason: `${outgoing.lname} isn't currently on the ground.` };
+  if (team.onGround.has(incomingId)) return { ok: false, reason: `${incoming.lname} is already on the ground.` };
+  const position = team.positions.get(outgoingId);
+  if (!position || position === "INT") return { ok: false, reason: `${outgoing.lname} has no real slot to hand off.` };
+  if (!team.interchangeEligibility.get(incomingId)?.has(position)) {
+    return { ok: false, reason: `${incoming.lname} isn't eligible for ${position}.` };
+  }
+  performInterchangeSwap(match.ctx, team, outgoing, incoming, position, match.state, "manual");
+  return { ok: true };
+}
+
+/** This player's current in-match fitness (0-100), or 100 if the match hasn't started tracking them yet (shouldn't happen for any real selected player, but matches every other map-lookup fallback in this file). For a pause/quarter-time UI — see [[Interchange Rotation]]. */
+export function fitnessFor(match: MatchInProgress, side: Side, playerId: number): number {
+  const fitness = side === "home" ? match.ctx.homeFitness : match.ctx.awayFitness;
+  return fitness.get(playerId) ?? 100;
 }
 
 /** Runs exactly one quarter's worth of ticks, then resets to a centre stoppage — the exact same per-quarter body `simulateMatch()`'s own loop used to run inline, just callable one quarter at a time. Mutates `match` in place (and returns it, for chaining/assignment convenience). */
@@ -3023,6 +3247,8 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
   for (let t = 0; t < match.ticksPerQuarter; t++) {
     match.ctx.tick += 1;
     stepTickPositions();
+    stepFitness(match.ctx);
+    maybeRotateForFitness(match.ctx, match.state);
     switch (match.state.phase) {
       case "STOPPAGE":
         match.state = runStoppage(match.ctx, match.state);
@@ -3087,14 +3313,17 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
     if (match.state.phase === "CLEARANCE") {
       match.ctx.tick += 1;
       stepTickPositions();
+      stepFitness(match.ctx);
       match.state = runClearance(match.ctx, match.state);
     } else if (match.state.phase === "MARKING_CONTEST") {
       match.ctx.tick += 1;
       stepTickPositions();
+      stepFitness(match.ctx);
       match.state = runMarkingContest(match.ctx, match.state);
     } else if (match.state.phase === "HANDBALL_CONTEST") {
       match.ctx.tick += 1;
       stepTickPositions();
+      stepFitness(match.ctx);
       match.state = runHandballContest(match.ctx, match.state);
     } else if (match.state.phase === "SHOT") {
       // The one phase in this chain that ISN'T a phase this same loop
@@ -3106,6 +3335,7 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       // walked, not just reasoned about.
       match.ctx.tick += 1;
       stepTickPositions();
+      stepFitness(match.ctx);
       match.state = runShot(match.ctx, match.state);
     } else {
       break;

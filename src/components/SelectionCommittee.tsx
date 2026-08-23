@@ -6,11 +6,11 @@ import { useTeamPlanStore } from "../store/useTeamPlanStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { getPlayersByClub } from "../data/loadPlayers";
 import { emptyLineup, isLineupComplete, lineupPlayerIds, lineupToMatchTeam } from "../engine/selection";
-import { pickBest22 } from "../engine/team";
-import { POSITIONS } from "../types/archetype";
+import { benchPlayers, pickBest22 } from "../engine/team";
+import { POSITIONS, defaultEligiblePositions, suitabilityFor, type Archetype, type Position } from "../types/archetype";
 import { defaultTeamPlan } from "../engine/tactics";
 import { TeamPrep } from "./MatchPreparation";
-import { SelectionGround } from "./SelectionGround";
+import { SelectionGround, GROUND_ROW_POSITIONS } from "./SelectionGround";
 import { SelectionPlayerList } from "./SelectionPlayerList";
 
 /**
@@ -43,8 +43,9 @@ import { SelectionPlayerList } from "./SelectionPlayerList";
 export function SelectionCommittee() {
   const myClub = useGameStore((s) => s.myClub);
   const players = useMemo(() => getPlayersByClub(myClub), [myClub]);
-  const { lineupFor, setSlot, autoFill, clear } = useSelectionStore();
+  const { lineupFor, setSlot, autoFill, clear, eligibilityFor, setEligibility } = useSelectionStore();
   const lineup = lineupFor(myClub) ?? emptyLineup();
+  const eligibilityOverrides = eligibilityFor(myClub);
 
   // Which player (if any) is "picked up" from the list, awaiting a slot
   // click to place them — see handleSlotClick below. Reset whenever the
@@ -77,8 +78,8 @@ export function SelectionCommittee() {
   // stand-in before that — so the Standing Game Plan below is always editing
   // tactics for whoever's really going to take the park.
   const myTeam = useMemo(
-    () => (complete ? lineupToMatchTeam(myClub, lineup, players) : pickBest22(myClub, players)),
-    [myClub, complete, lineup, players],
+    () => (complete ? lineupToMatchTeam(myClub, lineup, players, eligibilityOverrides) : pickBest22(myClub, players)),
+    [myClub, complete, lineup, players, eligibilityOverrides],
   );
 
   const { planFor, setGameStyle, setTactic } = useTeamPlanStore();
@@ -138,6 +139,19 @@ export function SelectionCommittee() {
         />
       </div>
 
+      {complete && benchPlayers(myTeam).length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Interchange Eligibility</div>
+          <div className="card text-xs text-slate-400">
+            Which real ground positions each interchange player is allowed to rotate into during a
+            match — set once here so an automatic swap (or a manual one, mid-match) can never put the
+            wrong body type in a slot, like a small defender backfilling Back Pocket for a tall one.
+            Leave a player untouched for a sensible default based on their archetype.
+          </div>
+          <InterchangeEligibilityEditor bench={benchPlayers(myTeam)} overrides={eligibilityOverrides} onToggle={(playerId, positions) => setEligibility(myClub, playerId, positions)} />
+        </div>
+      )}
+
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <div className="text-xs uppercase tracking-wide text-slate-400">Standing Game Plan</div>
@@ -159,6 +173,98 @@ export function SelectionCommittee() {
           onUpdateTactic={(playerId, pt) => setTactic(myClub, playerId, pt)}
         />
       </div>
+    </div>
+  );
+}
+
+/** `GROUND_ROW_POSITIONS`, deduped to the 13 real unique position labels (BP/HBF/W/HFF/FP each appear twice there — once per real slot — but "eligible for BP" means either slot, so this editor only ever needs to show each label once). Computed once at module scope since it's static. */
+const UNIQUE_ELIGIBILITY_ROWS: { label: string; positions: Position[] }[] = GROUND_ROW_POSITIONS.map((row) => ({
+  label: row.label,
+  positions: [...new Set(row.positions)],
+}));
+
+const ELIGIBILITY_SUITABILITY_STYLE: Record<string, string> = {
+  "Very suitable": "border-good text-good",
+  "Somewhat suitable": "border-warn text-warn",
+  "Barely suitable": "border-warn/40 text-slate-400",
+  "Not suitable": "border-bad text-bad",
+};
+
+/**
+ * Aug 2026, round 48 — [[Interchange Rotation]]: one per-player editor for
+ * `MatchTeam.interchangeEligibility`'s override map — Tyler's own worked
+ * examples ("Forward Pocket, Half Forward Flank, Wing... Back Pocket, Half
+ * Back Flank, Wing...") are exactly a small hand-picked position set per
+ * bench player, so this is a plain toggle grid, not a drag-and-drop editor
+ * like `SelectionGround`'s slot placement — there's no ordering or
+ * one-slot-per-player constraint here, just "on or off" per real position.
+ *
+ * Every pill is coloured by `suitabilityFor` regardless of its current
+ * on/off state (same border-colour language `SelectionGround`/
+ * `MatchPreparation` already use), so a coach can see at a glance both
+ * "is this naturally a good fit" and "is it currently enabled" — a filled
+ * pill is enabled, an outline pill isn't, and the colour itself never
+ * changes based on that state.
+ */
+function InterchangeEligibilityEditor({
+  bench,
+  overrides,
+  onToggle,
+}: {
+  bench: Player[];
+  overrides: Record<number, Position[]> | undefined;
+  onToggle: (playerId: number, positions: Position[]) => void;
+}) {
+  function effectiveFor(player: Player): Position[] {
+    return overrides?.[player.PlayerID] ?? defaultEligiblePositions(player.archetype as Archetype);
+  }
+
+  return (
+    <div className="space-y-2">
+      {bench.map((player) => {
+        const effective = effectiveFor(player);
+        const hasOverride = overrides?.[player.PlayerID] !== undefined;
+        return (
+          <div key={player.PlayerID} className="card space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-base-700 px-1.5 py-0.5 text-[10px] tabular-nums text-slate-400">#{player.jumperNumber}</span>
+                <span className="text-sm font-semibold text-slate-100">
+                  {player.fname} {player.lname}
+                </span>
+                <span className="text-xs text-slate-500">{player.archetype}</span>
+              </div>
+              {hasOverride && (
+                <button onClick={() => onToggle(player.PlayerID, [])} className="text-[11px] text-slate-500 underline decoration-dotted hover:text-slate-300">
+                  Reset to default
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {UNIQUE_ELIGIBILITY_ROWS.flatMap((row) => row.positions).map((position) => {
+                const active = effective.includes(position);
+                const suitability = suitabilityFor(player.archetype as Archetype, position);
+                const colour = ELIGIBILITY_SUITABILITY_STYLE[suitability] ?? "border-base-600 text-slate-400";
+                return (
+                  <button
+                    key={position}
+                    onClick={() => {
+                      const next = active ? effective.filter((p) => p !== position) : [...effective, position];
+                      onToggle(player.PlayerID, next);
+                    }}
+                    title={`${position} — ${suitability} for a ${player.archetype}`}
+                    className={`rounded-full border-2 px-2.5 py-1 text-[11px] font-semibold transition-colors ${colour} ${
+                      active ? "bg-base-700" : "bg-transparent opacity-60 hover:opacity-100"
+                    }`}
+                  >
+                    {position}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { CLUBS, clubById } from "../types/club.ts";
+import type { Position } from "../types/archetype.ts";
 import { getPlayersByClub } from "../data/loadPlayers.ts";
 import type { MatchTeam } from "./team.ts";
 import { simulateMatch, type MatchResult } from "./match.ts";
@@ -96,7 +97,23 @@ export interface Season {
  * per-player position data for `engine/involvement.ts`'s zone-weighted
  * picks (Phase 8 Slice B) to use — see [[Tactics and Positional Play]].
  */
-export function buildTeams(clubIds: number[], overrides?: Map<number, MatchTeam>): Map<number, MatchTeam> {
+/**
+ * Aug 2026, round 48 — [[Interchange Rotation]]: `eligibilityOverrides`
+ * (keyed by clubId, same convention as `overrides` above) threads each
+ * club's saved interchange-eligibility edits through to the auto-fill
+ * branch too, so a headless season match carries the same real
+ * `MatchTeam.interchangeEligibility` a Match-tab game would build for the
+ * identical club/lineup. In practice only the human coach's own club ever
+ * has any saved overrides (see Selection Committee's eligibility editor),
+ * but every other club still gets a fully-formed, sensible default map from
+ * `lineupToMatchTeam` regardless — this param only ever widens what a club
+ * *could* carry, never narrows it.
+ */
+export function buildTeams(
+  clubIds: number[],
+  overrides?: Map<number, MatchTeam>,
+  eligibilityOverrides?: Map<number, Record<number, Position[]>>,
+): Map<number, MatchTeam> {
   const map = new Map<number, MatchTeam>();
   for (const id of clubIds) {
     const override = overrides?.get(id);
@@ -107,7 +124,7 @@ export function buildTeams(clubIds: number[], overrides?: Map<number, MatchTeam>
     const club = clubById(id);
     if (!club) continue;
     const players = getPlayersByClub(club.name);
-    map.set(id, lineupToMatchTeam(club.name, autoFillLineup(players), players));
+    map.set(id, lineupToMatchTeam(club.name, autoFillLineup(players), players, eligibilityOverrides?.get(id)));
   }
   return map;
 }

@@ -11,6 +11,8 @@ import {
   setGameStyle,
   getGameStyle,
   matchResultSoFar,
+  attemptInterchange,
+  fitnessFor,
   type MatchResult,
   type MatchInProgress,
   type MatchEvent,
@@ -31,6 +33,7 @@ import { MatchCanvas } from "./MatchCanvas";
 import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
 import { CoachsCall } from "./CoachsCall";
+import { QuarterTimeInterchange } from "./QuarterTimeInterchange";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8, 16];
 
@@ -88,6 +91,8 @@ export function LiveMatch() {
 
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
+  /** [[Interchange Rotation]], round 48 — read broadly (every club, not just myClub) so resolveTeam can thread whichever side's own saved overrides through symmetrically; in practice only the human coach's own club ever has any (see Selection Committee's new eligibility editor). */
+  const allEligibility = useSelectionStore((s) => s.eligibility);
 
   /**
    * Fixture-driven ground selection (Aug 2026, Phase 10 round 14 — Tyler:
@@ -110,14 +115,15 @@ export function LiveMatch() {
   /** Uses the coach's own Selection Committee lineup when it's their club and it's complete; every other club falls back to the same real, suitability-aware auto-fill (`autoFillLineup`) an AI club gets in season simulation now — see engine/season.ts's `buildTeams` and [[Tactics and Positional Play]] — rather than the old coarse OVR-only `pickBest22`. */
   function resolveTeam(clubName: string): MatchTeam {
     const clubPlayers = getPlayersByClub(clubName);
+    const eligibilityOverrides = allEligibility[clubName];
     if (clubName === myClub && myLineup && isLineupComplete(myLineup)) {
-      return lineupToMatchTeam(clubName, myLineup, clubPlayers);
+      return lineupToMatchTeam(clubName, myLineup, clubPlayers, eligibilityOverrides);
     }
-    return lineupToMatchTeam(clubName, autoFillLineup(clubPlayers), clubPlayers);
+    return lineupToMatchTeam(clubName, autoFillLineup(clubPlayers), clubPlayers, eligibilityOverrides);
   }
 
-  const homeTeam = useMemo(() => resolveTeam(homeClub), [homeClub, myClub, myLineup]);
-  const awayTeam = useMemo(() => resolveTeam(awayClub), [awayClub, myClub, myLineup]);
+  const homeTeam = useMemo(() => resolveTeam(homeClub), [homeClub, myClub, myLineup, allEligibility]);
+  const awayTeam = useMemo(() => resolveTeam(awayClub), [awayClub, myClub, myLineup, allEligibility]);
   const homeIds = useMemo(() => new Set(homeTeam.players.map((p) => p.PlayerID)), [homeTeam]);
   const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
   const homeIsCustom = homeClub === myClub && !!myLineup && isLineupComplete(myLineup);
@@ -174,6 +180,30 @@ export function LiveMatch() {
     setResult(matchResultSoFar(matchInProgress));
     setPendingCoachsCall(null);
     playback.play(); // auto-resume - "click play and let it run," the Coach's Call is the only interruption
+  }
+
+  /**
+   * Quarter-time manual interchange ([[Interchange Rotation]], round 48
+   * Slice 1) — `QuarterTimeInterchange`'s own click-to-arm UI only ever
+   * offers an already-eligibility-gated swap, so `attemptInterchange`
+   * rejecting it here would only mean a genuine bug, not a real user
+   * mistake to surface; logged rather than silently swallowed either way.
+   * `matchInProgress`/`homeTeam`/`awayTeam` are mutated in place (the same
+   * `MatchTeam` object references `startMatch` was handed at kick-off — see
+   * `attemptInterchange`'s own doc comment), so the only thing actually
+   * needed to make the swap visible is a re-render; re-deriving `result`
+   * from the now-current `matchInProgress` is the exact same "something
+   * changed inside the live match" signal `chooseCoachsCall`/
+   * `skipRestOfMatch` already use for this.
+   */
+  function handleInterchange(side: "home" | "away", outgoingId: number, incomingId: number) {
+    if (!matchInProgress) return;
+    const outcome = attemptInterchange(matchInProgress, side, outgoingId, incomingId);
+    if (!outcome.ok) {
+      console.warn("attemptInterchange rejected a swap the UI should already have prevented:", outcome.reason);
+      return;
+    }
+    setResult(matchResultSoFar(matchInProgress));
   }
 
   /** "Skip to Full Time" during an interactive match auto-simulates every remaining quarter with no further Coach's Call prompts (current game style holds), then jumps playback straight to the end - same "stop asking me things, just finish it" behaviour as skipping any other screen. A no-op simulation-wise for a non-interactive (AI-vs-AI) match, which already has the full result. */
@@ -323,11 +353,18 @@ export function LiveMatch() {
           </div>
 
           {pendingCoachsCall ? (
-            <CoachsCall
-              quarterJustFinished={pendingCoachsCall.quarterJustFinished}
-              currentStyle={matchInProgress ? getGameStyle(matchInProgress, pendingCoachsCall.side) : "Balanced"}
-              onChoose={chooseCoachsCall}
-            />
+            <>
+              <QuarterTimeInterchange
+                team={pendingCoachsCall.side === "home" ? homeTeam : awayTeam}
+                fitnessFor={(playerId) => (matchInProgress ? fitnessFor(matchInProgress, pendingCoachsCall.side, playerId) : 100)}
+                onInterchange={(outgoingId, incomingId) => handleInterchange(pendingCoachsCall.side, outgoingId, incomingId)}
+              />
+              <CoachsCall
+                quarterJustFinished={pendingCoachsCall.quarterJustFinished}
+                currentStyle={matchInProgress ? getGameStyle(matchInProgress, pendingCoachsCall.side) : "Balanced"}
+                onChoose={chooseCoachsCall}
+              />
+            </>
           ) : (
             <div className="card flex flex-wrap items-center gap-2">
               {playback.isPlaying ? (

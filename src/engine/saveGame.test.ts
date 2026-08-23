@@ -132,6 +132,7 @@ describe("serializeSave / deserializeSave", () => {
       players: makePool(4),
       season: minimalSeason([[1, 76], [2, 100], [3, 40]]),
       lineups: { Adelaide: [1, 2, 3, null] },
+      eligibility: { Adelaide: { 1: ["FB", "CHB", "BP"], 3: ["FP", "HFF", "W"] } },
       teamPlans: { Adelaide: plan1, Carlton: plan2 },
       combineWindow: {
         year: 2027,

@@ -38,6 +38,26 @@ export interface MatchTeam {
    * actually applied.
    */
   onGround?: Set<number>;
+  /**
+   * Aug 2026, round 48 — [[Interchange Rotation]]: PlayerID -> the real
+   * ground positions that player is allowed to rotate into as part of an
+   * interchange swap, for every player in `players` (not just whoever
+   * started on `INT` — once a starter is rotated off by fitness, they need
+   * their own eligibility set too, to be a valid candidate to rotate back
+   * on later). Populated by `engine/selection.ts`'s `lineupToMatchTeam`:
+   * `types/archetype.ts`'s `defaultEligiblePositions` unioned with the
+   * player's own assigned slot (so a coach's unusual pick can always rotate
+   * back to where they started, even if their archetype doesn't otherwise
+   * favour it), then overridden per-player wherever the coach has explicitly
+   * set one via Selection Committee (`useSelectionStore`'s eligibility
+   * overrides). Optional and additive, same fallback spirit as `positions`/
+   * `onGround` above: a team built without real per-slot position data
+   * (`pickBest22`, the balance simulator, every pre-round-48 test) simply
+   * has no entry here, and `match.ts`'s automatic-rotation step treats a
+   * missing map as "no rotation strategy for this side" rather than erroring
+   * — exactly like a missing `onGround` today means "no bench distinction."
+   */
+  interchangeEligibility?: Map<number, Set<Position>>;
 }
 
 /**

@@ -229,7 +229,8 @@ export function TeamPrep({
  * underlying ambiguity: the engine records *which* position a player fills,
  * never which literal copy of a duplicated slot).
  */
-function groupByPosition(team: MatchTeam): Map<Position, Player[]> {
+/** Exported (round 48, Aug 2026) so QuarterTimeInterchange.tsx can lay out the same real-position grouping — one shared implementation, not a second drifting copy. */
+export function groupByPosition(team: MatchTeam): Map<Position, Player[]> {
   const map = new Map<Position, Player[]>();
   if (!team.positions) return map;
   for (const p of team.players) {

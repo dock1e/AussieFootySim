@@ -1,4 +1,5 @@
 import type { Player } from "../types/player.ts";
+import type { Position } from "../types/archetype.ts";
 import type { Season } from "./season.ts";
 import type { TeamPlan, GameStyle, PlayerTactic } from "./tactics.ts";
 import type { Lineup } from "./selection.ts";
@@ -145,6 +146,18 @@ export interface SaveGameData {
   season: Season | null;
   /** Keyed by club name — mirrors useSelectionStore's `lineups`. */
   lineups: Record<string, Lineup>;
+  /**
+   * Keyed by club name, then PlayerID — mirrors useSelectionStore's
+   * `eligibility` ([[Interchange Rotation]], round 48). Added without
+   * bumping `SAVE_SCHEMA_VERSION`, same treatment as `combineWindow`/
+   * `contractWindow`/etc: a save from before this feature existed just has
+   * no overrides for anyone, which is exactly what `deserializeSave` below
+   * defaults a missing field to — `engine/selection.ts`'s
+   * `lineupToMatchTeam` already treats an absent per-player override as
+   * "use the archetype default," so an old save degrades to sensible
+   * defaults everywhere rather than erroring.
+   */
+  eligibility: Record<string, Record<number, Position[]>>;
   /** Keyed by club name — mirrors useTeamPlanStore's `plans`. */
   teamPlans: Record<string, TeamPlan>;
   /** Null if the coach hasn't run this year's National Combine yet — mirrors useCombineStore's `window`. See CombineWindow's own doc comment. */
@@ -167,6 +180,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     players: [...players],
     season: null,
     lineups: {},
+    eligibility: {},
     teamPlans: {},
     combineWindow: null,
     contractWindow: null,
@@ -243,6 +257,8 @@ export interface SerializedSaveGame {
   players: Player[];
   season: SerializedSeason | null;
   lineups: Record<string, Lineup>;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`. */
+  eligibility: Record<string, Record<number, Position[]>>;
   teamPlans: Record<string, SerializedTeamPlan>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`/`players`. */
   combineWindow: CombineWindow | null;
@@ -272,6 +288,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     players: save.players,
     season: save.season ? { ...save.season, condition: [...save.season.condition.entries()] } : null,
     lineups: save.lineups,
+    eligibility: save.eligibility,
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
     combineWindow: save.combineWindow,
     contractWindow: save.contractWindow,
@@ -310,6 +327,7 @@ export function deserializeSave(json: unknown): SaveGameData {
     players: s.players,
     season: s.season ? { ...s.season, condition: new Map(s.season.condition) } : null,
     lineups: s.lineups ?? {},
+    eligibility: s.eligibility ?? {},
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
     combineWindow: s.combineWindow ?? null,
     contractWindow: s.contractWindow ?? null,

@@ -10,6 +10,7 @@ import {
   type Season,
 } from "../engine/season";
 import type { MatchTeam } from "../engine/team";
+import type { Position } from "../types/archetype";
 import { aiTeamPlan, type TeamPlan } from "../engine/tactics";
 import { isLineupComplete, lineupToMatchTeam } from "../engine/selection";
 import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
@@ -38,10 +39,19 @@ function buildTeamsForMyClub(): Map<number, MatchTeam> {
   const myClub = useGameStore.getState().myClub;
   const myClubId = clubByName(myClub)?.ClubID;
   const myLineup = useSelectionStore.getState().lineupFor(myClub);
+  const myEligibility = useSelectionStore.getState().eligibilityFor(myClub);
   if (myClubId !== undefined && myLineup && isLineupComplete(myLineup)) {
-    overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, getPlayersByClub(myClub)));
+    overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, getPlayersByClub(myClub), myEligibility));
   }
-  return buildTeams(clubIds, overrides);
+  // [[Interchange Rotation]], round 48 — thread every club's saved
+  // eligibility overrides through (see buildTeams's own doc comment for why
+  // this only ever widens what a club can carry, never narrows it).
+  const eligibilityByClubId = new Map<number, Record<number, Position[]>>();
+  for (const club of CLUBS) {
+    const e = useSelectionStore.getState().eligibilityFor(club.name);
+    if (e) eligibilityByClubId.set(club.ClubID, e);
+  }
+  return buildTeams(clubIds, overrides, eligibilityByClubId);
 }
 
 /**

@@ -155,3 +155,23 @@ export function suitabilityFor(archetype: Archetype, position: Position): Suitab
   if (NOT_SUITABLE_OVERRIDE[archetype]?.includes(position)) return "Not suitable";
   return "Barely suitable";
 }
+
+/**
+ * Aug 2026, round 48 — [[Interchange Rotation]]: the *default* set of real
+ * ground positions a player is allowed to rotate through as part of an
+ * interchange swap, before any coach override. Deliberately reuses
+ * `SUITABILITY_MAP`'s own curated very/somewhat lists rather than inventing a
+ * second per-archetype table — "which positions can this player credibly
+ * play" is exactly what that map already encodes, and every archetype's
+ * real-AFL-grounded very/somewhat split (round 17's corrections included)
+ * carries over unchanged. `INT` itself is never included (not a real ground
+ * position to be "eligible" for) and "Not suitable"/"Barely suitable"
+ * positions are excluded on purpose — a default eligibility list is meant to
+ * be a sensible, safe starting point a coach can widen deliberately via the
+ * Selection Committee's own eligibility editor, not one that already invites
+ * a mismatched swap.
+ */
+export function defaultEligiblePositions(archetype: Archetype): Position[] {
+  const map = SUITABILITY_MAP[archetype];
+  return [...map.very, ...map.somewhat];
+}

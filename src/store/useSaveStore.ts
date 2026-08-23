@@ -195,6 +195,7 @@ function snapshotSave(year: number): SaveGameData {
     players: [...ALL_PLAYERS],
     season: useSeasonStore.getState().season,
     lineups: useSelectionStore.getState().lineups,
+    eligibility: useSelectionStore.getState().eligibility,
     teamPlans: useTeamPlanStore.getState().plans,
     combineWindow: useCombineStore.getState().window,
     contractWindow: useContractStore.getState().window,
@@ -207,6 +208,7 @@ function hydrateStoresFrom(save: SaveGameData): void {
   loadPool(save.players);
   useGameStore.getState().setMyClub(save.myClub);
   useSelectionStore.getState().restoreLineups(save.lineups);
+  useSelectionStore.getState().restoreEligibility(save.eligibility);
   useTeamPlanStore.getState().restorePlans(save.teamPlans);
   useCombineStore.getState().restoreWindow(save.combineWindow);
   useContractStore.getState().restoreWindow(save.contractWindow);

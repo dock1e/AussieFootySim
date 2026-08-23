@@ -21,8 +21,12 @@ import {
 } from "../engine/match";
 import type { ContestType } from "../engine/contestTypes";
 import { ZONE_NAMES, ZONES, ownZone, type Side, type Zone } from "../engine/zones";
+import type { Position } from "../types/archetype";
 import { mulberry32 } from "../engine/rng";
 import { fantasyPointsFor } from "../engine/ratings";
+import { playerLinesByQuarter } from "../engine/summary";
+import { seedMorale } from "../engine/morale";
+import { fitnessBand, moraleBand, NumberWithPill } from "./StatusPill";
 import { setActiveGround } from "../engine/ground";
 import { groundForMatch } from "../data/clubGrounds";
 import { DEFAULT_GAME_STYLE, type TeamPlan, type GameStyle } from "../engine/tactics";
@@ -34,6 +38,7 @@ import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
 import { CoachsCall } from "./CoachsCall";
 import { QuarterTimeInterchange } from "./QuarterTimeInterchange";
+import { DetailedStatsTable } from "./DetailedStatsTable";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8, 16];
 
@@ -333,6 +338,7 @@ export function LiveMatch() {
             <LivePlayerStats
               team={homeTeam}
               liveBoxScore={playback.liveBoxScore}
+              fitnessFor={matchInProgress ? (playerId) => fitnessFor(matchInProgress, "home", playerId) : undefined}
               onSelectPlayer={(p) => setSelectedPlayer({ player: p, side: "home" })}
             />
             <MatchCanvas
@@ -348,12 +354,20 @@ export function LiveMatch() {
             <LivePlayerStats
               team={awayTeam}
               liveBoxScore={playback.liveBoxScore}
+              fitnessFor={matchInProgress ? (playerId) => fitnessFor(matchInProgress, "away", playerId) : undefined}
               onSelectPlayer={(p) => setSelectedPlayer({ player: p, side: "away" })}
             />
           </div>
 
           {pendingCoachsCall ? (
             <>
+              <DetailedStatsTable
+                homeTeam={homeTeam}
+                awayTeam={awayTeam}
+                result={result}
+                fitnessFor={matchInProgress ? (side, playerId) => fitnessFor(matchInProgress, side, playerId) : undefined}
+                onSelectPlayer={(p, side) => setSelectedPlayer({ player: p, side })}
+              />
               <QuarterTimeInterchange
                 team={pendingCoachsCall.side === "home" ? homeTeam : awayTeam}
                 fitnessFor={(playerId) => (matchInProgress ? fitnessFor(matchInProgress, pendingCoachsCall.side, playerId) : 100)}
@@ -417,6 +431,9 @@ export function LiveMatch() {
               side={selectedPlayer.side}
               line={playback.liveBoxScore[selectedPlayer.player.PlayerID]}
               events={result.events.slice(0, playback.currentIndex + 1)}
+              position={(selectedPlayer.side === "home" ? homeTeam : awayTeam).positions?.get(selectedPlayer.player.PlayerID)}
+              onGround={(selectedPlayer.side === "home" ? homeTeam : awayTeam).onGround?.has(selectedPlayer.player.PlayerID)}
+              fitness={matchInProgress ? fitnessFor(matchInProgress, selectedPlayer.side, selectedPlayer.player.PlayerID) : undefined}
               onClose={() => setSelectedPlayer(null)}
             />
           )}
@@ -459,8 +476,14 @@ function ScoreBlock({
  * columns (D/M/T/CP/CLR/HO/G.B/CLG/DE/TOG/SC); this only shows the ones
  * genuinely backed by real tracked data (`match.ts`'s `BoxScoreLine`) rather
  * than inventing the rest — no clanger/turnover tracking exists in this
- * engine at all, and neither disposal efficiency nor time-on-ground are
- * tracked per player, so CLG/DE/TOG are left out rather than faked. SC
+ * engine at all and disposal efficiency isn't tracked per player, so CLG/DE
+ * are left out rather than faked. FIT (Aug 2026 round 49, [[Detailed Match
+ * Statistics]]) is this engine's own real equivalent of that reference
+ * page's TOG% — not literal time-on-ground, but the actual in-match fitness
+ * meter (round 48) that mechanically drives this engine's rotation, a more
+ * direct "should this player come off" signal than a plain minutes-played
+ * percentage would be; undefined (and the column hidden) for a
+ * non-interactive AI-vs-AI match, which never tracks it. SC
  * (fantasy points) *is* real: `ratings.ts`'s `fantasyPointsFor` is a pure
  * function of `BoxScoreLine` totals with no whole-match normalisation step,
  * so — unlike `computeAussieFootySimRatings`, which rescales against the *entire*
@@ -478,10 +501,29 @@ function ScoreBlock({
 function LivePlayerStats({
   team,
   liveBoxScore,
+  fitnessFor,
   onSelectPlayer,
 }: {
   team: MatchTeam;
   liveBoxScore: Record<number, BoxScoreLine>;
+  /**
+   * Aug 2026 round 49 — undefined for a non-interactive AI-vs-AI match, which
+   * never tracks live fitness (see `DetailedStatsTable`'s own doc comment);
+   * the FIT column is simply omitted rather than shown as a fake/flat value.
+   * Live-verified characteristic worth disclosing: this reads `matchInProgress`
+   * directly (same as `QuarterTimeInterchange` already does), which reflects
+   * the ENGINE's true current state, not `playback`'s own reveal-paced
+   * `liveBoxScore` — since `simulateQuarter` computes an entire quarter
+   * synchronously the instant it's called, FIT can briefly run ahead of the
+   * D/M/T/etc columns during the reveal animation (e.g. showing a just-off
+   * quarter's real end-state fitness while play-by-play is still replaying
+   * that same quarter from the start). Not a bug: fitness is background
+   * conditioning, not scoreline/event content, so this isn't a meaningful
+   * spoiler the way a revealed goal would be — the same tradeoff this
+   * project already accepted for `QuarterTimeInterchange`, just now visible
+   * for longer (throughout play, not only at the break).
+   */
+  fitnessFor?: (playerId: number) => number;
   onSelectPlayer?: (player: Player) => void;
 }) {
   const rows = team.players
@@ -519,33 +561,42 @@ function LivePlayerStats({
               <th className="pb-1 text-right font-medium" title="Goals.Behinds">
                 G.B
               </th>
+              {fitnessFor && (
+                <th className="pb-1 text-right font-medium" title="In-match fitness">
+                  FIT
+                </th>
+              )}
               <th className="pb-1 text-right font-medium" title="Live fantasy score">
                 SC
               </th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ player, line, sc }, i) => (
-              <tr
-                key={player.PlayerID}
-                onClick={() => onSelectPlayer?.(player)}
-                className={`${i === 0 && sc > 0 ? "text-accent" : "text-slate-300"} ${onSelectPlayer ? "cursor-pointer hover:bg-base-700" : ""}`}
-                title={onSelectPlayer ? `Click for ${playerFullName(player)}'s match stats` : undefined}
-              >
-                <td className="max-w-[64px] truncate py-0.5" title={playerFullName(player)}>
-                  {player.lname}
-                </td>
-                <td className="text-right">{line?.disposals ?? 0}</td>
-                <td className="text-right">{line?.marks ?? 0}</td>
-                <td className="text-right">{line?.tackles ?? 0}</td>
-                <td className="text-right">{line?.clearances ?? 0}</td>
-                <td className="text-right">{line?.hitouts ?? 0}</td>
-                <td className="text-right">
-                  {line?.goals ?? 0}.{line?.behinds ?? 0}
-                </td>
-                <td className="text-right font-semibold">{Math.round(sc)}</td>
-              </tr>
-            ))}
+            {rows.map(({ player, line, sc }, i) => {
+              const fitness = fitnessFor?.(player.PlayerID);
+              return (
+                <tr
+                  key={player.PlayerID}
+                  onClick={() => onSelectPlayer?.(player)}
+                  className={`${i === 0 && sc > 0 ? "text-accent" : "text-slate-300"} ${onSelectPlayer ? "cursor-pointer hover:bg-base-700" : ""}`}
+                  title={onSelectPlayer ? `Click for ${playerFullName(player)}'s match stats` : undefined}
+                >
+                  <td className="max-w-[64px] truncate py-0.5" title={playerFullName(player)}>
+                    {player.lname}
+                  </td>
+                  <td className="text-right">{line?.disposals ?? 0}</td>
+                  <td className="text-right">{line?.marks ?? 0}</td>
+                  <td className="text-right">{line?.tackles ?? 0}</td>
+                  <td className="text-right">{line?.clearances ?? 0}</td>
+                  <td className="text-right">{line?.hitouts ?? 0}</td>
+                  <td className="text-right">
+                    {line?.goals ?? 0}.{line?.behinds ?? 0}
+                  </td>
+                  {fitnessFor && <td className={`text-right ${fitness !== undefined && fitness < 45 ? "text-bad" : ""}`}>{fitness !== undefined ? Math.round(fitness) : "—"}</td>}
+                  <td className="text-right font-semibold">{Math.round(sc)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -732,12 +783,21 @@ function PlayerMatchStatsModal({
   side,
   line,
   events,
+  position,
+  onGround,
+  fitness,
   onClose,
 }: {
   player: Player;
   side: Side;
   line: BoxScoreLine | undefined;
   events: MatchEvent[];
+  /** This player's real assigned ground slot, when known — see `MatchTeam.positions` (round 8). */
+  position?: Position;
+  /** On the ground right now vs. on the interchange bench — see `MatchTeam.onGround` (round 8). Undefined means this team has no real on-ground/bench distinction at all (a `pickBest22` team), not that the player is benched. */
+  onGround?: boolean;
+  /** In-match fitness (0-100, round 48's own new meter) — undefined for a non-interactive AI-vs-AI match, which never tracks it (see `DetailedStatsTable`'s own doc comment). */
+  fitness?: number;
   onClose: () => void;
 }) {
   const possessionZoneCounts = zoneCountsFor(player, side, events, POSSESSION_STATS);
@@ -745,6 +805,17 @@ function PlayerMatchStatsModal({
   const maxPossessionZoneCount = Math.max(1, ...ZONES.map((z) => possessionZoneCounts[z] ?? 0));
   const maxContestOnlyZoneCount = Math.max(1, ...ZONES.map((z) => contestOnlyZoneCounts[z] ?? 0));
   const hasContestOnlyActivity = ZONES.some((z) => (contestOnlyZoneCounts[z] ?? 0) > 0);
+  const liveFantasyPoints = line ? fantasyPointsFor(line) : 0;
+  const morale = player.morale ?? seedMorale(player);
+  const fit = fitness !== undefined ? fitnessBand(fitness) : null;
+  const mor = moraleBand(morale);
+  // Aug 2026 round 49, [[Detailed Match Statistics]] — Tyler: "to determine which players I want
+  // to interchange manually and why, I need a much more detailed statistics view... when I click
+  // on a player... the stats that present to me there should also be as detailed [as the
+  // reference site]." Fitness/morale/current position were previously only visible on
+  // `QuarterTimeInterchange`'s own ground diagram — genuinely new information here, not a
+  // reformatting of what the modal already had.
+  const quarterLines = playerLinesByQuarter(events, [player.PlayerID])[player.PlayerID] ?? [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -759,11 +830,27 @@ function PlayerMatchStatsModal({
             </div>
             <div className="text-xs text-slate-400">
               {player.archetype} &middot; {player.Team}
+              {position && position !== "INT" && (
+                <>
+                  {" "}
+                  &middot; {position}
+                  {onGround === false && " (interchange bench)"}
+                </>
+              )}
             </div>
           </div>
           <button onClick={onClose} className="rounded-lg bg-base-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-base-600" aria-label="Close">
             Close
           </button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg bg-base-900 px-3 py-2 text-sm">
+          <span className="flex items-center gap-1.5">
+            <span className="text-slate-500">Live FP</span>
+            <span className="font-semibold tabular-nums text-slate-200">{Math.round(liveFantasyPoints)}</span>
+          </span>
+          {fit && <NumberWithPill value={Math.round(fitness!)} label={fit.label} tone={fit.tone} />}
+          <NumberWithPill value={Math.round(morale)} label={mor.label} tone={mor.tone} />
         </div>
 
         <div className="mt-4">
@@ -852,6 +939,33 @@ function PlayerMatchStatsModal({
           </div>
         )}
 
+        {quarterLines.length > 0 && (
+          <div className="mt-4">
+            <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">By Quarter</div>
+            <table className="w-full text-xs tabular-nums">
+              <thead className="text-slate-500">
+                <tr>
+                  <th className="pb-1 text-left font-normal">Qtr</th>
+                  <th className="pb-1 text-right font-normal">D</th>
+                  <th className="pb-1 text-right font-normal">G</th>
+                  <th className="pb-1 text-right font-normal">FP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quarterLines.map((q) => (
+                  <tr key={q.quarter} className="border-t border-base-700">
+                    <td className="py-1 text-left text-slate-400">Q{q.quarter}</td>
+                    <td className="text-right">{q.line.disposals}</td>
+                    <td className="text-right">{q.line.goals}</td>
+                    <td className="text-right font-semibold text-slate-200">{Math.round(q.fantasyPoints)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-1.5 text-[11px] text-slate-500">Each quarter's own output — not a running total, so a quiet quarter actually shows as quiet.</div>
+          </div>
+        )}
+
         <div className="mt-4">
           <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Match Totals</div>
           <div className="grid grid-cols-4 gap-2 text-center text-xs">
@@ -865,6 +979,7 @@ function PlayerMatchStatsModal({
                 ["CLR", line?.clearances ?? 0],
                 ["HO", line?.hitouts ?? 0],
                 ["CP", line?.contestedPoss ?? 0],
+                ["UP", line?.uncontestedPoss ?? 0],
                 ["FF", line?.freeKicksFor ?? 0],
                 ["FA", line?.freeKicksAgainst ?? 0],
                 ["G", line?.goals ?? 0],

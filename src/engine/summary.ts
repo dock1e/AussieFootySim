@@ -1,4 +1,5 @@
-import type { BoxScoreLine, MatchResult } from "./match.ts";
+import type { BoxScoreLine, MatchEvent, MatchResult } from "./match.ts";
+import { fantasyPointsFor } from "./ratings.ts";
 
 /**
  * Pure post-match summary helpers — split out from FullTimeResult.tsx so
@@ -89,4 +90,73 @@ export function sumTeam(box: Record<number, BoxScoreLine>, ids: Set<number>): Bo
     }
   }
   return total;
+}
+
+export interface PlayerQuarterLine {
+  quarter: 1 | 2 | 3 | 4;
+  /** This quarter's own stat deltas only — not cumulative. */
+  line: BoxScoreLine;
+  /** This quarter's own fantasy points, from `line` above via `fantasyPointsFor` — not cumulative. */
+  fantasyPoints: number;
+}
+
+/**
+ * Buckets every requested player's box score by quarter — Aug 2026 round 49,
+ * [[Detailed Match Statistics]]. `MatchEvent.quarter` already carries
+ * everything needed; nothing before this round reduced it into a per-quarter
+ * view of anything but the scoreline (`quarterlyPoints` above). One pass over
+ * `events`, same "accumulate once, not per render" discipline
+ * `useMatchPlayback`'s own `liveBoxScore` reducer already established.
+ *
+ * Takes a raw `MatchEvent[]` rather than a full `MatchResult` — same
+ * convention `LiveMatch.tsx`'s own `zoneCountsFor` already uses — so a caller
+ * that only has a *sliced*, still-being-revealed events array (the
+ * click-to-inspect modal's own "genuinely live, not spoiled" principle) can
+ * pass that directly, without needing a synthetic `MatchResult` wrapper.
+ *
+ * Per-quarter, deliberately NOT cumulative — matches the real behaviour of
+ * the reference site this round is built from (dfsaustralia.com's "Fantasy
+ * By Qtr" view): confirmed by arithmetic on a real captured row before
+ * assuming it, a real player's Q1/Q2/Q3 figures summed exactly to their
+ * match FP total, so that reference is per-quarter too, not running-total.
+ * Non-cumulative also reads better for a "who's fading" trend glance — a
+ * cumulative number only ever goes up, which hides a quiet quarter.
+ *
+ * Returns one entry per quarter that actually appears anywhere in `events`
+ * (not a fixed 4) — a live match paused at the Q2 break naturally produces a
+ * 2-length array per player, nothing padded in for quarters that haven't
+ * been simulated yet. A player with zero involvement in a played quarter
+ * still gets an (all-zero) entry for it, since the quarter itself happened —
+ * only presence in `events` decides which quarters exist, never a specific
+ * player's own activity within them.
+ */
+export function playerLinesByQuarter(events: MatchEvent[], ids: Iterable<number>): Record<number, PlayerQuarterLine[]> {
+  const idSet = new Set(ids);
+  const quartersPresent = [...new Set(events.map((ev) => ev.quarter))].sort((a, b) => a - b);
+
+  const perPlayerQuarter = new Map<number, Map<1 | 2 | 3 | 4, BoxScoreLine>>();
+  for (const id of idSet) {
+    const byQuarter = new Map<1 | 2 | 3 | 4, BoxScoreLine>();
+    for (const q of quartersPresent) byQuarter.set(q, emptyLine());
+    perPlayerQuarter.set(id, byQuarter);
+  }
+
+  for (const ev of events) {
+    for (const d of ev.statDeltas) {
+      const byQuarter = perPlayerQuarter.get(d.playerId);
+      if (!byQuarter) continue; // not one of the requested ids
+      const line = byQuarter.get(ev.quarter);
+      if (line) (line[d.stat] as number) += d.delta;
+    }
+  }
+
+  const out: Record<number, PlayerQuarterLine[]> = {};
+  for (const id of idSet) {
+    const byQuarter = perPlayerQuarter.get(id)!;
+    out[id] = quartersPresent.map((q) => {
+      const line = byQuarter.get(q)!;
+      return { quarter: q, line, fantasyPoints: fantasyPointsFor(line) };
+    });
+  }
+  return out;
 }

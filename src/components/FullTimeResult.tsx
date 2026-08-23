@@ -4,6 +4,7 @@ import type { MatchTeam } from "../engine/team";
 import type { Player } from "../types/player";
 import { quarterlyPoints, sumTeam } from "../engine/summary";
 import { computeAussieFootySimRatings, fantasyPointsFor } from "../engine/ratings";
+import { DetailedStatsTable } from "./DetailedStatsTable";
 
 /**
  * Full-time result screen — User Interface.md "Full-time result": score,
@@ -182,6 +183,14 @@ export function FullTimeResult({
         <TopPerformers title={`${homeTeam.name} top performers`} rows={topHome} />
         <TopPerformers title={`${awayTeam.name} top performers`} rows={topAway} />
       </div>
+
+      {/* Aug 2026 round 49, [[Detailed Match Statistics]] — Tyler: "a much more detailed view of
+          player statistics... at the end of the game." The two TopPerformers lists above are a
+          5-a-side quick glance (unchanged); this is the actual full squad, every column, both teams
+          — nothing like it existed anywhere in this app before this round. No `fitnessFor` passed
+          through: the match is over, live in-match fitness isn't a decision input anymore, and
+          FullTimeResult doesn't otherwise need `matchInProgress` threaded into its props. */}
+      <DetailedStatsTable homeTeam={homeTeam} awayTeam={awayTeam} result={result} showRating />
 
       <button onClick={onNewMatch} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
         {closeLabel}

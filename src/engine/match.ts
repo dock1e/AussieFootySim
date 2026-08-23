@@ -367,9 +367,16 @@ const LONG_KICK_MISS_DISTANCE_PENALTY = 0.15;
  * real execution variance beyond pure geometry+skill, just no longer the
  * dominant term the way a flat 40-70 roll was.
  */
-const SHOT_DIFFICULTY_BASE = -70;
-const SHOT_DEPTH_PENALTY_SCALE = 90;
-const SHOT_ANGLE_PENALTY_SCALE = 85;
+// Aug 2026 round 47 — the first three of these four are also exported now
+// (zero behaviour change, plain `const` -> `export const`) so
+// scripts/verify_round47_scratch.ts can reconstruct the real `difficulty`
+// formula directly against SNAP_LIVE_PRESSURE_PENALTY below, the same
+// "exported specifically for testability" precedent computeDotPositions/
+// ballTargetFor (round 45) and shotChanceOnEntry (round 46) already set for
+// functions, just applied to constants here instead.
+export const SHOT_DIFFICULTY_BASE = -70;
+export const SHOT_DEPTH_PENALTY_SCALE = 90;
+export const SHOT_ANGLE_PENALTY_SCALE = 85;
 const SHOT_DIFFICULTY_JITTER = 8;
 const GOAL_ACCURACY_MAX = 0.995;
 const GOAL_ACCURACY_MIN = 0.3;
@@ -413,6 +420,54 @@ const SHOT_CHANCE_ON_ENTRY_MAX = 0.85;
 const SHOT_CHANCE_ON_ENTRY_MIN = 0.1;
 const SHOT_CHANCE_ON_ENTRY_DEPTH_PENALTY = 0.15;
 const SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY = 0.55;
+/**
+ * Aug 2026 round 47 — ROADMAP backlog item #25, the deferred half of round
+ * 42's own question ("do we currently consider the players position (and
+ * PRESSURE) as a weighting into the shot?"). Round 42 only ever closed the
+ * geometry half — the only "pressure" `runShot` considered was each
+ * shooter's own static `copeWithPressure`/`confidence` attributes, baked
+ * into `rating` alongside `skill`/`xFactor`/etc., never a live, in-the-
+ * moment defender-proximity term the way `HANDBALL_CONTEST`'s own
+ * `proximityWeight(distance) * HANDBALL_RECEIVE_PRESSURE_PENALTY` already
+ * has since round 21.
+ *
+ * Deliberately scoped to SNAPS only, never set shots — real AFL set shots
+ * are uncontested by the laws of the game (opposition must retreat to the
+ * mark), so a defender "closing in" on a set shot isn't a real scenario to
+ * model at all. `runShot` (below) only rolls this when `!isSetShot`.
+ *
+ * The live signal itself is `nearbyDefenders` (`involvement.ts`) — not a
+ * new mechanism. Backlog item #25's own text named exactly this: round 39's
+ * hold-down-timer machinery (`ctx.groundedUntilTick`) is baked directly into
+ * `nearbyDefenders` itself, so reusing it here for free excludes a defender
+ * who's currently down from a tackle/run-down, the same "genuinely not
+ * available to contest this instant" filter every other pressure source in
+ * this file already respects — inventing a separate shot-specific proximity
+ * check would have silently missed that. `null` (nobody within
+ * `PROXIMITY_RANGE_DISTANCE` and eligible) means an unpressured snap, same
+ * text and odds as before this round.
+ *
+ * No separate interaction term with `copeWithPressure` was needed: a
+ * high-`copeWithPressure` shooter already carries a higher `rating` into the
+ * SAME `resolveThreshold(rating, difficulty, ...)` roll `difficulty` below
+ * feeds — the existing logistic naturally leaves a composed shooter better
+ * off against the identical flat penalty than a rattled one, without this
+ * constant needing to know about that attribute at all.
+ *
+ * `40` is reasoned, not derived — roughly half `HANDBALL_RECEIVE_PRESSURE_
+ * PENALTY` (70), deliberately smaller: a shot's own geometry terms
+ * (`SHOT_DEPTH_PENALTY_SCALE`/`SHOT_ANGLE_PENALTY_SCALE`, 90/85) already
+ * swing `difficulty` far more than `CONTEST_EXECUTION_DIFFICULTY`'s own -22
+ * baseline ever does for a handball reception, so pressure here is a real
+ * but secondary layer on top of geometry, not the dominant term — a
+ * point-blank, square-on snap should still usually go over even under full
+ * pressure, while a marginal, already-borderline shot should be tipped much
+ * more easily. Checked against real generated player data in
+ * `scripts/verify_round47_scratch.ts` before shipping, same discipline as
+ * every other shot constant in this section; disclosed placeholder pending
+ * Phase 6's balance simulator like everything else here.
+ */
+export const SNAP_LIVE_PRESSURE_PENALTY = 40;
 /** See its own use in `runStoppage` — a real, cited correlation (AFL.com.au: ruckmen tap to a favoured side 75-80% of the time), expressed as a rating bonus since tap *direction* itself isn't modelled. */
 const FAVOURED_SIDE_CLEARANCE_BONUS = 1.3;
 /** See its own use in `runShot` — the share of a shot that "misses everything" (not a behind) that goes out of bounds for a throw-in, gap #73. */
@@ -2761,7 +2816,9 @@ function runShot(ctx: Ctx, state: State): State {
   const shooter = state.carrier!;
   const possessingTeam = teamOf(ctx, state.possession);
   const possessingPlan = planFor(ctx, state.possession);
-  const defendingPlan = planFor(ctx, otherSide(state.possession));
+  const defendingSide = otherSide(state.possession);
+  const defendingTeam = teamOf(ctx, defendingSide);
+  const defendingPlan = planFor(ctx, defendingSide);
   const isSetShot = ctx.rng() < setShotProbability(shooter, state.shotContext, possessingPlan, possessingTeam.positions);
   const rating =
     (isSetShot
@@ -2774,11 +2831,26 @@ function runShot(ctx: Ctx, state: State): State {
   // elsewhere (e.g. resolveUncontestedGather's receiver, above).
   const shooterPos = ctx.trackedPositions.get(shooter.PlayerID) ?? carrierPosition(shooter, possessingTeam.positions?.get(shooter.PlayerID), state.zone, possessingTeam.positions);
   const { depth, angleSeverity } = shotGeometry(shooterPos, state.possession);
-  const difficulty = SHOT_DIFFICULTY_BASE + SHOT_DEPTH_PENALTY_SCALE * depth + SHOT_ANGLE_PENALTY_SCALE * angleSeverity + (ctx.rng() - 0.5) * 2 * SHOT_DIFFICULTY_JITTER;
+  // Aug 2026 round 47 — ROADMAP backlog item #25; see SNAP_LIVE_PRESSURE_
+  // PENALTY's own doc comment for the full diagnosis. Set shots never roll
+  // this (real AFL set shots are uncontested by rule) — `nearby` stays null
+  // and `snapPressurePenalty` stays 0, byte-identical to pre-round-47
+  // behaviour for every set shot.
+  const nearby = isSetShot
+    ? null
+    : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, shooterPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
+  const snapPressurePenalty = nearby ? proximityWeight(nearby.distance) * SNAP_LIVE_PRESSURE_PENALTY : 0;
+  const difficulty =
+    SHOT_DIFFICULTY_BASE + SHOT_DEPTH_PENALTY_SCALE * depth + SHOT_ANGLE_PENALTY_SCALE * angleSeverity + snapPressurePenalty + (ctx.rng() - 0.5) * 2 * SHOT_DIFFICULTY_JITTER;
   const onTarget = resolveThreshold(rating, difficulty, ctx.rng);
 
   const line = lineFor(ctx, shooter);
   const scoreLine = state.possession === "home" ? ctx.score.home : ctx.score.away;
+  // Aug 2026 round 47 — the pressuring defender (if any) is named in the log
+  // text and included here so click-to-inspect/any playerIds-based UI sees
+  // both players, matching this file's own established "under pressure from
+  // X" convention (rounds 21/39/43-45).
+  const playerIds = nearby ? [shooter.PlayerID, nearby.player.PlayerID] : [shooter.PlayerID];
   // Aug 2026 round 42 — the same geometry also shrinks the conditional
   // goal-vs-behind chance (a tight angle is genuinely more likely to clip a
   // post even once "on target" in the loose sense) — see SHOT_DIFFICULTY_
@@ -2797,8 +2869,8 @@ function runShot(ctx: Ctx, state: State): State {
       state.zone,
       state.possession,
       "SHOT",
-      `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`,
-      [shooter.PlayerID],
+      nearby ? `GOAL! ${shooter.lname} snaps it through under pressure from ${nearby.player.lname}` : `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`,
+      playerIds,
       [{ playerId: shooter.PlayerID, stat: "goals", delta: 1 }],
       false,
       isSetShot,
@@ -2814,14 +2886,24 @@ function runShot(ctx: Ctx, state: State): State {
       state.zone,
       state.possession,
       "SHOT",
-      `Behind to ${shooter.lname}`,
-      [shooter.PlayerID],
+      nearby ? `${shooter.lname}'s snap under pressure from ${nearby.player.lname} sails through for a behind` : `Behind to ${shooter.lname}`,
+      playerIds,
       [{ playerId: shooter.PlayerID, stat: "behinds", delta: 1 }],
       false,
       isSetShot,
     );
   } else {
-    log(ctx, state.zone, state.possession, "SHOT", `${shooter.lname}'s shot misses everything`, [shooter.PlayerID], [], false, isSetShot);
+    log(
+      ctx,
+      state.zone,
+      state.possession,
+      "SHOT",
+      nearby ? `${shooter.lname}'s snap under pressure from ${nearby.player.lname} misses everything` : `${shooter.lname}'s shot misses everything`,
+      playerIds,
+      [],
+      false,
+      isSetShot,
+    );
     // Aug 2026, gap #73 closed — Tyler: "If Cameron has handballed the ball
     // out of bounds (missed everything) then it should have been a boundary
     // throw in at that point." A shot that misses everything sailing out of

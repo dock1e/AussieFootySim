@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Player } from "../types/player";
 import { playerFullName } from "../types/player";
 import { CLUBS, clubByName, clubById } from "../types/club";
@@ -11,6 +11,8 @@ import { summariseLines } from "../data/lines";
 import { gapBand } from "./StatusPill";
 import { LadderTable } from "./LadderTable";
 import { ClubBadge } from "./ClubBadge";
+import { ExpandableCard } from "./ExpandableCard";
+import { RoundFixture } from "./SeasonHub";
 import { isLineupComplete, lineupPlayerIds } from "../engine/selection";
 import { freeAgentsFor } from "../engine/contracts";
 import {
@@ -48,6 +50,16 @@ import type { MatchTeam } from "../engine/team";
  * or a fake number, when `season` is `null` (no season started yet this
  * save) — same "optional and additive, graceful fallback" convention this
  * project has used since round 8.
+ *
+ * Ladder section (Aug 2026 round 52, [[UI Consolidation Review]]): the
+ * previous "Full season →" link that navigated away to the standalone Season
+ * screen is now an `ExpandableCard` — expanding it embeds the full 18-row
+ * `LadderTable` plus `SeasonHub`'s own `RoundFixture` browser in place, no
+ * navigation. `season` (the top-level nav tab) itself still exists and still
+ * works unchanged; it's just no longer in the nav's default screen list (see
+ * App.tsx's `NAV_GROUPS`) — the expanded card's own "Open full Season page"
+ * link is how you still reach it, for the deep multi-round read this card
+ * deliberately doesn't try to replace.
  */
 
 interface DashboardProps {
@@ -64,6 +76,10 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
   const teams = useSeasonStore((s) => s.teams);
   const year = useSaveStore((s) => s.year);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
+  // Same round-1 default as SeasonHub's own `RoundFixture` instance (see
+  // that file) — independent state, since this is a second, separately
+  // mounted instance of the same component embedded in this card.
+  const [fixtureRound, setFixtureRound] = useState(1);
 
   const players = useMemo(() => getPlayersByClub(myClub), [myClub]);
   const lines = useMemo(() => summariseLines(players, leagueAverageOvr()), [players]);
@@ -137,8 +153,8 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
 
       {!season || myClubId === undefined ? (
         <div className="card text-sm text-slate-400">
-          No season in progress yet — start one from the Season tab to see your ladder position, match recaps, upcoming
-          opponents, coach actions, and league stat leaders here.
+          No season in progress yet — start one to see your ladder position, match recaps, upcoming opponents, coach
+          actions, and league stat leaders here.
           {onGoToSeason && (
             <button onClick={onGoToSeason} className="ml-2 font-medium text-accent-light hover:underline">
               Go to Season →
@@ -148,17 +164,35 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
       ) : (
         <>
           <div className="grid gap-4 lg:grid-cols-2">
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <div className="text-xs uppercase tracking-wide text-slate-400">Ladder</div>
-                {onGoToSeason && (
-                  <button onClick={onGoToSeason} className="text-xs font-medium text-accent-light hover:underline">
-                    Full season →
-                  </button>
-                )}
-              </div>
+            <ExpandableCard
+              label="Ladder"
+              expandLabel="Show full ladder + fixtures"
+              collapseLabel="Show less"
+              expandedContent={
+                <>
+                  <LadderTable
+                    ladder={season.ladder}
+                    previousLadder={prevLadder.length ? prevLadder : season.ladder}
+                    highlightClubId={myClubId}
+                  />
+                  <RoundFixture
+                    round={fixtureRound}
+                    setRound={setFixtureRound}
+                    fixture={season.fixture}
+                    played={season.played}
+                    myClubId={myClubId}
+                    onSelect={() => onGoToSeason?.()}
+                  />
+                  {onGoToSeason && (
+                    <button onClick={onGoToSeason} className="text-xs font-medium text-accent-light hover:underline">
+                      Open full Season page ↗
+                    </button>
+                  )}
+                </>
+              }
+            >
               <CompactLadder ladder={season.ladder} previousLadder={prevLadder} myClubId={myClubId} />
-            </div>
+            </ExpandableCard>
             <div className="space-y-4">
               <LastGameCard match={lastMatch} performers={ourTopPerformers} myClubId={myClubId} />
               <ActionsCard
@@ -232,8 +266,10 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
  * full 18-row `LadderTable` SeasonHub already shows in full. Tyler asked for
  * "where we are on the ladder," which is best answered by nearby context
  * (who's just above/below), not a repeat of the whole competition table this
- * page would otherwise duplicate — a "Full season →" link (above, when
- * `onGoToSeason` is supplied) is where the complete ladder lives.
+ * page would otherwise duplicate. This is the collapsed preview inside the
+ * `ExpandableCard` wrapping the Ladder section (see round 52,
+ * [[UI Consolidation Review]]) — expanding it renders the full `LadderTable`
+ * and round fixture browser right below this same component, in place.
  */
 function CompactLadder({ ladder, previousLadder: prev, myClubId }: { ladder: LadderRow[]; previousLadder: LadderRow[]; myClubId: number }) {
   const myIndex = ladder.findIndex((r) => r.clubId === myClubId);

@@ -17,8 +17,65 @@ import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
 type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "combine" | "contracts" | "trade" | "draft" | "positionSwitch";
 
+/**
+ * Nav consolidation — Aug 2026 round 52, [[UI Consolidation Review]]. Tyler:
+ * "I am not a fan of how many different tabs we have currently, I would
+ * prefer to consolidate a lot of that information." The previous flat
+ * 11-button row (one button per `Screen`) had already wrapped the header
+ * once and dropped SaveMenu onto its own low-contrast line — see the comment
+ * on the header row below. Groups map onto Tyler's own named categories
+ * (Match Day / Coaching Decisions / Future Planning / Player Management).
+ *
+ * `screen` itself is completely unchanged as the single source of truth for
+ * which component renders (see `<main>` below) — only the nav chrome
+ * changes, so no screen component or cross-nav callback needed to change for
+ * this part of the work. A group with exactly one screen (Dashboard, Match
+ * Day) navigates straight there with no sub-tab row; a group with more than
+ * one shows a secondary pill row for its own screens (see `activeGroup`
+ * below).
+ *
+ * `season` is deliberately absent from every group's `screens` list: it's no
+ * longer reachable from top-level nav, but the screen/route itself is
+ * completely untouched — its content now lives inline in Dashboard's
+ * expandable ladder card (see Dashboard.tsx), and that card's own "Open full
+ * Season page" link is how you still reach this standalone screen for the
+ * deeper multi-round read the embedded card doesn't try to replace.
+ */
+const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
+  { key: "dashboard", label: "Dashboard", screens: ["dashboard"] },
+  { key: "matchDay", label: "Match Day", screens: ["match"] },
+  { key: "coaching", label: "Coaching", screens: ["selection", "positionSwitch"] },
+  { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
+  { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts"] },
+];
+
+const SCREEN_LABELS: Record<Screen, string> = {
+  dashboard: "Dashboard",
+  squad: "Squad",
+  selection: "Selection",
+  season: "Season",
+  match: "Match",
+  listNeeds: "List Needs",
+  combine: "Combine",
+  contracts: "Contracts",
+  trade: "Trade",
+  draft: "Draft",
+  positionSwitch: "Position Switch",
+};
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
+  // The group containing the current screen — falls back to the Dashboard
+  // group when on a screen no group lists (just `season`, reached only via
+  // Dashboard's own link, see NAV_GROUPS's doc comment above), so nav
+  // highlighting always has a sane default rather than highlighting nothing.
+  const activeGroup = NAV_GROUPS.find((g) => g.screens.includes(screen)) ?? NAV_GROUPS[0];
+  function selectGroup(group: (typeof NAV_GROUPS)[number]) {
+    // Re-entering a group you're already in keeps whichever of its screens
+    // you were last on (e.g. Combine within Future Planning) rather than
+    // resetting to that group's first screen every click.
+    setScreen((prev) => (group.screens.includes(prev) ? prev : group.screens[0]));
+  }
   const myClub = useGameStore((s) => s.myClub);
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
@@ -72,32 +129,35 @@ export default function App() {
           </div>
           <SaveMenu />
         </div>
-        <nav className="flex flex-wrap gap-2">
-          {(
-            [
-              ["dashboard", "Dashboard"],
-              ["squad", "Squad"],
-              ["selection", "Selection"],
-              ["season", "Season"],
-              ["match", "Match"],
-              ["listNeeds", "List Needs"],
-              ["combine", "Combine"],
-              ["contracts", "Contracts"],
-              ["trade", "Trade"],
-              ["draft", "Draft"],
-              ["positionSwitch", "Position Switch"],
-            ] as const
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setScreen(key)}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                screen === key ? "bg-primary text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <nav>
+          <div className="flex flex-wrap gap-2">
+            {NAV_GROUPS.map((group) => (
+              <button
+                key={group.key}
+                onClick={() => selectGroup(group)}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                  activeGroup.key === group.key ? "bg-primary text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
+                }`}
+              >
+                {group.label}
+              </button>
+            ))}
+          </div>
+          {activeGroup.screens.length > 1 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {activeGroup.screens.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setScreen(s)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                    screen === s ? "bg-primary/20 text-primary-light" : "bg-base-900 text-slate-400 hover:bg-base-800"
+                  }`}
+                >
+                  {SCREEN_LABELS[s]}
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
       </header>
 

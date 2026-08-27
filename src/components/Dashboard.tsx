@@ -10,6 +10,7 @@ import { getPlayersByClub, leagueAverageOvr, averageOvr } from "../data/loadPlay
 import { summariseLines } from "../data/lines";
 import { gapBand } from "./StatusPill";
 import { LadderTable } from "./LadderTable";
+import { ClubBadge } from "./ClubBadge";
 import { isLineupComplete, lineupPlayerIds } from "../engine/selection";
 import { freeAgentsFor } from "../engine/contracts";
 import {
@@ -105,7 +106,8 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
     <div className="space-y-6">
       {/* Left border in the club's own colour — Aug 2026 branding pass (ROADMAP.md item #13):
           the one moment on this screen that's most "this is YOUR club," styled the way a real
-          broadcast product colour-codes team identity at a glance. */}
+          broadcast product colour-codes team identity at a glance. Badge upgraded from a plain
+          colour dot to the real `ClubBadge` round 51, [[Club Branding and Colours]]. */}
       <div
         className="card flex flex-wrap items-center justify-between gap-4 border-l-4"
         style={{ borderLeftColor: club?.primaryColor }}
@@ -113,7 +115,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
         <div>
           <div className="text-xs uppercase tracking-wide text-slate-400">Coaching</div>
           <div className="flex items-center gap-2 font-display text-2xl">
-            <span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: club?.primaryColor }} />
+            <ClubBadge club={club} />
             {club?.name} <span className="text-slate-400">{club?.nickname}</span>
           </div>
           <div className="text-xs text-slate-500">
@@ -271,8 +273,10 @@ function LastGameCard({ match, performers, myClubId }: { match: PlayedMatch | nu
     <div className="card">
       <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Last game &middot; Round {match.round}</div>
       <div className="mb-2 flex items-baseline justify-between">
-        <div className="text-sm">
-          <span className={`font-semibold ${tone}`}>{outcome}</span> {weAreHome ? "vs" : "@"} {opponent?.name ?? `Club ${opponentId}`}
+        <div className="flex items-center gap-1.5 text-sm">
+          <span className={`font-semibold ${tone}`}>{outcome}</span> {weAreHome ? "vs" : "@"}
+          <ClubBadge club={opponent} size="sm" />
+          {opponent?.name ?? `Club ${opponentId}`}
         </div>
         <div className="tabular-nums text-sm text-slate-400">
           {ourPoints} - {theirPoints}
@@ -330,10 +334,7 @@ function NextOpponentsCard({
                   Round {fx.round} &middot; {fx.homeClubId === myClubId ? "Home" : "Away"}
                 </div>
                 <div className="mb-2 flex items-center gap-2 font-medium">
-                  <span
-                    className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: opponent?.primaryColor ?? "#666" }}
-                  />
+                  <ClubBadge club={opponent} size="sm" />
                   {opponent?.name ?? `Club ${opponentId}`}
                 </div>
                 {opponentTop.length > 0 ? (

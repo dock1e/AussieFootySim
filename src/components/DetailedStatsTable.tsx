@@ -8,6 +8,7 @@ import { fantasyPointsFor, computeAussieFootySimRatings } from "../engine/rating
 import { playerLinesByQuarter } from "../engine/summary";
 import { seedMorale } from "../engine/morale";
 import { fitnessBand, moraleBand, NumberWithPill } from "./StatusPill";
+import { ClubBadgeByName } from "./ClubBadge";
 
 /**
  * Full-squad, DFS-Australia-styled detailed stats table — Aug 2026 round 49,
@@ -97,11 +98,17 @@ export function DetailedStatsTable({ homeTeam, awayTeam, result, fitnessFor, sho
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div>
-          <div className="mb-1.5 truncate text-xs font-semibold text-slate-300">{homeTeam.name}</div>
+          <div className="mb-1.5 flex items-center gap-1.5 truncate text-xs font-semibold text-slate-300">
+            <ClubBadgeByName name={homeTeam.name} size="sm" />
+            {homeTeam.name}
+          </div>
           <TeamTable team={homeTeam} side="home" result={result} tab={tab} fitnessFor={fitnessFor} ratings={ratings} onSelectPlayer={onSelectPlayer} />
         </div>
         <div>
-          <div className="mb-1.5 truncate text-xs font-semibold text-slate-300">{awayTeam.name}</div>
+          <div className="mb-1.5 flex items-center gap-1.5 truncate text-xs font-semibold text-slate-300">
+            <ClubBadgeByName name={awayTeam.name} size="sm" />
+            {awayTeam.name}
+          </div>
           <TeamTable team={awayTeam} side="away" result={result} tab={tab} fitnessFor={fitnessFor} ratings={ratings} onSelectPlayer={onSelectPlayer} />
         </div>
       </div>

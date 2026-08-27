@@ -3,6 +3,7 @@ import { useSeasonStore } from "../store/useSeasonStore";
 import { useGameStore } from "../store/useGameStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { CLUBS, clubById, clubByName } from "../types/club";
+import { ClubBadge } from "./ClubBadge";
 import { SEASON_ROUNDS, matchesInRound, type FixtureMatch } from "../engine/fixture";
 import { nextUnplayedRound, isHomeAndAwayComplete, type PlayedMatch } from "../engine/season";
 import type { MatchResult } from "../engine/match";
@@ -201,8 +202,8 @@ function FinalsBracket({
     <div className="card">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-xs uppercase tracking-wide text-slate-400">Finals series</div>
-        <div className="font-display text-lg italic text-accent-light">
-          Premiers: {clubById(premierClubId)?.name}
+        <div className="flex items-center gap-1.5 font-display text-lg italic text-accent-light">
+          Premiers: <ClubBadge club={clubById(premierClubId)} size="sm" /> {clubById(premierClubId)?.name}
         </div>
       </div>
       <div className="grid gap-3 md:grid-cols-4">
@@ -216,14 +217,16 @@ function FinalsBracket({
                   onClick={() => onSelect(m)}
                   className="w-full rounded-lg bg-base-800 px-2.5 py-2 text-left text-xs hover:bg-base-700"
                 >
-                  <div className="flex justify-between">
-                    <span className={m.winnerClubId === m.homeClubId ? "font-semibold" : "text-slate-400"}>
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className={`flex items-center gap-1.5 ${m.winnerClubId === m.homeClubId ? "font-semibold" : "text-slate-400"}`}>
+                      <ClubBadge club={clubById(m.homeClubId)} size="sm" />
                       {clubById(m.homeClubId)?.nickname}
                     </span>
                     <span className="tabular-nums">{m.result.home.points}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className={m.winnerClubId === m.awayClubId ? "font-semibold" : "text-slate-400"}>
+                  <div className="mt-1 flex items-center justify-between gap-1.5">
+                    <span className={`flex items-center gap-1.5 ${m.winnerClubId === m.awayClubId ? "font-semibold" : "text-slate-400"}`}>
+                      <ClubBadge club={clubById(m.awayClubId)} size="sm" />
                       {clubById(m.awayClubId)?.nickname}
                     </span>
                     <span className="tabular-nums">{m.result.away.points}</span>
@@ -281,14 +284,16 @@ function RoundFixture({
           const away = clubById(m.awayClubId);
           const content = (
             <>
-              <div className="flex justify-between">
-                <span className={result && result.result.home.points > result.result.away.points ? "font-semibold" : ""}>
+              <div className="flex items-center justify-between gap-1.5">
+                <span className={`flex items-center gap-1.5 ${result && result.result.home.points > result.result.away.points ? "font-semibold" : ""}`}>
+                  <ClubBadge club={home} size="sm" />
                   {home?.nickname}
                 </span>
                 <span className="tabular-nums text-slate-400">{result ? result.result.home.points : ""}</span>
               </div>
-              <div className="flex justify-between">
-                <span className={result && result.result.away.points > result.result.home.points ? "font-semibold" : ""}>
+              <div className="mt-1 flex items-center justify-between gap-1.5">
+                <span className={`flex items-center gap-1.5 ${result && result.result.away.points > result.result.home.points ? "font-semibold" : ""}`}>
+                  <ClubBadge club={away} size="sm" />
                   {away?.nickname}
                 </span>
                 <span className="tabular-nums text-slate-400">{result ? result.result.away.points : ""}</span>

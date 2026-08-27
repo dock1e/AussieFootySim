@@ -39,6 +39,7 @@ import { MatchPreparation } from "./MatchPreparation";
 import { CoachsCall } from "./CoachsCall";
 import { QuarterTimeInterchange } from "./QuarterTimeInterchange";
 import { DetailedStatsTable } from "./DetailedStatsTable";
+import { ClubBadgeByName } from "./ClubBadge";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8, 16];
 
@@ -458,7 +459,11 @@ function ScoreBlock({
 }) {
   return (
     <div className={align === "left" ? "text-left" : "text-right"}>
-      <div className="text-sm text-slate-400">{name}</div>
+      <div className={`flex items-center gap-1.5 text-sm text-slate-400 ${align === "left" ? "" : "justify-end"}`}>
+        {align === "right" && name}
+        <ClubBadgeByName name={name} size="sm" />
+        {align === "left" && name}
+      </div>
       <div className="text-3xl font-bold tabular-nums">{points}</div>
       <div className="text-xs text-slate-500 tabular-nums">
         {goals}.{behinds}
@@ -627,8 +632,10 @@ function TeamStatBars({
 }) {
   return (
     <div className="card">
-      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
+      <div className="mb-3 flex items-center gap-1.5 text-xs uppercase tracking-wide text-slate-400">
+        <ClubBadgeByName name={label} size="sm" />
         {label} <span className="text-slate-600">vs</span> {otherLabel}
+        <ClubBadgeByName name={otherLabel} size="sm" />
       </div>
       <div className="space-y-2">
         {TEAM_STAT_KEYS.map((key) => {

@@ -1,5 +1,6 @@
 import type { LadderRow } from "../engine/ladder";
 import { clubById } from "../types/club";
+import { ClubBadge } from "./ClubBadge";
 
 /**
  * Ladder table — standard AFL standings columns: P/W/D/L, PF, PA, %, Pts.
@@ -76,13 +77,12 @@ export function LadderTable({
                 </td>
                 <td className={`px-3 py-2 ${isMine ? "font-semibold text-accent-light" : "font-medium"}`}>
                   <span className="inline-flex items-center gap-2">
-                    {/* Club-colour dot — Aug 2026 branding pass (ROADMAP.md item #13), a
+                    {/* Real club-colour badge — round 51, [[Club Branding and Colours]],
+                        replacing the earlier colour-dot stand-in (ROADMAP.md item #13) with
+                        each club's verified official colours + abbreviation. Still a
                         copyright-safe stand-in for the crest-in-ladder look real AFL.com.au
                         uses (no crest artwork exists in this project to reproduce). */}
-                    <span
-                      className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: club?.primaryColor ?? "#666" }}
-                    />
+                    <ClubBadge club={club} size="sm" />
                     {club?.name ?? `Club ${row.clubId}`}
                   </span>
                 </td>

@@ -5,6 +5,7 @@ import type { Player } from "../types/player";
 import { quarterlyPoints, sumTeam } from "../engine/summary";
 import { computeAussieFootySimRatings, fantasyPointsFor } from "../engine/ratings";
 import { DetailedStatsTable } from "./DetailedStatsTable";
+import { ClubBadgeByName } from "./ClubBadge";
 
 /**
  * Full-time result screen — User Interface.md "Full-time result": score,
@@ -128,7 +129,10 @@ export function FullTimeResult({
               <div className="text-lg font-semibold">
                 {bestOnGround.player.fname} {bestOnGround.player.lname}
               </div>
-              <div className="text-sm text-slate-400">{bestOnGround.player.Team}</div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-sm text-slate-400">
+                <ClubBadgeByName name={bestOnGround.player.Team} size="sm" />
+                {bestOnGround.player.Team}
+              </div>
             </div>
             <div className="flex items-center gap-4">
               <div className="grid grid-cols-4 gap-4 text-center text-sm tabular-nums">
@@ -153,8 +157,10 @@ export function FullTimeResult({
       )}
 
       <div className="card">
-        <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
+        <div className="mb-3 flex items-center gap-1.5 text-xs uppercase tracking-wide text-slate-400">
+          <ClubBadgeByName name={homeTeam.name} size="sm" />
           {homeTeam.name} <span className="text-slate-600">vs</span> {awayTeam.name}
+          <ClubBadgeByName name={awayTeam.name} size="sm" />
         </div>
         <div className="space-y-2">
           {STAT_ROWS.map(({ key, label }) => {
@@ -180,8 +186,8 @@ export function FullTimeResult({
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <TopPerformers title={`${homeTeam.name} top performers`} rows={topHome} />
-        <TopPerformers title={`${awayTeam.name} top performers`} rows={topAway} />
+        <TopPerformers title="Top performers" clubName={homeTeam.name} rows={topHome} />
+        <TopPerformers title="Top performers" clubName={awayTeam.name} rows={topAway} />
       </div>
 
       {/* Aug 2026 round 49, [[Detailed Match Statistics]] — Tyler: "a much more detailed view of
@@ -210,7 +216,11 @@ function FinalScoreBlock({
 }) {
   return (
     <div className={align === "left" ? "text-left" : "text-right"}>
-      <div className="text-sm text-slate-400">{name}</div>
+      <div className={`flex items-center gap-1.5 text-sm text-slate-400 ${align === "left" ? "" : "justify-end"}`}>
+        {align === "right" && name}
+        <ClubBadgeByName name={name} size="sm" />
+        {align === "left" && name}
+      </div>
       <div className="text-4xl font-bold tabular-nums">{r.points}</div>
       <div className="text-xs text-slate-500 tabular-nums">
         {r.goals}.{r.behinds}
@@ -261,14 +271,19 @@ function MarginChart({ quarters }: { quarters: { quarter: number; margin: number
 
 function TopPerformers({
   title,
+  clubName,
   rows,
 }: {
   title: string;
+  clubName?: string;
   rows: { player: Player; line: BoxScoreLine; rating: number; fantasyPoints: number }[];
 }) {
   return (
     <div className="card">
-      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">{title}</div>
+      <div className="mb-3 flex items-center gap-1.5 text-xs uppercase tracking-wide text-slate-400">
+        {clubName && <ClubBadgeByName name={clubName} size="sm" />}
+        {title}
+      </div>
       <div className="space-y-1.5 text-sm">
         {rows.map(({ player, line, rating, fantasyPoints }, i) => (
           <div key={player.PlayerID} className="flex items-center justify-between gap-2">

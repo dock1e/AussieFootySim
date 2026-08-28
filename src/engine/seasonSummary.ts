@@ -95,19 +95,15 @@ export function previousLadder(season: Season): LadderRow[] {
 }
 
 /**
- * Aug 2026 round 54 — [[Season Stats and Records]] Option B. The single
- * source of truth for "which `BoxScoreLine` fields are real, leaderboard-
- * eligible season stats" — widened from the original 4 (disposals/goals/
- * tackles/fantasyPoints) to all 17 fields [[Season Stats and Records]]'s own
- * audit confirmed are either already tracked or were cheap/light additions
- * this round (`shotsAtGoal`/`hitoutsToAdvantage`/`marksInside50`, all three
- * added to `BoxScoreLine` this same round). Deliberately does NOT include
- * the 5 stats that note flagged as needing genuinely new engine modelling
- * (Spoils, Intercept Marks, Intercept Possessions, Turnovers, Goal Assists)
- * — those have no `BoxScoreLine` field yet, so there's nothing here to sum.
- * `satisfies` gives a compile-time guarantee every entry really is a
- * `BoxScoreLine` key, so a future rename over there can't silently desync
- * this list without a type error here.
+ * Aug 2026 round 54 — [[Season Stats and Records]] Option B, widened round 55 to the full 22.
+ * The single source of truth for "which `BoxScoreLine` fields are real, leaderboard-eligible
+ * season stats" — started at the original 4 (disposals/goals/tackles/fantasyPoints), round 54
+ * widened it to 17 (everything already tracked or cheap/light to add), and round 55 adds the
+ * final 5 that needed genuinely new engine modelling (Spoils, Intercept Marks, Intercept
+ * Possessions, Turnovers, Goal Assists — see match.ts's own round 55 doc comments for how each is
+ * credited). All 22 of Tyler's named stat categories are real fields now. `satisfies` gives a
+ * compile-time guarantee every entry really is a `BoxScoreLine` key, so a future rename over there
+ * can't silently desync this list without a type error here.
  */
 export const LEADERBOARD_STAT_FIELDS = [
   "disposals",
@@ -127,31 +123,47 @@ export const LEADERBOARD_STAT_FIELDS = [
   "goals",
   "behinds",
   "shotsAtGoal",
+  "goalAssists",
+  "spoils",
+  "interceptMarks",
+  "interceptPossessions",
+  "turnovers",
 ] as const satisfies readonly (keyof BoxScoreLine)[];
 
-/** Every leaderboard-eligible stat — the 17 real `BoxScoreLine` fields above, plus `fantasyPoints` (derived via `fantasyPointsFor`, not a stored field itself, same special-case the original 4-stat version already had). */
+/** Every leaderboard-eligible stat — the 22 real `BoxScoreLine` fields above, plus `fantasyPoints` (derived via `fantasyPointsFor`, not a stored field itself, same special-case the original 4-stat version already had). */
 export type LeagueStat = (typeof LEADERBOARD_STAT_FIELDS)[number] | "fantasyPoints";
 
-/** Canonical display label for every stat `LeagueStat` can be — the one list both the Dashboard's compact card and the full stat-picker inside `LeaderModal` draw from, so a label can never drift between the two surfaces. */
+/**
+ * Canonical display label for every stat `LeagueStat` can be — the one list both the Dashboard's
+ * compact card and the full stat-picker inside `LeaderModal` draw from, so a label can never drift
+ * between the two surfaces. Ordered to match Tyler's own round 53 list verbatim (see [[Season
+ * Stats and Records]]'s "The ask" section) rather than grouping by mechanism — this is what the
+ * stat-picker dropdown itself renders top to bottom.
+ */
 export const ALL_LEAGUE_STATS: { key: LeagueStat; label: string }[] = [
   { key: "fantasyPoints", label: "Fantasy Points" },
   { key: "goals", label: "Goals" },
   { key: "behinds", label: "Behinds" },
   { key: "shotsAtGoal", label: "Shots at Goal" },
+  { key: "goalAssists", label: "Goal Assists" },
   { key: "disposals", label: "Disposals" },
+  { key: "contestedPoss", label: "Contested Possessions" },
+  { key: "uncontestedPoss", label: "Uncontested Possessions" },
   { key: "kicks", label: "Kicks" },
   { key: "handballs", label: "Handballs" },
   { key: "marks", label: "Marks" },
   { key: "marksInside50", label: "Marks Inside 50" },
   { key: "markLeadWins", label: "Marks On the Lead" },
-  { key: "contestedPoss", label: "Contested Possessions" },
-  { key: "uncontestedPoss", label: "Uncontested Possessions" },
   { key: "clearances", label: "Clearances" },
   { key: "tackles", label: "Tackles" },
-  { key: "hitouts", label: "Hitouts" },
-  { key: "hitoutsToAdvantage", label: "Hitouts to Advantage" },
+  { key: "spoils", label: "Spoils" },
+  { key: "interceptMarks", label: "Intercept Marks" },
+  { key: "interceptPossessions", label: "Intercept Possessions" },
   { key: "freeKicksFor", label: "Frees For" },
   { key: "freeKicksAgainst", label: "Frees Against" },
+  { key: "turnovers", label: "Turnovers" },
+  { key: "hitouts", label: "Hitouts" },
+  { key: "hitoutsToAdvantage", label: "Hitouts to Advantage" },
 ];
 
 /**

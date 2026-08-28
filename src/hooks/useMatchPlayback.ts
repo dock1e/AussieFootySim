@@ -80,6 +80,13 @@ function emptyLine(): BoxScoreLine {
     shotsAtGoal: 0,
     hitoutsToAdvantage: 0,
     marksInside50: 0,
+    // Aug 2026 round 55 — kept in sync with engine/match.ts's own emptyLine(), same convention as
+    // the round 54 fields' own comment above.
+    spoils: 0,
+    interceptMarks: 0,
+    interceptPossessions: 0,
+    turnovers: 0,
+    goalAssists: 0,
   };
 }
 

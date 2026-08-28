@@ -100,6 +100,45 @@ export interface BoxScoreLine {
   hitoutsToAdvantage: number;
   /** A mark taken while `isForward50` is true for the marking side — reuses the existing zone system unchanged. Always <= `marks`. */
   marksInside50: number;
+  // --- Aug 2026 round 55, [[Season Stats and Records]] gap stats — the 5 stats that round 54's own
+  // audit flagged as needing genuinely new engine modelling, not just new bookkeeping on an
+  // existing signal. Cluster into 3 mechanisms, per that note's own scoping:
+  /**
+   * Defensive-context tagging (1 of 3) — a defender wins a marking-type contest (`runContest`'s
+   * markContested/markLead branch, or `runMarkingContest`'s own equivalent) and knocks it away
+   * rather than clunking it clean; see `P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK`'s own doc comment
+   * for the split against `interceptMarks` below. Never credited for a defensive groundBall win
+   * (real AFL spoils are specifically a marking-contest action) — see `interceptPossessions` for
+   * the broader stat that DOES cover a defensive groundBall win too.
+   */
+  spoils: number;
+  /** Defensive-context tagging (1 of 3) — the other side of the same split `spoils` comes from: this particular defensive marking-contest win was clean enough to be a genuine mark. Always contributes to `marks` too (the underlying event really is a mark, just credited to the intercepting side instead of the intended receiver). */
+  interceptMarks: number;
+  /** Defensive-context tagging (1 of 3), the umbrella stat — ANY contested-possession-type win (spoil, intercept mark, or a defending side winning a genuine loose-ball scramble) where the winning side differs from whichever side held/was attempting to execute the ball going into that contest. A superset of `interceptMarks`, and of most but not all `spoils` moments — see match.ts's own call sites for exactly which. */
+  interceptPossessions: number;
+  /**
+   * Loser-crediting (2 of 3) — the mirror of every other stat in this file, which only ever
+   * credits whoever *won* a contest/disposal. Credited to the player who just lost the ball to the
+   * OTHER side specifically (their own side recovering their own fumble is NOT a turnover — the
+   * ball has to genuinely change hands, matching Champion Data's real definition): a landed
+   * tackle, an uncontested gather/mark/handball-reception fumbled and recovered by the defending
+   * side, a disposal-under-pressure or contested-execution fumble where the loose-ball scramble
+   * goes to the other side, or a kick sprayed out of bounds on the full. Deliberately NOT credited
+   * for a clearance loss (a stoppage is possession-neutral — nobody "had" the ball to turn over)
+   * or for a missed shot at goal (Champion Data doesn't count a shot's own accuracy as a turnover
+   * either).
+   */
+  turnovers: number;
+  /**
+   * Possession-chain memory (3 of 3) — the final effective disposal by a teammate leading directly
+   * to a goal, real AFL's own assist convention. Backed by `Ctx.lastEffectiveDisposal`, a single
+   * "who most recently found a teammate, unbroken since they last gained the ball" fact rather
+   * than a per-side history — see that field's own doc comment for why a single field is both
+   * simpler AND more correct than the design note's own looser "since the last stoppage" framing.
+   * Never self-credited (a shooter can't assist their own goal) and never credited for a behind or
+   * a miss, matching Tyler's own stat name.
+   */
+  goalAssists: number;
 }
 
 function emptyLine(): BoxScoreLine {
@@ -133,6 +172,11 @@ function emptyLine(): BoxScoreLine {
     shotsAtGoal: 0,
     hitoutsToAdvantage: 0,
     marksInside50: 0,
+    spoils: 0,
+    interceptMarks: 0,
+    interceptPossessions: 0,
+    turnovers: 0,
+    goalAssists: 0,
   };
 }
 
@@ -677,6 +721,20 @@ export const FITNESS_FLOOR = 20;
 const CONTEST_EXECUTION_DIFFICULTY = -22;
 
 /**
+ * Aug 2026 round 55 — [[Season Stats and Records]] Spoils/Intercept Marks. Both `runContest`'s and
+ * `runMarkingContest`'s own "defender wins the marking-contest position battle" branches already
+ * credit `contestedPoss` and take over as the new carrier, unconditionally, unchanged by this
+ * round — this constant only decides how THAT already-resolved event gets classified for the two
+ * new stats, never whether it happens or what it does to the match. A real AFL defender winning
+ * the ball back off a marking contest more often knocks it away than clunks a genuine mark
+ * themselves (spoiling is the lower-risk technique), so this is deliberately a minority split —
+ * reasoned, not derived from any cited source, same disclosed status as every other placeholder
+ * probability in this file (P_FORWARD_MARK_IS_LEAD, P_SET_SHOT_VS_SNAP, etc.), and an easy target
+ * for the balance simulator later if real data suggests otherwise.
+ */
+const P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK = 0.35;
+
+/**
  * Aug 2026 round 27 — `runHandballContest`'s own pressure term, added on top
  * of `CONTEST_EXECUTION_DIFFICULTY` rather than replacing it: a handball
  * reception is the same rating-vs-difficulty shape as an uncontested mark
@@ -843,6 +901,26 @@ export interface Ctx {
    * happens to be running when it's checked) — see `MIN_BENCH_REST_TICKS`.
    */
   restUntilTick: Map<number, number>;
+  /**
+   * Aug 2026 round 55 — [[Season Stats and Records]] Goal Assists, the one gap stat the design
+   * note itself flagged as needing "a new piece of match `ctx` state, not just a new field on an
+   * existing struct." Names whoever most recently disposed the ball to a genuine teammate
+   * receiver, `null` whenever that chain is currently broken. Deliberately a SINGLE field, not a
+   * per-side map (the design note's own first-pass framing) — a single fact stays automatically
+   * correct without hunting down every possession-change site to keep two sides in sync: it's set
+   * only at a genuine kick/handball-to-teammate launch (`runGeneralPlay`/`resolveUnpressuredDisposal`,
+   * 3 sites each), and cleared at every site where the ball changes hands WITHOUT going through
+   * one of those — a stoppage/throw-in (`resolveRuckTap`'s own top), a landed tackle, a spoil, an
+   * intercepted loose-ball scramble, or a kick sprayed out of bounds. `runShot` reads it once
+   * (unconditionally cleared afterward, whatever the outcome) to decide a `goalAssists` credit —
+   * see that field's own doc comment. Tighter than the design note's own "since the last stoppage"
+   * framing: this also correctly clears mid-stoppage-free passage of play the moment the OTHER
+   * side gains it by any means other than a clean disposal, which "since the last stoppage" alone
+   * would have missed (a side regaining the ball via a spoil, then scoring with no further
+   * disposal, would otherwise wrongly inherit a stale assist candidate from several possessions
+   * earlier in the same stoppage-free stretch).
+   */
+  lastEffectiveDisposal: { playerId: number; side: Side } | null;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
@@ -1294,6 +1372,10 @@ function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
  * eligible.
  */
 function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean): State {
+  // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Both a centre bounce
+  // (runStoppage) and a boundary throw-in (runThrowIn) funnel through here, so clearing it once in
+  // this one shared spot covers every real stoppage in the file.
+  ctx.lastEffectiveDisposal = null;
   const home = onGroundPlayers(ctx.home);
   const away = onGroundPlayers(ctx.away);
   const homePlan = ctx.homePlan;
@@ -1646,6 +1728,10 @@ function resolveUnpressuredDisposal(
     // not wherever their own tracked position last happened to settle.
     snapTrackedZone(ctx, freeKickTaker.PlayerID, newZone);
     lineFor(ctx, freeKickTaker).freeKicksFor += 1;
+    // Aug 2026 round 55 — [[Season Stats and Records]]: literally "sprayed a disposal out of
+    // bounds," the design note's own third named turnover example.
+    lineFor(ctx, carrier).turnovers += 1;
+    ctx.lastEffectiveDisposal = null;
     log(
       ctx,
       newZone,
@@ -1659,6 +1745,7 @@ function resolveUnpressuredDisposal(
         { playerId: carrier.PlayerID, stat: "kicks", delta: 1 },
         { playerId: carrier.PlayerID, stat: "freeKicksAgainst", delta: 1 },
         { playerId: freeKickTaker.PlayerID, stat: "freeKicksFor", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
       ],
     );
     return { phase: "GENERAL_PLAY", zone: newZone, possession: newSide, carrier: freeKickTaker, carrierUncontested: true };
@@ -1704,6 +1791,10 @@ function resolveUnpressuredDisposal(
           ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
           : `${carrier.lname} finds ${receiver.lname} leading into space inside 50`
         : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
+    // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
+    // launch, not reception — if the reception later fails, whichever site resolves that failure
+    // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
+    ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
@@ -1716,6 +1807,9 @@ function resolveUnpressuredDisposal(
   }
   const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
   if (ctx.rng() < contestChance) {
+    // Aug 2026 round 55 — a genuine jump-ball, nobody specific found — breaks the chain the same
+    // way a spoil/fumble does, see Ctx.lastEffectiveDisposal's own doc comment.
+    ctx.lastEffectiveDisposal = null;
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   // Aug 2026 round 27 — every other kick/handball reception, generalising the
@@ -1740,6 +1834,8 @@ function resolveUnpressuredDisposal(
       : proximityWeight(markDistance) === 0
         ? `${carrier.lname} finds ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
+    // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
+    ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
@@ -1755,6 +1851,8 @@ function resolveUnpressuredDisposal(
     proximityWeight(handballPick.distance) === 0
       ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
       : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
+  // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
+  ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
   log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
   return {
     phase: "HANDBALL_CONTEST",
@@ -1867,6 +1965,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
           tacklerLine.tackleWins += 1;
           // Aug 2026 round 39 — genuinely put to ground, see TACKLE_HOLD_DOWN_TICKS's own doc comment.
           ctx.groundedUntilTick.set(carrier.PlayerID, ctx.tick + TACKLE_HOLD_DOWN_TICKS);
+          // Aug 2026 round 55 — [[Season Stats and Records]]: a landed tackle always means the
+          // carrier's own side loses the ball outright — the design note's own "tackled into a
+          // clanger" turnover example, verbatim.
+          lineFor(ctx, carrier).turnovers += 1;
+          ctx.lastEffectiveDisposal = null;
           log(
             ctx,
             state.zone,
@@ -1879,6 +1982,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
               { playerId: chaser.PlayerID, stat: "tackles", delta: 1 },
               { playerId: chaser.PlayerID, stat: "tackleAttempts", delta: 1 },
               { playerId: chaser.PlayerID, stat: "tackleWins", delta: 1 },
+              { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
             ],
           );
           const newSide = otherSide(state.possession);
@@ -2015,6 +2119,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     tacklerLine.tackleWins += 1;
     // Aug 2026 round 39 — genuinely put to ground, see TACKLE_HOLD_DOWN_TICKS's own doc comment.
     ctx.groundedUntilTick.set(carrier.PlayerID, ctx.tick + TACKLE_HOLD_DOWN_TICKS);
+    // Aug 2026 round 55 — see this function's own persistent-chase tackle branch above for the
+    // full rationale — the same "tackled into a clanger" turnover, just the non-chase tackle path.
+    lineFor(ctx, carrier).turnovers += 1;
+    ctx.lastEffectiveDisposal = null;
     log(
       ctx,
       state.zone,
@@ -2027,6 +2135,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: defender.PlayerID, stat: "tackles", delta: 1 },
         { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
         { playerId: defender.PlayerID, stat: "tackleWins", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
       ],
     );
     const newSide = otherSide(state.possession);
@@ -2061,6 +2170,19 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // example is exactly this branch).
     const winner = resolveLooseBall(ctx, state.possession, carrier, defendingSide, defender);
     lineFor(ctx, winner.player).contestedPoss += 1;
+    // Aug 2026 round 55 — [[Season Stats and Records]]: only a turnover if the OTHER side actually
+    // won the scramble — carrier's own side recovering their own fumble isn't a turnover, matching
+    // Champion Data's real definition (the ball has to genuinely change hands).
+    const extraDeltas: StatDelta[] = [];
+    if (winner.side !== state.possession) {
+      lineFor(ctx, carrier).turnovers += 1;
+      lineFor(ctx, winner.player).interceptPossessions += 1;
+      extraDeltas.push(
+        { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+        { playerId: winner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
+      );
+      ctx.lastEffectiveDisposal = null;
+    }
     log(
       ctx,
       state.zone,
@@ -2072,6 +2194,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         ...gatherDeltas,
         { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
         { playerId: winner.player.PlayerID, stat: "contestedPoss", delta: 1 },
+        ...extraDeltas,
       ],
     );
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: winner.side, carrier: winner.player };
@@ -2113,6 +2236,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // not wherever their own tracked position last happened to settle.
     snapTrackedZone(ctx, freeKickTaker.PlayerID, newZone);
     lineFor(ctx, freeKickTaker).freeKicksFor += 1;
+    // Aug 2026 round 55 — [[Season Stats and Records]]: literally "sprayed a disposal out of
+    // bounds," the design note's own third named turnover example.
+    lineFor(ctx, carrier).turnovers += 1;
+    ctx.lastEffectiveDisposal = null;
     log(
       ctx,
       newZone,
@@ -2127,6 +2254,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
         { playerId: carrier.PlayerID, stat: "freeKicksAgainst", delta: 1 },
         { playerId: freeKickTaker.PlayerID, stat: "freeKicksFor", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
       ],
     );
     return { phase: "GENERAL_PLAY", zone: newZone, possession: newSide, carrier: freeKickTaker, carrierUncontested: true };
@@ -2182,6 +2310,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
           ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
           : `${carrier.lname} finds ${receiver.lname} leading into space inside 50`
         : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
+    // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
+    // launch, not reception — if the reception later fails, whichever site resolves that failure
+    // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
+    ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
@@ -2194,6 +2326,9 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   }
   const contestChance = P_DISPOSAL_BECOMES_CONTEST * gameStyleContestChanceMultiplier(styleFor(possessingPlan));
   if (ctx.rng() < contestChance) {
+    // Aug 2026 round 55 — a genuine jump-ball, nobody specific found — breaks the chain the same
+    // way a spoil/fumble does, see Ctx.lastEffectiveDisposal's own doc comment.
+    ctx.lastEffectiveDisposal = null;
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   // Aug 2026 round 27 — same generalisation as resolveUnpressuredDisposal's
@@ -2216,6 +2351,8 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       : proximityWeight(markDistance) === 0
         ? `${carrier.lname} finds ${receiver.lname} leading into space`
         : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
+    // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
+    ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
     return {
       phase: "MARKING_CONTEST",
@@ -2231,6 +2368,8 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     proximityWeight(handballPick.distance) === 0
       ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
       : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
+  // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
+  ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
   log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
   return {
     phase: "HANDBALL_CONTEST",
@@ -2299,6 +2438,13 @@ function resolveUncontestedGather(
     // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
     snapTrackedZone(ctx, recoverer.PlayerID, state.zone);
     (lineFor(ctx, attackerRep)[fields.attempts] as number) += 1;
+    // Aug 2026 round 55 — [[Season Stats and Records]]: a genuine turnover — the attacking side
+    // fumbled uncontested and the recoverer is always drawn from defendingSide here (unlike the
+    // loose-ball-scramble sites elsewhere in this file), so this is unconditionally a turnover, not
+    // a maybe. No matching interceptPossessions for the recoverer — deliberately consistent with
+    // this branch's own pre-existing "the recoverer gets no contest stat at all" design, just above.
+    lineFor(ctx, attackerRep).turnovers += 1;
+    ctx.lastEffectiveDisposal = null;
     const fumbleLabel = contestType === "groundBall" ? "can't hang onto the ground ball" : "spills the mark";
     log(
       ctx,
@@ -2307,7 +2453,10 @@ function resolveUncontestedGather(
       "CONTEST",
       `${attackerRep.lname} ${fumbleLabel}, uncontested — ${recoverer.lname} reacts first to the loose ball`,
       [attackerRep.PlayerID, recoverer.PlayerID],
-      [{ playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 }],
+      [
+        { playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 },
+        { playerId: attackerRep.PlayerID, stat: "turnovers", delta: 1 },
+      ],
     );
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: recoverer };
   }
@@ -2465,6 +2614,18 @@ function runContest(ctx: Ctx, state: State): State {
       (lineFor(ctx, defenderRep)[fields.attempts] as number) += 1;
       const looseBallWinner = resolveLooseBall(ctx, attackingSide, attackerRep, defendingSide, defenderRep);
       lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
+      // Aug 2026 round 55 — [[Season Stats and Records]]: see runGeneralPlay's own identical-shaped
+      // comment (its disposal-fumble loose-ball site) for the full rationale.
+      const extraDeltas: StatDelta[] = [];
+      if (looseBallWinner.side !== attackingSide) {
+        lineFor(ctx, attackerRep).turnovers += 1;
+        lineFor(ctx, looseBallWinner.player).interceptPossessions += 1;
+        extraDeltas.push(
+          { playerId: attackerRep.PlayerID, stat: "turnovers", delta: 1 },
+          { playerId: looseBallWinner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
+        );
+        ctx.lastEffectiveDisposal = null;
+      }
       log(
         ctx,
         state.zone,
@@ -2476,6 +2637,7 @@ function runContest(ctx: Ctx, state: State): State {
           { playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 },
           { playerId: defenderRep.PlayerID, stat: fields.attempts, delta: 1 },
           { playerId: looseBallWinner.player.PlayerID, stat: "contestedPoss", delta: 1 },
+          ...extraDeltas,
         ],
       );
       return { phase: "GENERAL_PLAY", zone: state.zone, possession: looseBallWinner.side, carrier: looseBallWinner.player };
@@ -2530,12 +2692,36 @@ function runContest(ctx: Ctx, state: State): State {
     { playerId: defenderRep.PlayerID, stat: "contestedPoss", delta: 1 },
     ...recordContest(ctx, contestType, defenderRep, attackerRep),
   ];
+  // Aug 2026 round 55 — [[Season Stats and Records]]: this defensive win already broke the
+  // attacking side's own passage of play, so it's always a genuine Intercept Possession regardless
+  // of contestType. A marking-type contest (never groundBall — real AFL spoils are specifically a
+  // marking-contest action) additionally rolls whether THIS particular defensive win was clean
+  // enough to be a genuine Intercept Mark, or stayed a Spoil (knocked away, not held) — see
+  // P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK's own doc comment. Additive to the existing contestedPoss
+  // credit above, not a replacement for it — deliberately NOT reworked to match the attacker-wins
+  // branch's own marks-XOR-contestedPoss convention, since that would shift contestedPoss's own
+  // long-stable distribution as an unrelated side effect of this round.
+  line.interceptPossessions += 1;
+  spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "interceptPossessions", delta: 1 });
+  let spoilLabel = `${defenderRep.lname} spoils it and takes control`;
+  if (contestType !== "groundBall") {
+    if (ctx.rng() < P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK) {
+      line.marks += 1;
+      line.interceptMarks += 1;
+      spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "marks", delta: 1 }, { playerId: defenderRep.PlayerID, stat: "interceptMarks", delta: 1 });
+      spoilLabel = `${defenderRep.lname} reads it perfectly and takes an intercept mark`;
+    } else {
+      line.spoils += 1;
+      spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "spoils", delta: 1 });
+    }
+  }
+  ctx.lastEffectiveDisposal = null;
   log(
     ctx,
     state.zone,
     defendingSide,
     "CONTEST",
-    `${defenderRep.lname} spoils it and takes control`,
+    spoilLabel,
     [defenderRep.PlayerID, attackerRep.PlayerID],
     spoilDeltas,
   );
@@ -2641,6 +2827,11 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
     // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
     snapTrackedZone(ctx, recoverer.PlayerID, zone);
+    // Aug 2026 round 55 — see resolveUncontestedGather's own identical-shaped comment for the full
+    // rationale (recoverer always defendingSide here -> always a turnover; no matching
+    // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
+    lineFor(ctx, receiver).turnovers += 1;
+    ctx.lastEffectiveDisposal = null;
     log(
       ctx,
       zone,
@@ -2648,6 +2839,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       "MARKING_CONTEST",
       `${receiver.lname} can't hang onto it despite the space — ${recoverer.lname} reacts first to the loose ball`,
       [receiver.PlayerID, recoverer.PlayerID],
+      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }],
     );
     return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
   };
@@ -2694,6 +2886,18 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       lineFor(ctx, defender).markContestedAttempts += 1;
       const looseBallWinner = resolveLooseBall(ctx, possessingSide, receiver, defendingSide, defender);
       lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
+      // Aug 2026 round 55 — [[Season Stats and Records]]: see runGeneralPlay's own identical-shaped
+      // comment (its disposal-fumble loose-ball site) for the full rationale.
+      const extraDeltas: StatDelta[] = [];
+      if (looseBallWinner.side !== possessingSide) {
+        lineFor(ctx, receiver).turnovers += 1;
+        lineFor(ctx, looseBallWinner.player).interceptPossessions += 1;
+        extraDeltas.push(
+          { playerId: receiver.PlayerID, stat: "turnovers", delta: 1 },
+          { playerId: looseBallWinner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
+        );
+        ctx.lastEffectiveDisposal = null;
+      }
       log(
         ctx,
         zone,
@@ -2705,6 +2909,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
           { playerId: receiver.PlayerID, stat: "markContestedAttempts", delta: 1 },
           { playerId: defender.PlayerID, stat: "markContestedAttempts", delta: 1 },
           { playerId: looseBallWinner.player.PlayerID, stat: "contestedPoss", delta: 1 },
+          ...extraDeltas,
         ],
       );
       return { phase: "GENERAL_PLAY", zone, possession: looseBallWinner.side, carrier: looseBallWinner.player };
@@ -2740,17 +2945,34 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver };
   }
 
-  lineFor(ctx, defender).contestedPoss += 1;
+  const defenderLine = lineFor(ctx, defender);
+  defenderLine.contestedPoss += 1;
   const spoilDeltas: StatDelta[] = [
     { playerId: defender.PlayerID, stat: "contestedPoss", delta: 1 },
     ...recordContest(ctx, "markContested", defender, receiver),
   ];
+  // Aug 2026 round 55 — see runContest's own identical-shaped comment (its spoilDeltas site) for
+  // the full rationale; this function only ever resolves a kick reception, so it's always a
+  // marking-type situation (never groundBall) — no contestType guard needed here.
+  defenderLine.interceptPossessions += 1;
+  spoilDeltas.push({ playerId: defender.PlayerID, stat: "interceptPossessions", delta: 1 });
+  let spoilLabel = `${defender.lname} spoils the contest and takes control`;
+  if (ctx.rng() < P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK) {
+    defenderLine.marks += 1;
+    defenderLine.interceptMarks += 1;
+    spoilDeltas.push({ playerId: defender.PlayerID, stat: "marks", delta: 1 }, { playerId: defender.PlayerID, stat: "interceptMarks", delta: 1 });
+    spoilLabel = `${defender.lname} reads the kick perfectly and takes an intercept mark`;
+  } else {
+    defenderLine.spoils += 1;
+    spoilDeltas.push({ playerId: defender.PlayerID, stat: "spoils", delta: 1 });
+  }
+  ctx.lastEffectiveDisposal = null;
   log(
     ctx,
     zone,
     defendingSide,
     "MARKING_CONTEST",
-    `${defender.lname} spoils the contest and takes control`,
+    spoilLabel,
     [defender.PlayerID, receiver.PlayerID],
     spoilDeltas,
   );
@@ -2812,6 +3034,11 @@ function runHandballContest(ctx: Ctx, state: State): State {
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
     // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
     snapTrackedZone(ctx, recoverer.PlayerID, zone);
+    // Aug 2026 round 55 — see resolveUncontestedGather's own identical-shaped comment for the full
+    // rationale (recoverer always defendingSide here -> always a turnover; no matching
+    // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
+    lineFor(ctx, receiver).turnovers += 1;
+    ctx.lastEffectiveDisposal = null;
     log(
       ctx,
       zone,
@@ -2819,6 +3046,7 @@ function runHandballContest(ctx: Ctx, state: State): State {
       "HANDBALL_CONTEST",
       `${receiver.lname} spills the handball despite the space — ${recoverer.lname} reacts first to the loose ball`,
       [receiver.PlayerID, recoverer.PlayerID],
+      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }],
     );
     return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
   };
@@ -2854,6 +3082,18 @@ function runHandballContest(ctx: Ctx, state: State): State {
   // `defender`; see that function's own doc comment.
   const looseBallWinner = resolveLooseBall(ctx, possessingSide, receiver, defendingSide, defender);
   lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
+  // Aug 2026 round 55 — [[Season Stats and Records]]: see runGeneralPlay's own identical-shaped
+  // comment (its disposal-fumble loose-ball site) for the full rationale.
+  const extraDeltas: StatDelta[] = [];
+  if (looseBallWinner.side !== possessingSide) {
+    lineFor(ctx, receiver).turnovers += 1;
+    lineFor(ctx, looseBallWinner.player).interceptPossessions += 1;
+    extraDeltas.push(
+      { playerId: receiver.PlayerID, stat: "turnovers", delta: 1 },
+      { playerId: looseBallWinner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
+    );
+    ctx.lastEffectiveDisposal = null;
+  }
   log(
     ctx,
     zone,
@@ -2861,7 +3101,7 @@ function runHandballContest(ctx: Ctx, state: State): State {
     "HANDBALL_CONTEST",
     describeLooseBall(ctx, RECEPTION_FUMBLE_PHRASES, receiver.lname, defender.lname, looseBallWinner.player.PlayerID === receiver.PlayerID),
     [defender.PlayerID, receiver.PlayerID],
-    [{ playerId: looseBallWinner.player.PlayerID, stat: "contestedPoss", delta: 1 }],
+    [{ playerId: looseBallWinner.player.PlayerID, stat: "contestedPoss", delta: 1 }, ...extraDeltas],
   );
   return { phase: "GENERAL_PLAY", zone, possession: looseBallWinner.side, carrier: looseBallWinner.player };
 }
@@ -2906,6 +3146,12 @@ function setShotProbability(shooter: Player, shotContext: State["shotContext"], 
 
 function runShot(ctx: Ctx, state: State): State {
   const shooter = state.carrier!;
+  // Aug 2026 round 55 — [[Season Stats and Records]] Goal Assists: read then unconditionally
+  // clear, regardless of outcome — a shot at goal (goal, behind, or miss) always ends the current
+  // passage of play's disposal chain, whatever follows (kick-in, stoppage, throw-in) starts fresh.
+  // See Ctx.lastEffectiveDisposal's own doc comment for the full "why."
+  const assistCandidate = ctx.lastEffectiveDisposal;
+  ctx.lastEffectiveDisposal = null;
   const possessingTeam = teamOf(ctx, state.possession);
   const possessingPlan = planFor(ctx, state.possession);
   const defendingSide = otherSide(state.possession);
@@ -2961,16 +3207,33 @@ function runShot(ctx: Ctx, state: State): State {
   if (onTarget.success && ctx.rng() < goalChance) {
     line.goals += 1;
     scoreLine.goals += 1;
+    // Aug 2026 round 55 — [[Season Stats and Records]] Goal Assists: the final effective disposal
+    // by a teammate leading directly to this goal, real AFL's own assist convention. Never
+    // self-credited (a shooter can't assist their own goal); never credited for a behind or miss
+    // (assistCandidate was already cleared above regardless, so those branches simply never read
+    // it at all).
+    const assister =
+      assistCandidate && assistCandidate.side === state.possession && assistCandidate.playerId !== shooter.PlayerID
+        ? teamOf(ctx, state.possession).players.find((p) => p.PlayerID === assistCandidate.playerId)
+        : undefined;
+    const assistDeltas: StatDelta[] = [];
+    if (assister) {
+      lineFor(ctx, assister).goalAssists += 1;
+      assistDeltas.push({ playerId: assister.PlayerID, stat: "goalAssists", delta: 1 });
+    }
     log(
       ctx,
       state.zone,
       state.possession,
       "SHOT",
-      nearby ? `GOAL! ${shooter.lname} snaps it through under pressure from ${nearby.player.lname}` : `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`,
-      playerIds,
+      (nearby
+        ? `GOAL! ${shooter.lname} snaps it through under pressure from ${nearby.player.lname}`
+        : `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`) + (assister ? `, from ${assister.lname}` : ""),
+      assister ? [...playerIds, assister.PlayerID] : playerIds,
       [
         { playerId: shooter.PlayerID, stat: "goals", delta: 1 },
         { playerId: shooter.PlayerID, stat: "shotsAtGoal", delta: 1 },
+        ...assistDeltas,
       ],
       false,
       isSetShot,
@@ -3091,6 +3354,9 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
     homeFitness: new Map(home.players.map((p) => [p.PlayerID, 100])),
     awayFitness: new Map(away.players.map((p) => [p.PlayerID, 100])),
     restUntilTick: new Map(),
+    // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. No disposal chain
+    // exists yet at kick-off, same as at every other stoppage.
+    lastEffectiveDisposal: null,
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.

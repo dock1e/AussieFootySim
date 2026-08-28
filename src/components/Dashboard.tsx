@@ -79,6 +79,12 @@ import type { MatchTeam } from "../engine/team";
  * widened from 25 to the top 100 rows Tyler asked for. The 5 stats that note flagged as needing
  * genuinely new engine modelling (Spoils, Intercept Marks, Intercept Possessions, Turnovers, Goal
  * Assists) show in the picker as disabled "coming soon" entries rather than silently missing.
+ *
+ * Aug 2026 round 55: those 5 gap stats are real now (see match.ts's own round 55 doc comments for
+ * the 3 new engine mechanisms behind them) — `ALL_LEAGUE_STATS` grew from 18 to the full 22, and
+ * the picker's separate "coming soon" `<optgroup>`/`COMING_SOON_STATS` list is gone outright, not
+ * just emptied. Every stat Tyler originally asked for in round 53 is now a real, selectable,
+ * ranked leaderboard.
  */
 
 type ActiveModal =
@@ -662,17 +668,6 @@ const VIEW_MODES: { key: LeaderViewMode; label: string; isAverage: boolean }[] =
 ];
 
 /**
- * The 5 stats [[Season Stats and Records]] flagged as needing genuinely new
- * engine modelling (a defensive-context flag for Spoils/Intercept Marks/
- * Intercept Possessions, a loser-credit mechanism for Turnovers, and a
- * possession-chain memory for Goal Assists) — no `BoxScoreLine` field exists
- * for any of them yet. Shown in the picker as real, disclosed "coming soon"
- * entries (disabled, own group) rather than silently missing, per that
- * note's own Option B recommendation.
- */
-const COMING_SOON_STATS = ["Spoils", "Intercept Marks", "Intercept Possessions", "Turnovers", "Goal Assists"];
-
-/**
  * The expanded view of one Competition Leaders column — Aug 2026 round 54,
  * [[Season Stats and Records]] Option B. `stat`/`label` seed the initial
  * view (whichever tile or "Browse all stats" link opened this), but both
@@ -746,20 +741,11 @@ function LeaderModal({
           }
         }}
       >
-        <optgroup label="Available stats">
-          {ALL_LEAGUE_STATS.map((s) => (
-            <option key={s.key} value={s.key}>
-              {s.label}
-            </option>
-          ))}
-        </optgroup>
-        <optgroup label="Coming soon — not tracked yet">
-          {COMING_SOON_STATS.map((name) => (
-            <option key={name} disabled>
-              {name}
-            </option>
-          ))}
-        </optgroup>
+        {ALL_LEAGUE_STATS.map((s) => (
+          <option key={s.key} value={s.key}>
+            {s.label}
+          </option>
+        ))}
       </select>
       <div className="space-y-1 text-sm">
         {top.length === 0 ? (

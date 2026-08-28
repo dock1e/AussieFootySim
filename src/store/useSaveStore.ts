@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ALL_PLAYERS, loadPool, resetPoolToGenerated } from "../data/loadPlayers";
 import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData, type DraftWindow, type CombineWindow } from "../engine/saveGame";
+import type { SeasonArchiveEntry } from "../engine/seasonSummary";
 import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
 import { generateProspectPool, buildDraftOrder, draftPlayer, autoResolvePick, SCOUT_BUDGET_PER_DRAFT } from "../engine/draft";
@@ -56,6 +57,8 @@ interface SaveStoreState {
   year: number;
   /** Bumped every time the live player pool (data/loadPlayers.ts's ALL_PLAYERS) is replaced wholesale — a load, a new game, or an off-season step. Not bumped for reads. Components that memoize off getPlayersByClub()/getPlayerById() should add this to their dependency array so they refresh immediately after a pool swap without needing an unrelated re-render or a navigation away and back. */
   poolVersion: number;
+  /** Aug 2026 round 54 — [[Season Stats and Records]]. Every real off-season's own compact summary, oldest first. Same "doesn't belong to any single sub-store" reasoning as `year` above (this file's own doc comment) — populated by `runOffSeason` below, read directly by Dashboard's `LeaderModal` for its All-Time view modes. */
+  seasonArchives: SeasonArchiveEntry[];
 
   /** Loads the current save from IndexedDB if one exists and hydrates every other store from it; otherwise leaves everything at its already-correct fresh-game defaults. Call once, on app boot, before rendering the main UI. */
   initialize: () => Promise<void>;
@@ -186,7 +189,7 @@ function autoResolveDraftPicks(window: DraftWindow, year: number, opts: { stopWh
   return { window: { ...window, picks, currentPickIndex }, draftedPlayers };
 }
 
-function snapshotSave(year: number): SaveGameData {
+function snapshotSave(year: number, seasonArchives: SeasonArchiveEntry[]): SaveGameData {
   return {
     schemaVersion: SAVE_SCHEMA_VERSION,
     myClub: useGameStore.getState().myClub,
@@ -201,6 +204,7 @@ function snapshotSave(year: number): SaveGameData {
     contractWindow: useContractStore.getState().window,
     tradeWindow: useTradeStore.getState().window,
     draftWindow: useDraftStore.getState().window,
+    seasonArchives,
   };
 }
 
@@ -239,6 +243,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   lastSavedAt: null,
   year: CURRENT_SEASON_YEAR,
   poolVersion: 0,
+  seasonArchives: [],
 
   initialize: async () => {
     let loaded: SaveGameData | null = null;
@@ -260,9 +265,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       // enough (nothing has changed since the load, so what's on disk still
       // matches this state) and avoids needing to persist a real timestamp
       // inside SaveGameData just for a UI label.
-      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1 });
+      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives });
     } else {
-      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR });
+      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [] });
     }
 
     if (!subscribed) {
@@ -279,7 +284,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   saveNow: async () => {
-    const save = snapshotSave(get().year);
+    const save = snapshotSave(get().year, get().seasonArchives);
     await writeSaveToDB(serializeSave(save));
     set({ hasSave: true, lastSavedAt: Date.now() });
   },
@@ -288,13 +293,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     resetPoolToGenerated();
     const save = newSaveGame(myClub, ALL_PLAYERS);
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1 });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives });
     await clearSaveInDB();
     await get().saveNow();
   },
 
   runOffSeason: async () => {
-    const current = snapshotSave(get().year);
+    const current = snapshotSave(get().year, get().seasonArchives);
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
@@ -302,16 +307,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
     useDraftStore.getState().clearWindow();
-    set({ year: next.year, poolVersion: get().poolVersion + 1 });
+    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives });
     await get().saveNow();
   },
 
-  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year)), null, 2),
+  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives)), null, 2),
 
   importJSON: async (text) => {
     const save = deserializeSave(JSON.parse(text));
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1 });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives });
     await get().saveNow();
   },
 

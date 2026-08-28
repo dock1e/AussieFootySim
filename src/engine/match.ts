@@ -90,6 +90,16 @@ export interface BoxScoreLine {
   /** Real Free Kick logic, Aug 2026 round 19 — see P_HIGH_CONTACT_FREE_KICK/P_KICK_GOES_OUT_ON_FULL's own doc comment for exactly which real categories these currently cover. Standard AFL box-score pairing (FF/FA), same convention as every other paired stat above. */
   freeKicksFor: number;
   freeKicksAgainst: number;
+  // --- Aug 2026 round 54, [[Season Stats and Records]] Option B — three stats whose real signal
+  // was already being computed live in this file but never written to a stat field. Each is
+  // credited at the exact same call site(s) that already decide the underlying outcome, so no new
+  // simulation logic was needed, only new bookkeeping:
+  /** Every shot resolution (goal, behind, or a clean miss) credited once, regardless of outcome — the shot-resolution function's own 3-way branch already existed; a miss previously left zero trace on the shooter's line at all. */
+  shotsAtGoal: number;
+  /** A ruck hitout where the tap execution roll actually succeeded (`tapWentToHand`) — that boolean already drove the "wins the hit-out" vs. "taps it out, but it's scrappy" flavour text; this is the first stat field that reads it. Always <= `hitouts`. */
+  hitoutsToAdvantage: number;
+  /** A mark taken while `isForward50` is true for the marking side — reuses the existing zone system unchanged. Always <= `marks`. */
+  marksInside50: number;
 }
 
 function emptyLine(): BoxScoreLine {
@@ -120,6 +130,9 @@ function emptyLine(): BoxScoreLine {
     clearanceWins: 0,
     freeKicksFor: 0,
     freeKicksAgainst: 0,
+    shotsAtGoal: 0,
+    hitoutsToAdvantage: 0,
+    marksInside50: 0,
   };
 }
 
@@ -1323,6 +1336,9 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
   const ruckWinnerSide: Side = ruckResult.winner === "attacker" ? "home" : "away";
   const tapExecutionRating = computeContestRating(ruckWinner, ["strengthOverhead", "verticalLeap"]) * conditionMultiplierFor(ctx, ruckWinnerSide, ruckWinner);
   const tapWentToHand = resolveThreshold(tapExecutionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success;
+  // Aug 2026 round 54 — [[Season Stats and Records]]: `tapWentToHand` already existed and already
+  // drove the flavour text below; this is the first time it's actually written to a stat field.
+  if (tapWentToHand) lineFor(ctx, ruckWinner).hitoutsToAdvantage += 1;
   // Both rucks logged as involved (not just the winner) — Aug 2026, Tyler:
   // "Gawn won the hitout, but Gawn is standing outside the center circle...
   // it should have been a contest between Cameron and Gawn inside that
@@ -1340,6 +1356,7 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
       : `${ruckWinner.lname} taps it out, but it's scrappy`;
   log(ctx, zone, displaySide, "STOPPAGE", hitoutLabel, [ruckWinner.PlayerID, ruckLoser.PlayerID], [
     { playerId: ruckWinner.PlayerID, stat: "hitouts", delta: 1 },
+    ...(tapWentToHand ? [{ playerId: ruckWinner.PlayerID, stat: "hitoutsToAdvantage" as const, delta: 1 }] : []),
     ...recordContest(ctx, "ruck", ruckWinner, ruckLoser),
   ]);
 
@@ -2308,6 +2325,11 @@ function resolveUncontestedGather(
     // two forward-50 labels this contest happened to draw.
     line.marks += 1;
     deltas.push({ playerId: attackerRep.PlayerID, stat: "marks", delta: 1 });
+    // Aug 2026 round 54 — [[Season Stats and Records]]: reuses the existing zone system unchanged.
+    if (isForward50(state.zone, attackingSide)) {
+      line.marksInside50 += 1;
+      deltas.push({ playerId: attackerRep.PlayerID, stat: "marksInside50", delta: 1 });
+    }
   }
   log(
     ctx,
@@ -2474,6 +2496,11 @@ function runContest(ctx: Ctx, state: State): State {
         line.contestedMarks += 1;
         deltas.push({ playerId: attackerRep.PlayerID, stat: "contestedMarks", delta: 1 });
       }
+      // Aug 2026 round 54 — [[Season Stats and Records]]: reuses the existing zone system unchanged.
+      if (isForward50(state.zone, attackingSide)) {
+        line.marksInside50 += 1;
+        deltas.push({ playerId: attackerRep.PlayerID, stat: "marksInside50", delta: 1 });
+      }
     } else {
       line.contestedPoss += 1;
       deltas.push({ playerId: attackerRep.PlayerID, stat: "contestedPoss", delta: 1 });
@@ -2594,8 +2621,12 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       conditionMultiplierFor(ctx, possessingSide, receiver);
     if (resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
       lineFor(ctx, receiver).marks += 1;
+      // Aug 2026 round 54 — [[Season Stats and Records]]: reuses the existing zone system unchanged.
+      const isMarkInside50 = isForward50(zone, possessingSide);
+      if (isMarkInside50) lineFor(ctx, receiver).marksInside50 += 1;
       log(ctx, zone, possessingSide, "MARKING_CONTEST", `${receiver.lname} marks it, leading into space`, [receiver.PlayerID], [
         { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
+        ...(isMarkInside50 ? [{ playerId: receiver.PlayerID, stat: "marksInside50" as const, delta: 1 }] : []),
       ]);
       // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment. Always "mark" — this function only ever resolves a kick reception, never a ground ball.
       if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver, shotContext: "mark" };
@@ -2685,6 +2716,11 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
       { playerId: receiver.PlayerID, stat: "contestedMarks", delta: 1 },
     );
+    // Aug 2026 round 54 — [[Season Stats and Records]]: reuses the existing zone system unchanged.
+    if (isForward50(zone, possessingSide)) {
+      lineFor(ctx, receiver).marksInside50 += 1;
+      deltas.push({ playerId: receiver.PlayerID, stat: "marksInside50", delta: 1 });
+    }
     log(
       ctx,
       zone,
@@ -2901,6 +2937,11 @@ function runShot(ctx: Ctx, state: State): State {
   const onTarget = resolveThreshold(rating, difficulty, ctx.rng);
 
   const line = lineFor(ctx, shooter);
+  // Aug 2026 round 54 — [[Season Stats and Records]]: credited once per call to this function,
+  // regardless of which of the three branches below actually resolves — a shot at goal is a shot
+  // at goal whether it's a major, a minor, or sails wide, and the miss branch previously left zero
+  // trace on the shooter's own line at all.
+  line.shotsAtGoal += 1;
   const scoreLine = state.possession === "home" ? ctx.score.home : ctx.score.away;
   // Aug 2026 round 47 — the pressuring defender (if any) is named in the log
   // text and included here so click-to-inspect/any playerIds-based UI sees
@@ -2927,7 +2968,10 @@ function runShot(ctx: Ctx, state: State): State {
       "SHOT",
       nearby ? `GOAL! ${shooter.lname} snaps it through under pressure from ${nearby.player.lname}` : `GOAL! ${shooter.lname} (${isSetShot ? "set shot" : "snap"})`,
       playerIds,
-      [{ playerId: shooter.PlayerID, stat: "goals", delta: 1 }],
+      [
+        { playerId: shooter.PlayerID, stat: "goals", delta: 1 },
+        { playerId: shooter.PlayerID, stat: "shotsAtGoal", delta: 1 },
+      ],
       false,
       isSetShot,
     );
@@ -2944,7 +2988,10 @@ function runShot(ctx: Ctx, state: State): State {
       "SHOT",
       nearby ? `${shooter.lname}'s snap under pressure from ${nearby.player.lname} sails through for a behind` : `Behind to ${shooter.lname}`,
       playerIds,
-      [{ playerId: shooter.PlayerID, stat: "behinds", delta: 1 }],
+      [
+        { playerId: shooter.PlayerID, stat: "behinds", delta: 1 },
+        { playerId: shooter.PlayerID, stat: "shotsAtGoal", delta: 1 },
+      ],
       false,
       isSetShot,
     );
@@ -2956,7 +3003,7 @@ function runShot(ctx: Ctx, state: State): State {
       "SHOT",
       nearby ? `${shooter.lname}'s snap under pressure from ${nearby.player.lname} misses everything` : `${shooter.lname}'s shot misses everything`,
       playerIds,
-      [],
+      [{ playerId: shooter.PlayerID, stat: "shotsAtGoal", delta: 1 }],
       false,
       isSetShot,
     );

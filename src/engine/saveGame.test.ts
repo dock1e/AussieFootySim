@@ -173,6 +173,21 @@ describe("serializeSave / deserializeSave", () => {
         scoutingBudgetRemaining: 3,
         revealed: { 9002: ["skill", "speed"] },
       },
+      // Aug 2026 round 54 — [[Season Stats and Records]]. `playerTotals: []` is deliberate here,
+      // not a shortcut: this test proves JSON round-tripping (a plain nested array, no Map — see
+      // `SeasonArchiveEntry`'s own doc comment for why that needed zero special-casing), not
+      // stats-aggregation correctness, which round 54's own real-simulated-season scratch script
+      // covers separately.
+      seasonArchives: [
+        {
+          year: 2026,
+          ladder: [
+            { clubId: 1, played: 22, wins: 18, losses: 4, draws: 0, pointsFor: 2400, pointsAgainst: 1800, premiershipPoints: 72, percentage: 133.3 },
+            { clubId: 2, played: 22, wins: 10, losses: 12, draws: 0, pointsFor: 2000, pointsAgainst: 2100, premiershipPoints: 40, percentage: 95.2 },
+          ],
+          playerTotals: [],
+        },
+      ],
     };
   }
 

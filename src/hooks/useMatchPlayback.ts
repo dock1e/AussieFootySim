@@ -75,6 +75,11 @@ function emptyLine(): BoxScoreLine {
     clearanceWins: 0,
     freeKicksFor: 0,
     freeKicksAgainst: 0,
+    // Aug 2026 round 54 — kept in sync with engine/match.ts's own emptyLine(), same convention as
+    // the contest-stat fields' own comment above.
+    shotsAtGoal: 0,
+    hitoutsToAdvantage: 0,
+    marksInside50: 0,
   };
 }
 

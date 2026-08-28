@@ -78,6 +78,11 @@ function emptyLine(): BoxScoreLine {
     clearanceWins: 0,
     freeKicksFor: 0,
     freeKicksAgainst: 0,
+    // Aug 2026 round 54 — kept in sync with engine/match.ts's own emptyLine(), same convention as
+    // the contest-stat fields' own comment above.
+    shotsAtGoal: 0,
+    hitoutsToAdvantage: 0,
+    marksInside50: 0,
   };
 }
 
@@ -86,7 +91,11 @@ export function sumTeam(box: Record<number, BoxScoreLine>, ids: Set<number>): Bo
   for (const [idStr, line] of Object.entries(box)) {
     if (!ids.has(Number(idStr))) continue;
     for (const key of Object.keys(total) as (keyof BoxScoreLine)[]) {
-      total[key] += line[key];
+      // Aug 2026 round 54 — `?? 0` is load-bearing, not defensive filler: `line` here can be a
+      // REAL box score persisted before a field existed (a match played in an earlier round of
+      // this project, sitting in a real save's IndexedDB) — see seasonSummary.ts's
+      // `aggregateBoxScores` for the live-caught NaN bug this same guard fixes there.
+      total[key] += line[key] ?? 0;
     }
   }
   return total;

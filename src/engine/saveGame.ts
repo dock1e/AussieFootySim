@@ -8,6 +8,7 @@ import type { TradeOffer } from "./trade.ts";
 import type { DraftPickRecord } from "./draft.ts";
 import type { CombineTestResult } from "./combine.ts";
 import { runOffSeason } from "./progression.ts";
+import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 
 /**
@@ -168,6 +169,18 @@ export interface SaveGameData {
   tradeWindow: TradeWindow | null;
   /** Null if the coach hasn't started this year's National Draft yet — mirrors useDraftStore's `window`. See DraftWindow's own doc comment. */
   draftWindow: DraftWindow | null;
+  /**
+   * Aug 2026 round 54 — [[Season Stats and Records]] Option B. Every real
+   * off-season's own compact summary (final ladder + every player's season
+   * totals), appended in `runOffSeasonOnSave` below at the exact moment
+   * `season` would otherwise be discarded with no trace. Added without
+   * bumping `SAVE_SCHEMA_VERSION`, same treatment as `eligibility`/
+   * `combineWindow`/etc: a save from before this feature existed just has no
+   * archived seasons yet, which is exactly what `deserializeSave` defaults a
+   * missing field to — "All Time" stats correctly start counting from
+   * whichever season is live when this ships, not retroactively.
+   */
+  seasonArchives: SeasonArchiveEntry[];
 }
 
 /** A fresh save for a brand-new game — the exact "nothing played yet" state the app already defaults to today, just made explicit and persistable. */
@@ -186,6 +199,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     contractWindow: null,
     tradeWindow: null,
     draftWindow: null,
+    seasonArchives: [],
   };
 }
 
@@ -213,8 +227,19 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
  * own doc comment on why undrafted prospects are deliberately not persisted
  * past their own night (the same reasoning covers un-drafted Combine
  * invitees too).
+ *
+ * Aug 2026 round 54 — [[Season Stats and Records]]: this is also the one
+ * moment a just-finished season's own data would otherwise vanish outright
+ * (`season: null` below), so it's archived one line before that happens —
+ * `archiveSeason` reduces the whole season down to its final ladder plus
+ * every player's own season totals, not the full match-by-match log (see
+ * `SeasonArchiveEntry`'s own doc comment). Guarded on `save.season` existing
+ * at all — calling this with no season in progress (shouldn't happen; the
+ * Off-Season Hub only ever offers this step once a season is complete) is a
+ * no-op on `seasonArchives` rather than archiving `null`.
  */
 export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
+  const finishedSeasonArchive = save.season ? archiveSeason(save.season, save.year) : null;
   return {
     ...save,
     players: runOffSeason(save.players),
@@ -224,6 +249,7 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     contractWindow: null,
     tradeWindow: null,
     draftWindow: null,
+    seasonArchives: finishedSeasonArchive ? [...save.seasonArchives, finishedSeasonArchive] : save.seasonArchives,
     savedAt: new Date().toISOString(),
   };
 }
@@ -268,6 +294,8 @@ export interface SerializedSaveGame {
   tradeWindow: TradeWindow | null;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `tradeWindow`. */
   draftWindow: DraftWindow | null;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `draftWindow`. See `SeasonArchiveEntry`'s own doc comment for why this needed no Map-style special-casing despite summarising `Season` data. */
+  seasonArchives: SeasonArchiveEntry[];
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -294,6 +322,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     contractWindow: save.contractWindow,
     tradeWindow: save.tradeWindow,
     draftWindow: save.draftWindow,
+    seasonArchives: save.seasonArchives,
   };
 }
 
@@ -333,5 +362,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     contractWindow: s.contractWindow ?? null,
     tradeWindow: s.tradeWindow ?? null,
     draftWindow: s.draftWindow ?? null,
+    seasonArchives: s.seasonArchives ?? [],
   };
 }

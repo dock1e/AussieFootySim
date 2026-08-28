@@ -23,11 +23,16 @@ import {
   topPerformersFor,
   previousLadder,
   seasonPlayerTotals,
+  seasonPlayerLast5Totals,
+  toAverageMap,
+  allTimePlayerTotals,
   leagueLeaders,
   ourLeagueBest,
+  ALL_LEAGUE_STATS,
   type PerformerLine,
   type LeagueStat,
   type SeasonPlayerTotals,
+  type SeasonArchiveEntry,
 } from "../engine/seasonSummary";
 import type { PlayedMatch, Season } from "../engine/season";
 import type { FixtureMatch } from "../engine/fixture";
@@ -67,6 +72,13 @@ import type { MatchTeam } from "../engine/team";
  * screen at once, sidestepping both complaints at the same time. Each
  * trigger card keeps its existing compact/collapsed content untouched and
  * adds a small `ExpandHint` affordance; nothing renders twice.
+ *
+ * Aug 2026 round 54, [[Season Stats and Records]] Option B: `LeaderModal` gained a 5-way
+ * view-mode switcher (Total/Average/Last 5/All-Time Total/All-Time Average) and a stat-picker
+ * covering all 18 leaderboard-eligible stats (`engine/seasonSummary.ts`'s `ALL_LEAGUE_STATS`),
+ * widened from 25 to the top 100 rows Tyler asked for. The 5 stats that note flagged as needing
+ * genuinely new engine modelling (Spoils, Intercept Marks, Intercept Possessions, Turnovers, Goal
+ * Assists) show in the picker as disabled "coming soon" entries rather than silently missing.
  */
 
 type ActiveModal =
@@ -89,6 +101,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
   const season = useSeasonStore((s) => s.season);
   const teams = useSeasonStore((s) => s.teams);
   const year = useSaveStore((s) => s.year);
+  const seasonArchives = useSaveStore((s) => s.seasonArchives);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
   // Same round-1 default as SeasonHub's own `RoundFixture` instance (see
   // that file) — independent state, since this is a second, separately
@@ -303,8 +316,15 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
         <LastGameModal match={lastMatch} teams={teams} onClose={closeModal} />
       )}
 
-      {activeModal?.type === "leader" && totals && (
-        <LeaderModal stat={activeModal.stat} label={activeModal.label} totals={totals} myClub={myClub} onClose={closeModal} />
+      {activeModal?.type === "leader" && (
+        <LeaderModal
+          stat={activeModal.stat}
+          label={activeModal.label}
+          season={season}
+          seasonArchives={seasonArchives}
+          myClub={myClub}
+          onClose={closeModal}
+        />
       )}
 
       {activeModal?.type === "scouting" && (
@@ -563,10 +583,10 @@ const LEAGUE_STATS: { key: LeagueStat; label: string }[] = [
 
 // How many rows the Dashboard's own quick-glance card shows before you have to expand — kept
 // small deliberately, the expanded modal is where the real depth lives (see `LEADER_MODAL_LIMIT`
-// below). Not the "top 100 across all stats" hub Tyler separately asked for — see
-// [[AFS Season Stats and Records]] for why that's scoped as its own, much larger piece of work.
+// below).
 const LEADER_CARD_LIMIT = 5;
-const LEADER_MODAL_LIMIT = 25;
+/** Aug 2026 round 54 — [[Season Stats and Records]] Option B: "top 100 players (expandable)," widened from round 53's 25. `Modal`'s own outer wrapper already scrolls (see its own doc comment), so 100 simple rows needs no pagination or virtualisation at this scale. */
+const LEADER_MODAL_LIMIT = 100;
 
 function LeagueLeadersCard({
   totals,
@@ -579,7 +599,15 @@ function LeagueLeadersCard({
 }) {
   return (
     <div className="card">
-      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Competition leaders this season</div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Competition leaders this season</div>
+        {/* Aug 2026 round 54 — [[Season Stats and Records]]: the 4 tiles below stay a curated
+            quick-glance set, but every one of the 18 tracked stats (plus Total/Average/Last 5/
+            All-Time views) is reachable from here via the modal's own stat-picker. */}
+        <button onClick={() => onExpandStat("fantasyPoints", "Fantasy Points")} className="text-xs font-medium text-accent-light hover:underline">
+          Browse all stats →
+        </button>
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {LEAGUE_STATS.map(({ key, label }) => {
           const top = leagueLeaders(totals, key, LEADER_CARD_LIMIT);
@@ -623,39 +651,136 @@ function LeagueLeadersCard({
   );
 }
 
-/** The expanded view of one Competition Leaders column — same `leagueLeaders` helper, just a bigger limit and each row now shows its club (the compact card only ever shows your own club's highlight colour, not every row's club, since it never had the width to spare). */
+type LeaderViewMode = "seasonTotal" | "seasonAverage" | "last5" | "allTimeTotal" | "allTimeAverage";
+
+const VIEW_MODES: { key: LeaderViewMode; label: string; isAverage: boolean }[] = [
+  { key: "seasonTotal", label: "Total (Season)", isAverage: false },
+  { key: "seasonAverage", label: "Average (Season)", isAverage: true },
+  { key: "last5", label: "Last 5 (Season)", isAverage: true },
+  { key: "allTimeTotal", label: "Total (All Time)", isAverage: false },
+  { key: "allTimeAverage", label: "Average (All Time)", isAverage: true },
+];
+
+/**
+ * The 5 stats [[Season Stats and Records]] flagged as needing genuinely new
+ * engine modelling (a defensive-context flag for Spoils/Intercept Marks/
+ * Intercept Possessions, a loser-credit mechanism for Turnovers, and a
+ * possession-chain memory for Goal Assists) — no `BoxScoreLine` field exists
+ * for any of them yet. Shown in the picker as real, disclosed "coming soon"
+ * entries (disabled, own group) rather than silently missing, per that
+ * note's own Option B recommendation.
+ */
+const COMING_SOON_STATS = ["Spoils", "Intercept Marks", "Intercept Possessions", "Turnovers", "Goal Assists"];
+
+/**
+ * The expanded view of one Competition Leaders column — Aug 2026 round 54,
+ * [[Season Stats and Records]] Option B. `stat`/`label` seed the initial
+ * view (whichever tile or "Browse all stats" link opened this), but both
+ * are freely changeable here via the stat-picker, and `viewMode` switches
+ * between Tyler's 5 requested windows. Takes `season`/`seasonArchives`
+ * rather than a single pre-computed `totals` map (unlike round 53) since
+ * which map is actually needed now depends on `viewMode` — computed locally
+ * via `useMemo` so switching views doesn't touch the compact card's own
+ * season-totals-only computation in the parent.
+ */
 function LeaderModal({
-  stat,
-  label,
-  totals,
+  stat: initialStat,
+  label: initialLabel,
+  season,
+  seasonArchives,
   myClub,
   onClose,
 }: {
   stat: LeagueStat;
   label: string;
-  totals: Map<number, SeasonPlayerTotals>;
+  season: Season | null;
+  seasonArchives: SeasonArchiveEntry[];
   myClub: string;
   onClose: () => void;
 }) {
+  const [stat, setStat] = useState(initialStat);
+  const [label, setLabel] = useState(initialLabel);
+  const [viewMode, setViewMode] = useState<LeaderViewMode>("seasonTotal");
+  const activeView = VIEW_MODES.find((v) => v.key === viewMode)!;
+
+  const totals = useMemo((): Map<number, SeasonPlayerTotals> => {
+    switch (viewMode) {
+      case "seasonTotal":
+        return season ? seasonPlayerTotals(season) : new Map<number, SeasonPlayerTotals>();
+      case "seasonAverage":
+        return season ? toAverageMap(seasonPlayerTotals(season)) : new Map<number, SeasonPlayerTotals>();
+      case "last5":
+        return season ? toAverageMap(seasonPlayerLast5Totals(season)) : new Map<number, SeasonPlayerTotals>();
+      case "allTimeTotal":
+        return allTimePlayerTotals(seasonArchives, season);
+      case "allTimeAverage":
+        return toAverageMap(allTimePlayerTotals(seasonArchives, season));
+    }
+  }, [viewMode, season, seasonArchives]);
+
   const top = leagueLeaders(totals, stat, LEADER_MODAL_LIMIT);
+
   return (
-    <Modal title={`${label} — top ${LEADER_MODAL_LIMIT} this season`} onClose={onClose}>
-      <div className="space-y-1 text-sm">
-        {top.map((r, i) => (
-          <div
-            key={r.player.PlayerID}
-            className={`flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 ${
-              r.player.Team === myClub ? "bg-accent/10 font-semibold text-accent-light" : "odd:bg-base-800/50"
+    <Modal title={`${label} — top ${LEADER_MODAL_LIMIT}, ${activeView.label}`} onClose={onClose}>
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {VIEW_MODES.map((v) => (
+          <button
+            key={v.key}
+            onClick={() => setViewMode(v.key)}
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              viewMode === v.key ? "bg-accent text-white" : "bg-base-800 text-slate-400 hover:bg-base-700"
             }`}
           >
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="w-6 text-slate-500 tabular-nums">{i + 1}</span>
-              <ClubBadge club={clubByName(r.player.Team)} size="sm" />
-              <span className="truncate">{playerFullName(r.player)}</span>
-            </span>
-            <span className="tabular-nums">{Math.round(r.value)}</span>
-          </div>
+            {v.label}
+          </button>
         ))}
+      </div>
+      <select
+        className="mb-3 w-full rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
+        value={stat}
+        onChange={(e) => {
+          const next = ALL_LEAGUE_STATS.find((s) => s.key === e.target.value);
+          if (next) {
+            setStat(next.key);
+            setLabel(next.label);
+          }
+        }}
+      >
+        <optgroup label="Available stats">
+          {ALL_LEAGUE_STATS.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Coming soon — not tracked yet">
+          {COMING_SOON_STATS.map((name) => (
+            <option key={name} disabled>
+              {name}
+            </option>
+          ))}
+        </optgroup>
+      </select>
+      <div className="space-y-1 text-sm">
+        {top.length === 0 ? (
+          <div className="text-slate-500">No data yet for this view.</div>
+        ) : (
+          top.map((r, i) => (
+            <div
+              key={r.player.PlayerID}
+              className={`flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 ${
+                r.player.Team === myClub ? "bg-accent/10 font-semibold text-accent-light" : "odd:bg-base-800/50"
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="w-6 text-slate-500 tabular-nums">{i + 1}</span>
+                <ClubBadge club={clubByName(r.player.Team)} size="sm" />
+                <span className="truncate">{playerFullName(r.player)}</span>
+              </span>
+              <span className="tabular-nums">{activeView.isAverage ? r.value.toFixed(1) : Math.round(r.value)}</span>
+            </div>
+          ))
+        )}
       </div>
     </Modal>
   );

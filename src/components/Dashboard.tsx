@@ -11,8 +11,10 @@ import { summariseLines } from "../data/lines";
 import { gapBand } from "./StatusPill";
 import { LadderTable } from "./LadderTable";
 import { ClubBadge } from "./ClubBadge";
-import { ExpandableCard } from "./ExpandableCard";
+import { Modal, ExpandHint } from "./Modal";
 import { RoundFixture } from "./SeasonHub";
+import { FullTimeResult } from "./FullTimeResult";
+import { ClubScoutingModal } from "./ClubScouting";
 import { isLineupComplete, lineupPlayerIds } from "../engine/selection";
 import { freeAgentsFor } from "../engine/contracts";
 import {
@@ -51,16 +53,28 @@ import type { MatchTeam } from "../engine/team";
  * save) — same "optional and additive, graceful fallback" convention this
  * project has used since round 8.
  *
- * Ladder section (Aug 2026 round 52, [[UI Consolidation Review]]): the
- * previous "Full season →" link that navigated away to the standalone Season
- * screen is now an `ExpandableCard` — expanding it embeds the full 18-row
- * `LadderTable` plus `SeasonHub`'s own `RoundFixture` browser in place, no
- * navigation. `season` (the top-level nav tab) itself still exists and still
- * works unchanged; it's just no longer in the nav's default screen list (see
- * App.tsx's `NAV_GROUPS`) — the expanded card's own "Open full Season page"
- * link is how you still reach it, for the deep multi-round read this card
- * deliberately doesn't try to replace.
+ * Expand-to-modal pattern (Aug 2026 round 53, superseding round 52's
+ * `ExpandableCard`): Tyler's follow-up on round 52's inline-grow ladder
+ * flagged two real problems — a rendering bug (the collapsed 7-row preview
+ * stayed on screen above the expanded full table, reading as a *second*
+ * ladder appearing rather than the same one growing) and a design
+ * preference (he wants expansion to be "like a 'pop up' style expansion
+ * where it takes up the centre of the screen and shows much more detail
+ * with the extra width real estate," not constrained to whatever half-width
+ * column its trigger card sits in). `activeModal` below is the single
+ * source of truth for which one modal (if any) is open — Ladder, Last Game,
+ * a Competition Leaders stat, or a scouted club — so only one is ever on
+ * screen at once, sidestepping both complaints at the same time. Each
+ * trigger card keeps its existing compact/collapsed content untouched and
+ * adds a small `ExpandHint` affordance; nothing renders twice.
  */
+
+type ActiveModal =
+  | { type: "ladder" }
+  | { type: "lastGame" }
+  | { type: "leader"; stat: LeagueStat; label: string }
+  | { type: "scouting"; clubId: number }
+  | null;
 
 interface DashboardProps {
   onGoToSelection?: () => void;
@@ -78,8 +92,9 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
   // Same round-1 default as SeasonHub's own `RoundFixture` instance (see
   // that file) — independent state, since this is a second, separately
-  // mounted instance of the same component embedded in this card.
+  // mounted instance of the same component embedded in the Ladder modal.
   const [fixtureRound, setFixtureRound] = useState(1);
+  const [activeModal, setActiveModal] = useState<ActiveModal>(null);
 
   const players = useMemo(() => getPlayersByClub(myClub), [myClub]);
   const lines = useMemo(() => summariseLines(players, leagueAverageOvr()), [players]);
@@ -117,6 +132,8 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
       .sort((a, b) => b.POT - a.POT)
       .slice(0, 3);
   }, [players, myLineup]);
+
+  const closeModal = () => setActiveModal(null);
 
   return (
     <div className="space-y-6">
@@ -164,37 +181,23 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
       ) : (
         <>
           <div className="grid gap-4 lg:grid-cols-2">
-            <ExpandableCard
-              label="Ladder"
-              expandLabel="Show full ladder + fixtures"
-              collapseLabel="Show less"
-              expandedContent={
-                <>
-                  <LadderTable
-                    ladder={season.ladder}
-                    previousLadder={prevLadder.length ? prevLadder : season.ladder}
-                    highlightClubId={myClubId}
-                  />
-                  <RoundFixture
-                    round={fixtureRound}
-                    setRound={setFixtureRound}
-                    fixture={season.fixture}
-                    played={season.played}
-                    myClubId={myClubId}
-                    onSelect={() => onGoToSeason?.()}
-                  />
-                  {onGoToSeason && (
-                    <button onClick={onGoToSeason} className="text-xs font-medium text-accent-light hover:underline">
-                      Open full Season page ↗
-                    </button>
-                  )}
-                </>
-              }
-            >
+            <div>
+              <button
+                onClick={() => setActiveModal({ type: "ladder" })}
+                className="mb-1.5 flex w-full items-center justify-between text-left"
+              >
+                <div className="text-xs uppercase tracking-wide text-slate-400">Ladder</div>
+                <ExpandHint label="Full ladder + fixtures" />
+              </button>
               <CompactLadder ladder={season.ladder} previousLadder={prevLadder} myClubId={myClubId} />
-            </ExpandableCard>
+            </div>
             <div className="space-y-4">
-              <LastGameCard match={lastMatch} performers={ourTopPerformers} myClubId={myClubId} />
+              <LastGameCard
+                match={lastMatch}
+                performers={ourTopPerformers}
+                myClubId={myClubId}
+                onExpand={() => setActiveModal({ type: "lastGame" })}
+              />
               <ActionsCard
                 lineupSet={lineupSet}
                 contractsOutThisYear={contractsOutThisYear}
@@ -206,9 +209,20 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
             </div>
           </div>
 
-          <NextOpponentsCard upcoming={upcoming} season={season} teams={teams} />
+          <NextOpponentsCard
+            upcoming={upcoming}
+            season={season}
+            teams={teams}
+            onScoutClub={(clubId) => setActiveModal({ type: "scouting", clubId })}
+          />
 
-          {totals && <LeagueLeadersCard totals={totals} myClub={myClub} />}
+          {totals && (
+            <LeagueLeadersCard
+              totals={totals}
+              myClub={myClub}
+              onExpandStat={(stat, label) => setActiveModal({ type: "leader", stat, label })}
+            />
+          )}
         </>
       )}
 
@@ -256,6 +270,46 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
           })}
         </div>
       </div>
+
+      {/* Exactly one of these renders at a time, driven by `activeModal` — see this file's own
+          doc comment above for why that single-source-of-truth shape replaced round 52's
+          inline-grow accordion. */}
+      {activeModal?.type === "ladder" && season && myClubId !== undefined && (
+        <Modal title="Full season" onClose={closeModal}>
+          <div className="space-y-4">
+            <LadderTable
+              ladder={season.ladder}
+              previousLadder={prevLadder.length ? prevLadder : season.ladder}
+              highlightClubId={myClubId}
+            />
+            <RoundFixture
+              round={fixtureRound}
+              setRound={setFixtureRound}
+              fixture={season.fixture}
+              played={season.played}
+              myClubId={myClubId}
+              onSelect={() => onGoToSeason?.()}
+            />
+            {onGoToSeason && (
+              <button onClick={onGoToSeason} className="text-xs font-medium text-accent-light hover:underline">
+                Open full Season page ↗
+              </button>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {activeModal?.type === "lastGame" && lastMatch && teams && myClubId !== undefined && (
+        <LastGameModal match={lastMatch} teams={teams} onClose={closeModal} />
+      )}
+
+      {activeModal?.type === "leader" && totals && (
+        <LeaderModal stat={activeModal.stat} label={activeModal.label} totals={totals} myClub={myClub} onClose={closeModal} />
+      )}
+
+      {activeModal?.type === "scouting" && (
+        <ClubScoutingModal clubId={activeModal.clubId} season={season} onClose={closeModal} />
+      )}
     </div>
   );
 }
@@ -266,10 +320,9 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
  * full 18-row `LadderTable` SeasonHub already shows in full. Tyler asked for
  * "where we are on the ladder," which is best answered by nearby context
  * (who's just above/below), not a repeat of the whole competition table this
- * page would otherwise duplicate. This is the collapsed preview inside the
- * `ExpandableCard` wrapping the Ladder section (see round 52,
- * [[UI Consolidation Review]]) — expanding it renders the full `LadderTable`
- * and round fixture browser right below this same component, in place.
+ * page would otherwise duplicate. This is the compact preview shown next to
+ * the "Expand" trigger that opens the full ladder in a modal (see round 53,
+ * this file's own top-level doc comment).
  */
 function CompactLadder({ ladder, previousLadder: prev, myClubId }: { ladder: LadderRow[]; previousLadder: LadderRow[]; myClubId: number }) {
   const myIndex = ladder.findIndex((r) => r.clubId === myClubId);
@@ -288,7 +341,17 @@ function CompactLadder({ ladder, previousLadder: prev, myClubId }: { ladder: Lad
   return <LadderTable ladder={ladder} previousLadder={prevFull} highlightClubId={myClubId} windowClubIds={windowClubIds} />;
 }
 
-function LastGameCard({ match, performers, myClubId }: { match: PlayedMatch | null; performers: PerformerLine[]; myClubId: number }) {
+function LastGameCard({
+  match,
+  performers,
+  myClubId,
+  onExpand,
+}: {
+  match: PlayedMatch | null;
+  performers: PerformerLine[];
+  myClubId: number;
+  onExpand: () => void;
+}) {
   if (!match) {
     return (
       <div className="card">
@@ -307,7 +370,10 @@ function LastGameCard({ match, performers, myClubId }: { match: PlayedMatch | nu
 
   return (
     <div className="card">
-      <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Last game &middot; Round {match.round}</div>
+      <button onClick={onExpand} className="mb-1 flex w-full items-center justify-between text-left">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Last game &middot; Round {match.round}</div>
+        <ExpandHint label="Full stats" />
+      </button>
       <div className="mb-2 flex items-baseline justify-between">
         <div className="flex items-center gap-1.5 text-sm">
           <span className={`font-semibold ${tone}`}>{outcome}</span> {weAreHome ? "vs" : "@"}
@@ -338,14 +404,28 @@ function LastGameCard({ match, performers, myClubId }: { match: PlayedMatch | nu
   );
 }
 
+/** Opens the same `FullTimeResult` screen used everywhere else a match result is shown (SeasonHub's fixture browser, the live match flow) — reused, not rebuilt, so this is genuinely "the full statistics and write-up," not a cut-down summary. */
+function LastGameModal({ match, teams, onClose }: { match: PlayedMatch; teams: Map<number, MatchTeam>; onClose: () => void }) {
+  const home = teams.get(match.homeClubId);
+  const away = teams.get(match.awayClubId);
+  if (!home || !away) return null;
+  return (
+    <Modal title={`Round ${match.round} — ${home.name} vs ${away.name}`} onClose={onClose}>
+      <FullTimeResult result={match.result} homeTeam={home} awayTeam={away} onNewMatch={onClose} closeLabel="Close" />
+    </Modal>
+  );
+}
+
 function NextOpponentsCard({
   upcoming,
   season,
   teams,
+  onScoutClub,
 }: {
   upcoming: FixtureMatch[];
   season: Season;
   teams: Map<number, MatchTeam> | null;
+  onScoutClub: (clubId: number) => void;
 }) {
   const myClub = useGameStore((s) => s.myClub);
   const myClubId = clubByName(myClub)?.ClubID;
@@ -365,9 +445,16 @@ function NextOpponentsCard({
             const opponentLastMatch = lastPlayedMatchFor(season, opponentId);
             const opponentTop = opponentLastMatch && teams ? topPerformersFor(opponentLastMatch, teams, opponentId, 2) : [];
             return (
-              <div key={`${fx.round}-${opponentId}`} className="rounded-lg bg-base-800 p-3">
-                <div className="text-xs text-slate-500">
-                  Round {fx.round} &middot; {fx.homeClubId === myClubId ? "Home" : "Away"}
+              <button
+                key={`${fx.round}-${opponentId}`}
+                onClick={() => onScoutClub(opponentId)}
+                className="rounded-lg bg-base-800 p-3 text-left hover:bg-base-700"
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-xs text-slate-500">
+                    Round {fx.round} &middot; {fx.homeClubId === myClubId ? "Home" : "Away"}
+                  </div>
+                  <ExpandHint label="Scout" />
                 </div>
                 <div className="mb-2 flex items-center gap-2 font-medium">
                   <ClubBadge club={opponent} size="sm" />
@@ -385,7 +472,7 @@ function NextOpponentsCard({
                 ) : (
                   <div className="text-xs text-slate-500">No games played yet this season.</div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
@@ -474,18 +561,36 @@ const LEAGUE_STATS: { key: LeagueStat; label: string }[] = [
   { key: "fantasyPoints", label: "Fantasy Points" },
 ];
 
-function LeagueLeadersCard({ totals, myClub }: { totals: Map<number, SeasonPlayerTotals>; myClub: string }) {
+// How many rows the Dashboard's own quick-glance card shows before you have to expand — kept
+// small deliberately, the expanded modal is where the real depth lives (see `LEADER_MODAL_LIMIT`
+// below). Not the "top 100 across all stats" hub Tyler separately asked for — see
+// [[AFS Season Stats and Records]] for why that's scoped as its own, much larger piece of work.
+const LEADER_CARD_LIMIT = 5;
+const LEADER_MODAL_LIMIT = 25;
+
+function LeagueLeadersCard({
+  totals,
+  myClub,
+  onExpandStat,
+}: {
+  totals: Map<number, SeasonPlayerTotals>;
+  myClub: string;
+  onExpandStat: (stat: LeagueStat, label: string) => void;
+}) {
   return (
     <div className="card">
       <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Competition leaders this season</div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {LEAGUE_STATS.map(({ key, label }) => {
-          const top = leagueLeaders(totals, key, 5);
-          const weAreInTop5 = top.some((r) => r.player.Team === myClub);
-          const ourBest = weAreInTop5 ? null : ourLeagueBest(totals, key, myClub);
+          const top = leagueLeaders(totals, key, LEADER_CARD_LIMIT);
+          const weAreInTopN = top.some((r) => r.player.Team === myClub);
+          const ourBest = weAreInTopN ? null : ourLeagueBest(totals, key, myClub);
           return (
             <div key={key}>
-              <div className="mb-1.5 text-xs font-medium text-slate-400">{label}</div>
+              <button onClick={() => onExpandStat(key, label)} className="mb-1.5 flex w-full items-center justify-between text-left">
+                <div className="text-xs font-medium text-slate-400">{label}</div>
+                <ExpandHint label={`Top ${LEADER_MODAL_LIMIT}`} />
+              </button>
               <div className="space-y-0.5 text-sm">
                 {top.length === 0 ? (
                   <div className="text-slate-500">No games played yet.</div>
@@ -515,6 +620,44 @@ function LeagueLeadersCard({ totals, myClub }: { totals: Map<number, SeasonPlaye
         })}
       </div>
     </div>
+  );
+}
+
+/** The expanded view of one Competition Leaders column — same `leagueLeaders` helper, just a bigger limit and each row now shows its club (the compact card only ever shows your own club's highlight colour, not every row's club, since it never had the width to spare). */
+function LeaderModal({
+  stat,
+  label,
+  totals,
+  myClub,
+  onClose,
+}: {
+  stat: LeagueStat;
+  label: string;
+  totals: Map<number, SeasonPlayerTotals>;
+  myClub: string;
+  onClose: () => void;
+}) {
+  const top = leagueLeaders(totals, stat, LEADER_MODAL_LIMIT);
+  return (
+    <Modal title={`${label} — top ${LEADER_MODAL_LIMIT} this season`} onClose={onClose}>
+      <div className="space-y-1 text-sm">
+        {top.map((r, i) => (
+          <div
+            key={r.player.PlayerID}
+            className={`flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 ${
+              r.player.Team === myClub ? "bg-accent/10 font-semibold text-accent-light" : "odd:bg-base-800/50"
+            }`}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="w-6 text-slate-500 tabular-nums">{i + 1}</span>
+              <ClubBadge club={clubByName(r.player.Team)} size="sm" />
+              <span className="truncate">{playerFullName(r.player)}</span>
+            </span>
+            <span className="tabular-nums">{Math.round(r.value)}</span>
+          </div>
+        ))}
+      </div>
+    </Modal>
   );
 }
 

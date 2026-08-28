@@ -243,9 +243,11 @@ function FinalsBracket({
 
 /**
  * Exported (Aug 2026 round 52, [[UI Consolidation Review]]) so Dashboard's
- * expandable ladder card can embed the exact same round-by-round fixture
- * browser inline rather than duplicating this logic — see Dashboard.tsx's
- * `ExpandableCard`-wrapped Ladder section. Behaviour here is completely
+ * Ladder modal can embed the exact same round-by-round fixture browser
+ * rather than duplicating this logic — see Dashboard.tsx's `LadderTable` +
+ * `RoundFixture` pairing inside its `activeModal?.type === "ladder"` block
+ * (round 53 moved this from an inline accordion to a centered modal, but the
+ * reuse of this component is unchanged). Behaviour here is completely
  * unchanged for this screen's own use.
  */
 export function RoundFixture({

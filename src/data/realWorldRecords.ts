@@ -43,14 +43,31 @@ import type { LeagueStat } from "../engine/seasonSummary.ts";
  * leaderboard for these — Tyler's own words scope real comparison to "where historical records are
  * available," not gate the whole category out of the tab.
  *
- * `bio` (career span, clubs, write-up ingredients) is populated ONLY for the top 3 of each category —
- * same scope as the original round ("for the top 3, an option to see a brief write up"), individually
- * verified against each entry's own scraped Years/TM columns. Every OTHER entry (not just the top 3)
- * still carries the lighter `games`/`club` fields the scraped source already provides — enough for a
- * club badge and the Team filter at full depth, just not a full write-up. `stillActive`, unlike
- * `bio`, is NOT top-3-only — as of this round it's populated for every single entry at every depth
- * (see the field's own doc comment), so a currently-playing legend reads as active whether they're
- * #1 or #97.
+ * `bio` (career span, clubs, write-up ingredients) is populated for the top 5 of each category —
+ * widened from the original top-3 scope in Round 62, Tyler: "Now that we've expanded from a Top 3 to
+ * a Top 5 we need to adjust our write ups for the All Time Record." The write-up TEMPLATES themselves
+ * (`engine/records.ts`) never referenced rank at all, so nothing there needed to change — the actual
+ * gap was that a real-world rank 4/5 row had no `bio` yet, so clicking to expand it inside the new
+ * gold/silver/bronze top-5 band silently showed "No write-up available" while ranks 1-3 worked fine.
+ * For every `parseEntries`-sourced category (13 of them) this was a one-line `bioCount` bump (3→5) —
+ * the same scraped Years/TM columns already exist on every row regardless of rank, `bioCount` was only
+ * ever a slice threshold. Disposals' own ranks 4-5 land inside `DISPOSALS_RAW` too (which also uses
+ * `parseEntries`), so that bump alone covers it — `parseDisposalsTail` (ranks 26-100) still never gets
+ * `bio`, unchanged, well outside the top-5 band. The 3 fully-hardcoded arrays (Goals, Games Played,
+ * Finals Appearances) needed real, individually-verified bios added for their own ranks 4-5 by hand —
+ * see each array's own inline comment for sourcing. Every OTHER entry (not just the top 5) still
+ * carries the lighter `games`/`club` fields the scraped source already provides — enough for a club
+ * badge and the Team filter at full depth, just not a full write-up. `stillActive`, unlike `bio`, is
+ * NOT top-N-limited at all — it's populated for every single entry at every depth (see the field's own
+ * doc comment), so a currently-playing legend reads as active whether they're #1 or #97.
+ *
+ * **Disclosed edge case, not fixed**: `bioCount`/the hand-added ranks are based on each category's own
+ * REAL-WORLD rank, before `engine/records.ts`'s real+sim merge can re-sort the final displayed list. A
+ * real player just outside rank 5 in their pure real-world total could, in principle, be boosted by a
+ * big enough same-save sim contribution to land at a displayed rank 4 or 5 without ever having been
+ * given a `bio` here — that row would fall back to "No write-up available yet," the same existing,
+ * accepted fallback every real row past its category's bio depth already uses. Not worth solving with
+ * a dynamic rank-aware bio lookup for a rare edge case that already degrades gracefully.
  */
 
 export type RecordCategory = LeagueStat | "gamesPlayed" | "finalsAppearances";
@@ -215,8 +232,13 @@ export const REAL_WORLD_CAREER_GOALS: RealWorldRecordEntry[] = [
   { name: "Tony Lockett", value: 1360, bio: { games: 281, startYear: 1983, endYear: 2002, stillActive: false, startClub: "St Kilda", endClub: "Sydney" } },
   { name: "Gordon Coventry", value: 1299, bio: { games: 306, startYear: 1920, endYear: 1937, stillActive: false, startClub: "Collingwood", endClub: "Collingwood" } },
   { name: "Jason Dunstall", value: 1254, bio: { games: 269, startYear: 1985, endYear: 1998, stillActive: false, startClub: "Hawthorn", endClub: "Hawthorn" } },
-  { name: "Lance Franklin", value: 1066 },
-  { name: "Doug Wade", value: 1057 },
+  // Rank 4/5 bios added Round 62 (top-3 -> top-5). Franklin cross-verified against his own MARKS_RAW
+  // row elsewhere in this file (2005-2023, HW/SY, 354 games) — same source, same player, consistent
+  // figures. Wade has no other row in this file; verified live against his own afltables player page
+  // (afltables.com/afl/stats/players/D/Doug_Wade.html), whose own Totals row shows 267 games and 1057
+  // goals across 1961-1975 — the goals figure matches this entry's `value` exactly.
+  { name: "Lance Franklin", value: 1066, bio: { games: 354, startYear: 2005, endYear: 2023, stillActive: false, startClub: "Hawthorn", endClub: "Sydney" } },
+  { name: "Doug Wade", value: 1057, bio: { games: 267, startYear: 1961, endYear: 1975, stillActive: false, startClub: "Geelong", endClub: "North Melbourne" } },
   { name: "Gary Ablett (Sr)", value: 1031 },
   { name: "Jack Titus", value: 970 },
   { name: "Matthew Lloyd", value: 926 },
@@ -319,8 +341,15 @@ export const REAL_WORLD_GAMES_PLAYED: RealWorldRecordEntry[] = [
   { name: "Scott Pendlebury", value: 442, stillActive: true, bio: { games: 442, startYear: 2006, endYear: 2026, stillActive: true, startClub: "Collingwood", endClub: "Collingwood" } },
   { name: "Brent Harvey", value: 432, bio: { games: 432, startYear: 1996, endYear: 2016, stillActive: false, startClub: "North Melbourne", endClub: "North Melbourne" } },
   { name: "Michael Tuck", value: 426, bio: { games: 426, startYear: 1972, endYear: 1991, stillActive: false, startClub: "Hawthorn", endClub: "Hawthorn" } },
-  { name: "Shaun Burgoyne", value: 407 },
-  { name: "Kevin Bartlett", value: 403 },
+  // Rank 4/5 bios added Round 62 (top-3 -> top-5). Burgoyne's bio is identical to (and reused from)
+  // his own hardcoded entry in REAL_WORLD_FINALS_APPEARANCES below (games=407 matches exactly).
+  // Bartlett's years/club cross-verified against his own KICKS_RAW/DISPOSALS_RAW rows elsewhere in
+  // this file (1965-1983, single-club career at Richmond); games here uses this list's own
+  // authoritative 403 rather than those rows' own GM column (402 — that column reflects games that
+  // specific OTHER stat was recorded for, not necessarily identical to true career games, see this
+  // file's own `games` field doc comment).
+  { name: "Shaun Burgoyne", value: 407, bio: { games: 407, startYear: 2002, endYear: 2021, stillActive: false, startClub: "Port Adelaide", endClub: "Hawthorn" } },
+  { name: "Kevin Bartlett", value: 403, bio: { games: 403, startYear: 1965, endYear: 1983, stillActive: false, startClub: "Richmond", endClub: "Richmond" } },
   { name: "Dustin Fletcher", value: 400 },
   { name: "Travis Boak", value: 387 },
   { name: "Robert Harvey", value: 383 },
@@ -485,18 +514,28 @@ const FINALS_TAIL_RAW =
 
 /**
  * Real-world finals-appearances leaders, top 100, VFL/AFL history 1897-2026 (Round 59). `bio.games`
- * for the top-3 is each player's own TOTAL CAREER games (cross-referenced from
- * `REAL_WORLD_GAMES_PLAYED`/`DISPOSALS_RAW`/`TACKLES_RAW` elsewhere in this file — bg13.txt itself
- * has no games-played column at all), not their finals value — using the finals count for both
- * `value` and `games` produced a write-up that read as "40 finals across 40 games" (implying every
- * career game was a final), which every other category's write-ups never do. "40 finals across a
- * 355-game career" is the honest, intended shape of that sentence.
+ * for the bio'd entries is each player's own TOTAL CAREER games (cross-referenced from
+ * `REAL_WORLD_GAMES_PLAYED`/`DISPOSALS_RAW`/`TACKLES_RAW`/`CONTESTED_POSS_RAW` elsewhere in this file
+ * — bg13.txt itself has no games-played column at all), not their finals value — using the finals
+ * count for both `value` and `games` produced a write-up that read as "40 finals across 40 games"
+ * (implying every career game was a final), which every other category's write-ups never do. "40
+ * finals across a 355-game career" is the honest, intended shape of that sentence.
+ *
+ * Rank 4/5 bios added Round 62 (top-3 -> top-5): **not** Gordon Coventry/Patrick Dangerfield (an
+ * error caught by this round's own verify script, corrected before shipping) — `FINALS_TAIL_RAW`'s
+ * own listed order (preserved by the stable sort in `combinedRecord`) has Scott Pendlebury (33) and
+ * Tom Hawkins (32) BEFORE Coventry/Dangerfield's tied 31, so those two are the true rank 4/5.
+ * Pendlebury's bio is reused verbatim from his own hardcoded entry in `REAL_WORLD_GAMES_PLAYED`
+ * above. Hawkins's is cross-referenced from his own `MARKS_INSIDE_50_RAW` row (2007-2024, GE, 359
+ * games).
  */
 export const REAL_WORLD_FINALS_APPEARANCES: RealWorldRecordEntry[] = [
   { name: "Joel Selwood", value: 40, bio: { games: 355, startYear: 2007, endYear: 2022, stillActive: false, startClub: "Geelong", endClub: "Geelong" } },
   { name: "Michael Tuck", value: 39, bio: { games: 426, startYear: 1972, endYear: 1991, stillActive: false, startClub: "Hawthorn", endClub: "Hawthorn" } },
   { name: "Shaun Burgoyne", value: 35, bio: { games: 407, startYear: 2002, endYear: 2021, stillActive: false, startClub: "Port Adelaide", endClub: "Hawthorn" } },
-  ...parseFinalsTail(FINALS_TAIL_RAW),
+  { name: "Scott Pendlebury", value: 33, bio: { games: 442, startYear: 2006, endYear: 2026, stillActive: true, startClub: "Collingwood", endClub: "Collingwood" } },
+  { name: "Tom Hawkins", value: 32, bio: { games: 359, startYear: 2007, endYear: 2024, stillActive: false, startClub: "Geelong", endClub: "Geelong" } },
+  ...parseFinalsTail(FINALS_TAIL_RAW).filter((e) => e.name !== "Scott Pendlebury" && e.name !== "Tom Hawkins"),
 ];
 
 /** Every category with a real-world source — 17 of 24 as of Round 59, see this file's own doc comment for the full split and why. */
@@ -504,20 +543,20 @@ export const REAL_WORLD_RECORDS: Partial<Record<RecordCategory, RealWorldRecordE
   gamesPlayed: REAL_WORLD_GAMES_PLAYED,
   finalsAppearances: REAL_WORLD_FINALS_APPEARANCES,
   goals: REAL_WORLD_CAREER_GOALS,
-  disposals: [...parseEntries(DISPOSALS_RAW, 3), ...parseDisposalsTail(DISPOSALS_TAIL_RAW)],
-  kicks: parseEntries(KICKS_RAW, 3),
-  marks: parseEntries(MARKS_RAW, 3),
-  handballs: parseEntries(HANDBALLS_RAW, 3),
-  behinds: parseEntries(BEHINDS_RAW, 3),
-  hitouts: parseEntries(HITOUTS_RAW, 3),
-  tackles: parseEntries(TACKLES_RAW, 3),
-  clearances: parseEntries(CLEARANCES_RAW, 3),
-  freeKicksFor: parseEntries(FREES_FOR_RAW, 3),
-  freeKicksAgainst: parseEntries(FREES_AGAINST_RAW, 3),
-  contestedPoss: parseEntries(CONTESTED_POSS_RAW, 3),
-  uncontestedPoss: parseEntries(UNCONTESTED_POSS_RAW, 3),
-  marksInside50: parseEntries(MARKS_INSIDE_50_RAW, 3),
-  goalAssists: parseEntries(GOAL_ASSISTS_RAW, 3),
+  disposals: [...parseEntries(DISPOSALS_RAW, 5), ...parseDisposalsTail(DISPOSALS_TAIL_RAW)],
+  kicks: parseEntries(KICKS_RAW, 5),
+  marks: parseEntries(MARKS_RAW, 5),
+  handballs: parseEntries(HANDBALLS_RAW, 5),
+  behinds: parseEntries(BEHINDS_RAW, 5),
+  hitouts: parseEntries(HITOUTS_RAW, 5),
+  tackles: parseEntries(TACKLES_RAW, 5),
+  clearances: parseEntries(CLEARANCES_RAW, 5),
+  freeKicksFor: parseEntries(FREES_FOR_RAW, 5),
+  freeKicksAgainst: parseEntries(FREES_AGAINST_RAW, 5),
+  contestedPoss: parseEntries(CONTESTED_POSS_RAW, 5),
+  uncontestedPoss: parseEntries(UNCONTESTED_POSS_RAW, 5),
+  marksInside50: parseEntries(MARKS_INSIDE_50_RAW, 5),
+  goalAssists: parseEntries(GOAL_ASSISTS_RAW, 5),
 };
 
 /** `REAL_WORLD_RECORDS[category]`, or `[]` for one of the 8 categories with no real-world source — the safe default `engine/records.ts`'s merge already treats as "no real entries to merge in." */

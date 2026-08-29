@@ -24,10 +24,12 @@ export type { RecordCategory } from "../data/realWorldRecords.ts";
  * categories with no real-world source, the merge is simply sim-only — Tyler's own scope is a real
  * comparison "where historical records are available," not gating a whole category out of the tab.
  *
- * `RecordCategory` (24 values: the 22 `LEADERBOARD_STAT_FIELDS`, `fantasyPoints`, and
- * `gamesPlayed`) lives in `data/realWorldRecords.ts`, re-exported here — that file needs it to key
- * `REAL_WORLD_RECORDS`, and this file needs the same type, so it's defined once at the data end to
- * avoid a circular import.
+ * `RecordCategory` (25 values as of Round 59's Finals Appearances addition: the 22
+ * `LEADERBOARD_STAT_FIELDS`, `fantasyPoints`, `gamesPlayed`, and `finalsAppearances`) lives in
+ * `data/realWorldRecords.ts`, re-exported here — that file needs it to key `REAL_WORLD_RECORDS`, and
+ * this file needs the same type, so it's defined once at the data end to avoid a circular import. 17
+ * of the 25 have a real-world source (see that file's own doc comment for which, and why the other 8
+ * don't).
  *
  * Deliberately scoped to career-level totals only — this file's own merge logic never touches a
  * single match's box score. Round 59 DID add real-world single-game highs (5 goals in a game, 30
@@ -38,6 +40,11 @@ export type { RecordCategory } from "../data/realWorldRecords.ts";
  * SIM-side single-game highs (scanning every persisted sim match's own box score the way the real-world
  * ledgers do for real matches), or the "click through to the actual match" cross-linking Tyler also
  * described once — see the [[Player Profile and Benchmarking]] research note for that piece.
+ *
+ * Round 62 adds `seasonGroupTable` (see its own doc comment) — a multi-column, sortable, one-row-per-
+ * player table for This Season mode, sitting alongside `combinedRecordFor`/`seasonOnlyRecord` rather
+ * than replacing either. Also widens real-world `bio` coverage from top-3 to top-5 per category
+ * (`data/realWorldRecords.ts`) and the This-Season write-up pool from 16 to 40 templates (below).
  */
 
 export interface RecordRow {
@@ -475,6 +482,69 @@ export function seasonOnlyRecord(category: RecordCategory, season: Season, topN 
   return candidates.slice(0, topN).map((c, i) => ({ rank: i + 1, source: "sim", name: c.name, value: c.value, player: c.player, club: c.player.Team }));
 }
 
+/**
+ * One player's row in a Round 62 multi-column "This Season" stat table — every category in the
+ * requested group as a simultaneous, sortable column, not just the one category `seasonOnlyRecord`
+ * returns. See `seasonGroupTable`'s own doc comment for why this is only honest to build for This
+ * Season (not All-Time Career) mode.
+ */
+export interface SeasonStatRow {
+  rank: number;
+  name: string;
+  club: string;
+  player: Player;
+  /** One entry per category passed to `seasonGroupTable`, keyed the same way. */
+  values: Partial<Record<RecordCategory, number>>;
+}
+
+/**
+ * Round 62, Tyler sent a screenshot of afl.com.au's own Stats Leaders page — one table per stat
+ * family, every related stat a simultaneous sortable column (Disposals/Kicks/Handballs/Marks/etc. all
+ * at once, click a header to re-sort) — and asked which redesign direction (this, or simply grouping
+ * today's separate single-stat tables onto fewer tabs) would look best, leaving the call to design
+ * judgement. This is the "yes, build the real sortable multi-column table" answer, but deliberately
+ * ONLY for This Season mode, never All-Time Career — see this file's own module doc comment and
+ * `data/realWorldRecords.ts`'s for why: real-world legends are independently top-30(ish)-deep PER
+ * CATEGORY (afltables' own Career Totals page depth), not a single joined row with every stat at
+ * once, so a real player ranked, say, 40th in Disposals has no known Kicks/Handballs/Marks value at
+ * all beyond that category's own separate top-30 list — a multi-column join there would mean real,
+ * silently-blank cells for most of the real half of the list. This Season mode has no such gap: every
+ * column here reads straight off `seasonPlayerTotals`, the SAME simulated box-score aggregate for
+ * every player, so every column is always genuinely known for every row with zero missing data —
+ * exactly the shape a sortable multi-column table needs to be honest. `combinedRecordFor`/
+ * `seasonOnlyRecord` above are UNCHANGED and still power All-Time Career mode's existing single-stat
+ * ranked list.
+ *
+ * `sortBy` must be one of `categories` — the caller (`Records.tsx`) always passes the group's
+ * currently-selected/clicked column. Reuses `simStatValue` (already handles the `gamesPlayed`
+ * indexing quirk) for every category except `finalsAppearances`, which — same as `seasonOnlyRecord` —
+ * reads `seasonFinalsAppearances`'s own headcount map instead, since it isn't a `SeasonPlayerTotals`
+ * field at all.
+ */
+export function seasonGroupTable(categories: RecordCategory[], sortBy: RecordCategory, season: Season, topN = 100): SeasonStatRow[] {
+  const totals = seasonPlayerTotals(season);
+  const finalsCounts = categories.includes("finalsAppearances") ? seasonFinalsAppearances(season) : null;
+
+  type Candidate = { name: string; club: string; player: Player; values: Partial<Record<RecordCategory, number>> };
+  const candidates: Candidate[] = [];
+  for (const t of totals.values()) {
+    const player = getPlayerById(t.playerId);
+    if (!player) continue; // defensive only — every totals entry comes from a real generated player
+    const values: Partial<Record<RecordCategory, number>> = {};
+    let anyNonzero = false;
+    for (const cat of categories) {
+      const v = cat === "finalsAppearances" ? (finalsCounts?.get(t.playerId) ?? 0) : simStatValue(t, cat);
+      values[cat] = v;
+      if (v > 0) anyNonzero = true;
+    }
+    if (!anyNonzero) continue; // a player who hasn't touched ANY category in this group yet doesn't clutter the table
+    candidates.push({ name: playerFullName(player), club: player.Team, player, values });
+  }
+
+  candidates.sort((a, b) => (b.values[sortBy] ?? 0) - (a.values[sortBy] ?? 0));
+  return candidates.slice(0, topN).map((c, i) => ({ rank: i + 1, ...c }));
+}
+
 /** "1st"/"2nd"/"3rd"/"4th"... — used only by the season write-up pool below, to phrase a row's standing without repeating the bare rank number that's already shown right next to the write-up. */
 function ordinal(n: number): string {
   const rem100 = n % 100;
@@ -506,20 +576,28 @@ interface SeasonFrag {
   noun: string;
   tally: string;
   club: string;
+  /** 3rd-person-singular form, for a direct `${name} ___` subject: "leads the competition" / "sits 4th in the competition". */
   rankPhrase: string;
+  /** Bare/plural-agreeing form, for a "them"/"they" subject or a bare infinitive ("good enough to ___"): "lead the competition" / "sit 4th in the competition". */
+  rankPhrasePlural: string;
+  /** Participle form, for "has them ___" or an appositive tail: "leading the competition" / "sitting 4th in the competition". */
+  rankPhraseIng: string;
 }
 
 function toSeasonFrag(i: SeasonWriteupInput): SeasonFrag {
   const meta = CATEGORY_WRITEUP_META[i.category];
   const valueStr = i.value.toLocaleString();
   const games = i.gamesThisSeason;
+  const rankTail = i.rank === 1 ? "the competition" : `${ordinal(i.rank)} in the competition`;
   return {
     name: i.name,
     verb: meta.verb,
     noun: meta.noun,
     tally: i.category === "gamesPlayed" ? `${valueStr} games` : `${valueStr} ${meta.noun} through ${games} game${games === 1 ? "" : "s"}`,
     club: i.club,
-    rankPhrase: i.rank === 1 ? "leads the competition" : `sits ${ordinal(i.rank)} in the competition`,
+    rankPhrase: i.rank === 1 ? `leads ${rankTail}` : `sits ${rankTail}`,
+    rankPhrasePlural: i.rank === 1 ? `lead ${rankTail}` : `sit ${rankTail}`,
+    rankPhraseIng: i.rank === 1 ? `leading ${rankTail}` : `sitting ${rankTail}`,
   };
 }
 
@@ -527,31 +605,71 @@ function toSeasonFrag(i: SeasonWriteupInput): SeasonFrag {
  * Round 61, Tyler: "The write ups are written mostly for All-Time Career record players; the write
  * ups dont work well for the This Season tab." The 36-template `WRITEUP_TEMPLATES` pool above always
  * narrates a full CAREER arc (a debut year, a club history, active-vs-retired) — exactly wrong for a
- * single in-progress season, where there's no arc to tell yet. This is a smaller, separate pool (16
- * templates, same deterministic per-player selection via `hashKey` as the all-time pool) that only
- * ever talks about THIS season's form: no start year, no career club history, no active/retired
+ * single in-progress season, where there's no arc to tell yet. This is a smaller, separate pool that
+ * only ever talks about THIS season's form: no start year, no career club history, no active/retired
  * framing. Deliberately not reused for the all-time pool's `LegendWriteupInput` shape — season rows
  * need a genuinely different set of facts (games played THIS season, not a career span), so a
  * separate `SeasonWriteupInput`/`SeasonFrag` keeps that distinction explicit rather than overloading
  * one shape to mean two different things depending on caller.
+ *
+ * Round 62, Tyler: "I'd like to increase the number of write ups we have for the This Season section
+ * from 16 to ~40 options." Widened to 40 (indices 0-15 are the original round-61 pool, 16-39 are new).
+ * Same deterministic per-player selection via `hashKey` as before — nothing about the SELECTION
+ * mechanism changed, only the pool size, so every player's write-up naturally reshuffles onto a new
+ * index as a harmless side effect of a bigger modulo base (there's no persisted player-to-template
+ * link to preserve across a pool resize).
+ *
+ * While widening the pool, also fixed a genuine grammar bug found in 9 of the original 16 templates:
+ * they built a "them ___"/"to ___"/"has them ___" clause via `f.rankPhrase.replace("sits", "sit")` (or
+ * `"sitting"`) — correct for any rank 2+ (`"sits 4th..."` -> `"sit 4th..."`/`"sitting 4th..."`), but a
+ * silent no-op for rank 1, since `rankPhrase` there is `"leads the competition"` with no `"sits"`
+ * substring to replace — producing "...has them leads..." / "...good enough to leads...", both
+ * ungrammatical, specifically for whoever's ranked #1. `SeasonFrag` now carries three properly-agreed
+ * forms instead of one fragile string-replace (`rankPhrase` for a direct singular subject,
+ * `rankPhrasePlural` for a "them"/bare-infinitive slot, `rankPhraseIng` for a participle slot) — see
+ * `toSeasonFrag`. Every affected template below now reads correctly for every rank, including #1.
  */
 const SEASON_WRITEUP_TEMPLATES: ((f: SeasonFrag) => string)[] = [
   (f) => `${f.name} ${f.rankPhrase} in ${f.noun} this season, ${f.verb} ${f.tally} for ${f.club}.`,
   (f) => `In career-best form, ${f.name} has been ${f.verb} ${f.noun} all season — ${f.tally} for ${f.club} so far.`,
   (f) => `${f.name} ${f.rankPhrase} for ${f.club} in ${f.noun}, with ${f.tally} this season.`,
   (f) => `It's been a breakout season for ${f.name}, who ${f.rankPhrase} in ${f.noun} — ${f.tally} for ${f.club}.`,
-  (f) => `${f.tally} for ${f.name} this season, enough to see them ${f.rankPhrase.replace("sits", "sit")} in ${f.noun} for ${f.club}.`,
+  (f) => `${f.tally} for ${f.name} this season, enough to see them ${f.rankPhrasePlural} in ${f.noun} for ${f.club}.`,
   (f) => `${f.name} has made ${f.noun} a strength this year, ${f.verb} ${f.tally} for ${f.club} so far.`,
   (f) => `Few have been better in ${f.noun} this season than ${f.name}, who ${f.rankPhrase} with ${f.tally} for ${f.club}.`,
-  (f) => `${f.name}'s ${f.tally} this season has ${f.club} fans taking notice — good enough to see them ${f.rankPhrase.replace("sits", "sit")}.`,
-  (f) => `Through the season so far, ${f.name} has been ${f.verb} ${f.noun} at a rate that has them ${f.rankPhrase.replace("sits", "sitting")} — ${f.tally}.`,
-  (f) => `${f.name} is putting together a strong campaign for ${f.club}, ${f.verb} ${f.tally} and ${f.rankPhrase.replace("sits", "sitting")} in ${f.noun}.`,
-  (f) => `This season belongs to ${f.name} in ${f.noun}: ${f.tally}, ${f.rankPhrase.replace("sits", "sitting")} for ${f.club}.`,
-  (f) => `${f.name} has been in red-hot form for ${f.club}, racking up ${f.tally} and ${f.rankPhrase.replace("sits", "sitting")} in ${f.noun}.`,
+  (f) => `${f.name}'s ${f.tally} this season has ${f.club} fans taking notice — good enough to see them ${f.rankPhrasePlural}.`,
+  (f) => `Through the season so far, ${f.name} has been ${f.verb} ${f.noun} at a rate that has them ${f.rankPhraseIng} — ${f.tally}.`,
+  (f) => `${f.name} is putting together a strong campaign for ${f.club}, ${f.verb} ${f.tally} and ${f.rankPhraseIng} in ${f.noun}.`,
+  (f) => `This season belongs to ${f.name} in ${f.noun}: ${f.tally}, ${f.rankPhraseIng} for ${f.club}.`,
+  (f) => `${f.name} has been in red-hot form for ${f.club}, racking up ${f.tally} and ${f.rankPhraseIng} in ${f.noun}.`,
   (f) => `With ${f.tally} so far, ${f.name} ${f.rankPhrase} in ${f.noun} for ${f.club} this season.`,
-  (f) => `${f.name} continues to impress in ${f.club}'s colours, ${f.verb} ${f.tally} this season and ${f.rankPhrase.replace("sits", "sitting")} in ${f.noun}.`,
-  (f) => `A standout season in ${f.noun} for ${f.name} — ${f.tally}, good enough to ${f.rankPhrase} for ${f.club}.`,
-  (f) => `${f.name}'s ${f.noun} numbers this season speak for themselves: ${f.tally}, ${f.rankPhrase.replace("sits", "sitting")} for ${f.club}.`,
+  (f) => `${f.name} continues to impress in ${f.club}'s colours, ${f.verb} ${f.tally} this season and ${f.rankPhraseIng} in ${f.noun}.`,
+  (f) => `A standout season in ${f.noun} for ${f.name} — ${f.tally}, good enough to ${f.rankPhrasePlural} for ${f.club}.`,
+  (f) => `${f.name}'s ${f.noun} numbers this season speak for themselves: ${f.tally}, ${f.rankPhraseIng} for ${f.club}.`,
+  (f) => `${f.club} fans have plenty to like about ${f.name}'s ${f.noun} this season — ${f.tally}, ${f.rankPhraseIng}.`,
+  (f) => `${f.name} has taken ${f.noun} to another level in ${f.club}'s colours this year — ${f.tally}, and they now ${f.rankPhrasePlural}.`,
+  (f) => `Nobody at ${f.club} has matched ${f.name} in ${f.noun} this season — they ${f.rankPhrasePlural}, with ${f.tally} and climbing.`,
+  (f) => `${f.tally}. That's ${f.name}'s tally in ${f.noun} so far this season for ${f.club}, and they ${f.rankPhrasePlural}.`,
+  (f) => `${f.name} keeps finding new ways to influence games for ${f.club}, ${f.verb} ${f.tally} in ${f.noun} this season.`,
+  (f) => `A big season in ${f.noun} is taking shape for ${f.name} — ${f.tally} for ${f.club}, ${f.rankPhraseIng}.`,
+  (f) => `${f.name}'s consistency in ${f.noun} has been a feature of ${f.club}'s season: ${f.tally} and counting, ${f.rankPhraseIng}.`,
+  (f) => `Watch the ${f.noun} leaderboard and ${f.name}'s name is hard to miss — ${f.tally} for ${f.club} this season.`,
+  (f) => `${f.name} has been one of the most reliable ${f.noun} performers in the competition this year — ${f.tally}, ${f.rankPhraseIng} for ${f.club}.`,
+  (f) => `Round after round, ${f.name} keeps adding to the tally — ${f.tally} in ${f.noun} for ${f.club} this season, and they ${f.rankPhrasePlural}.`,
+  (f) => `${f.club} have leaned on ${f.name} heavily in ${f.noun} this season, and the numbers back it up: ${f.tally}, ${f.rankPhraseIng}.`,
+  (f) => `${f.name}'s ${f.noun} output this season has been hard to ignore — ${f.tally}, ${f.rankPhraseIng}.`,
+  (f) => `There's a case for ${f.name} as the best in the competition in ${f.noun} right now, given ${f.tally} for ${f.club} and a season that has them ${f.rankPhraseIng}.`,
+  (f) => `${f.name} has built real form in ${f.noun} across the season, ${f.verb} ${f.tally} for ${f.club} and now ${f.rankPhrase}.`,
+  (f) => `The stats don't lie: ${f.name} has been superb in ${f.noun} this season — ${f.tally}, ${f.rankPhraseIng} for ${f.club}.`,
+  (f) => `${f.name} is enjoying a career year in ${f.noun}, ${f.verb} ${f.tally} for ${f.club} so far this season and now ${f.rankPhrase}.`,
+  (f) => `Opposition sides have had no answer for ${f.name} in ${f.noun} this season — ${f.tally} for ${f.club}, and they ${f.rankPhrasePlural}.`,
+  (f) => `${f.name}'s name keeps appearing near the top of the ${f.noun} count this season: ${f.tally} for ${f.club}.`,
+  (f) => `${f.club}'s season has had a bright spot in ${f.name}, whose ${f.tally} has them ${f.rankPhraseIng}.`,
+  (f) => `It's shaping as a career-best year for ${f.name} in ${f.noun} — ${f.tally} for ${f.club}, ${f.rankPhraseIng}.`,
+  (f) => `${f.name} has been the heartbeat of ${f.club}'s season in ${f.noun} — ${f.tally} so far, ${f.rankPhraseIng}.`,
+  (f) => `Few in the competition can live with ${f.name} in ${f.noun} this year — ${f.tally} for ${f.club}, and they ${f.rankPhrasePlural}.`,
+  (f) => `${f.name}'s season-long form in ${f.noun} has been outstanding: ${f.tally}, ${f.rankPhraseIng} for ${f.club}.`,
+  (f) => `${f.tally} and counting — ${f.name} has been in imperious ${f.noun} form for ${f.club} this season, ${f.rankPhraseIng}.`,
 ];
 
 function formatSeasonWriteup(i: SeasonWriteupInput): string {

@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { ClubBadgeByName } from "./ClubBadge";
-import { combinedRecordFor, seasonOnlyRecord, writeupFor, type RecordRow } from "../engine/records";
+import { combinedRecordFor, seasonGroupTable, writeupFor, type RecordRow, type SeasonStatRow } from "../engine/records";
 import { hasRealWorldData, type RecordCategory } from "../data/realWorldRecords";
 import { SINGLE_GAME_GOALS, SINGLE_GAME_DISPOSALS } from "../data/afltablesBigLists";
 import { gameHighsFor } from "../data/afltablesGameHighs";
@@ -53,57 +53,57 @@ import { CLUBS } from "../types/club";
  * (add this to our General)", sourced from afltables' bg13.txt Big List. Its sim-side total is
  * LIVE-SEASON-ONLY (see `seasonFinalsAppearances` in `engine/records.ts` for why archived seasons
  * aren't counted) — a disclosed under-count for any player whose finals appearances span more than
- * one season, same "flag it, don't fake it" convention this file already applies elsewhere. Worth
- * being explicit about the practical effect: a season caps out at 4 finals appearances per player,
- * while the real-world top-100 runs 22-40, so in "All-Time Career" mode this category will in
- * practice show ONLY real legends — a sim player's finals tally only ever surfaces in "This Season"
- * mode. Not a bug, just a direct consequence of the disclosed limitation, verified in
- * `verify_round59_scratch.ts`.
+ * one season, same "flag it, don't fake it" convention this file already applies elsewhere.
  *
  * Round 60, Tyler: "If I play a game with Scott Pendlebury, will the number of disposals he achieves
- * in my simulated game be added to the 11,169 disposals? If not, it should." Answer was no — a real
- * legend who's ALSO a currently-loaded, playable AussieFootySim player produced two unrelated rows,
- * his frozen real total and a separate sim-only row starting from 0. Now `engine/records.ts`'s
- * `combinedRecord` merges the two into one continuing-career row (see its own doc comment), and
- * `simContributionCaption` below renders the honest split ("11,169 real + 42 this save") rather than
- * hiding it behind one opaque blended number — applies to every category with real data, not just
- * Disposals, and only once a linked player has actually racked up something in this save (a fresh
- * save's rows look unchanged until then).
+ * in my simulated game be added to the 11,169 disposals? If not, it should." `engine/records.ts`'s
+ * `combinedRecord` now merges a currently-loaded real legend's frozen real total with their save-side
+ * total into one continuing-career row, and `simContributionCaption` below renders the honest split
+ * ("11,169 real + 42 this save") rather than hiding it behind one opaque blended number.
  *
- * Round 59 also adds the "Single-Game Highs" reference section — Tyler: "5 goals in a game, 30
- * disposals in a game (add these to our records for tracking as well)". Round 61 significantly
- * reworks this whole tab on Tyler's own detailed feedback (quoted per-item below), including
- * widening Single-Game Highs from a fixed, always-visible Goals+Disposals pair to a per-category
- * section contextual to whichever stat is selected — see `SingleGameHighsCard` below.
+ * Round 61, Tyler sent 8 concrete pieces of feedback on this tab: both redundant headline cards and
+ * the top-3 podium were removed in favour of ranks 1-5 highlighted inline in a single, paginated
+ * (25/page) list; Single-Game Highs became contextual to whichever category is selected, widened from
+ * 2 to 15 categories; This-Season write-ups got their own career-arc-free template pool; and real
+ * debut dates now feed the All-Time write-up's start year. Item 9 (Benchmarking percentiles) was
+ * deliberately deferred to its own future round.
  *
- * Round 61, Tyler sent 8 concrete pieces of feedback on this tab (a 9th, Benchmarking percentiles,
- * was deliberately deferred to its own future round — substantial scope, and a standing open design
- * question about match-log retention that needs his own steer):
- *   1. "The 'Leading <statistic> this season' section... is redundant and a waste of space." Removed.
- *      Judgment call, disclosed: the equivalent "Most X in AFL/VFL history" All-Time headline card
- *      had the exact same redundancy (it duplicated the #1 row that's now shown, highlighted, in the
- *      list itself) — removed for the same reason, not just the literally-named season one.
- *   2. "Even the top 3 section, just roll it into the top 100 list but provide a highlight to
- *      distinguish the top 5." The old separate "Top 3 — click for their story" card is gone; ranks
- *      1-5 now render inline in the main list with a highlighted background, rank 1 slightly more
- *      prominent again within that band. Every row (not just former top-3) was already independently
- *      clickable to reveal its own write-up (Round 59 widened that), so no interaction was lost.
- *   3. "Lets paginate the top 100 at 25." Done — `PAGE_SIZE` below, Prev/Next controls.
- *   4-6. "I love the Single-Game High section... I encourage more of this across the other statistics
- *      as well... needs to be relevant to the stat that we're currently looking at though." Widened
- *      from 2 fixed categories to every one of our 15 single-game-eligible categories (see
- *      `data/afltablesGameHighs.ts`'s own doc comment for the 2 that still use the older, richer
- *      bg6/bg12 source, and which 9 have no single-game data at all and render no card). "Squeeze 3
- *      [tables] in" was Tyler's reaction to the OLD fixed-pair layout; it doesn't carry forward
- *      cleanly once the section became contextual to a single selected stat (there's exactly one
- *      relevant table per category now, not several) — flagged in this round's own report rather
- *      than silently reinterpreted.
- *   7. This-Season write-ups no longer reuse the All-Time pool's career-arc prose (debut year, club
- *      history, retired/active framing) — `engine/records.ts`'s new `seasonOnly` `writeupFor` param
- *      selects a separate, season-scoped template pool instead.
- *   8. Real debut dates (`data/realDebutDates.ts`, sourced from afltables' bg10.txt) now feed the
- *      All-Time write-up's start year, fixing sim rows that used to assume every loaded player's
- *      AussieFootySim career start WAS their real debut.
+ * Round 62, Tyler sent a screenshot of afl.com.au's real Stats Leaders page — a multi-column,
+ * click-to-sort table (Disposals/Kicks/Handballs/Inside 50s/... all at once) — and two named
+ * redesign options: (a) keep today's one-stat-at-a-time tables but group several onto fewer tabs, or
+ * (b) rebuild as a genuinely sortable multi-column table "like the afl website," explicitly leaving
+ * the choice to design judgement ("Use your design and UI/UX skills to determine which approach will
+ * be the most visually attractive and implement that"). Also flagged: the uniform red top-5 highlight
+ * should become gold/#1, silver/#2-3, bronze/#4-5 — "or, if we go the sortable table then this top 5
+ * concept might be better to be scrapped."
+ *
+ * Decision, disclosed: (b) for THIS SEASON mode only, keeping All-Time Career on today's single-stat
+ * ranked list. The reason isn't taste — it's what the two source datasets actually support. This
+ * Season's numbers all come from the same simulated box scores (`seasonPlayerTotals`), so every
+ * category is genuinely known for every player at once: a true multi-column join has zero missing
+ * cells. All-Time Career's real-world half (`data/realWorldRecords.ts`) is the opposite — each
+ * category was scraped as its OWN independently-ranked top-30(ish) list, so a real legend ranked, say,
+ * 40th in Disposals has no known Kicks/Handballs/Marks figure at all beyond THAT category's own
+ * separate top-30 — a joined table would mean real, silently-blank cells for most of the real side of
+ * the list, which is exactly the kind of thing this codebase has consistently refused to fake. So:
+ * `engine/records.ts`'s new `seasonGroupTable` powers a genuinely sortable, one-row-per-player table
+ * per stat group in This Season mode (click any column header to re-sort by it, always
+ * highest-first — real leaderboards don't offer a "show me the worst" toggle, and neither does
+ * afl.com.au's own reference); All-Time Career is UNCHANGED in structure (`combinedRecordFor`, one
+ * category at a time via the pill row). This also happens to satisfy option (a)'s own goal — fewer
+ * tabs — more completely than (a) itself would have: every category in a group becomes a column of
+ * ONE table rather than several tables stacked on one tab. Per Tyler's own fallback logic, the top-5
+ * highlight concept is SCRAPPED for the new sortable table (a fixed "top 5" doesn't mean much when the
+ * sort column changes) and instead becomes tiered GOLD (#1) / SILVER (#2-3) / BRONZE (#4-5) on the
+ * All-Time Career list, which keeps the fixed-rank concept the tiering needs.
+ *
+ * Also this round: "Now that we've expanded from a Top 3 to a Top 5 we need to adjust our write ups
+ * for the All Time Record." The write-up TEMPLATES never referenced rank at all, so nothing there
+ * needed changing — the actual gap was real-world `bio` data (`data/realWorldRecords.ts`), which
+ * gated write-up availability and was only ever populated for the top 3 of each category. Widened to
+ * top 5 there. And: "increase the number of write ups... from 16 to ~40" — `engine/records.ts`'s
+ * `SEASON_WRITEUP_TEMPLATES` pool is now 40 (and picked up a genuine grammar-bug fix for the rank-1
+ * case along the way — see that file's own doc comment).
  */
 
 type StatGroup = "General" | "Disposal Leaders" | "Scoring Leaders" | "Stoppage Kings" | "Defensive Leaders";
@@ -179,6 +179,35 @@ const CATEGORY_UNIT: Record<RecordCategory, string> = {
   interceptPossessions: "intercept poss.",
 };
 
+/** Round 62 — short column headers for the This-Season sortable multi-column table (`afl.com.au`-style abbreviations: D/K/H/M/T/CL...). Only ever shown a few at a time (one group's worth), so collisions across groups (e.g. "T" for Tackles vs "TO" for Turnovers, different groups) are fine — the full name is still one hover away via each header's own `title` tooltip. */
+const CATEGORY_SHORT: Record<RecordCategory, string> = {
+  gamesPlayed: "GM",
+  finalsAppearances: "FIN",
+  fantasyPoints: "AF",
+  disposals: "D",
+  kicks: "K",
+  handballs: "H",
+  turnovers: "TO",
+  contestedPoss: "CP",
+  uncontestedPoss: "UP",
+  marks: "M",
+  freeKicksFor: "FF",
+  freeKicksAgainst: "FA",
+  goals: "G",
+  behinds: "B",
+  shotsAtGoal: "SG",
+  goalAssists: "GA",
+  markLeadWins: "MOL",
+  marksInside50: "MI5",
+  clearances: "CL",
+  hitouts: "HO",
+  hitoutsToAdvantage: "HOA",
+  tackles: "T",
+  spoils: "SP",
+  interceptMarks: "IM",
+  interceptPossessions: "IP",
+};
+
 /** Reuses the Dashboard's own `ALL_LEAGUE_STATS` labels (plus one extra for `gamesPlayed`, which isn't a `LeagueStat`) so a stat's name can never drift between the two surfaces. */
 const CATEGORY_LABEL = {
   gamesPlayed: "Games Played",
@@ -199,6 +228,25 @@ function simContributionCaption(row: RecordRow): string | null {
   if (!row.simContribution) return null;
   const base = row.value - row.simContribution;
   return `${base.toLocaleString()} real + ${row.simContribution.toLocaleString()} this save`;
+}
+
+/**
+ * Round 62 — gold #1 / silver #2-3 / bronze #4-5, replacing the old uniform accent highlight.
+ * All-Time Career mode only (see this file's own doc comment for why This Season's new sortable
+ * table drops the fixed-rank highlight concept entirely).
+ */
+function tierRowClasses(rank: number): string {
+  if (rank === 1) return "border border-amber-400/50 bg-amber-400/10 hover:bg-amber-400/15";
+  if (rank <= 3) return "border border-slate-300/40 bg-slate-300/10 hover:bg-slate-300/15";
+  if (rank <= 5) return "border border-orange-700/50 bg-orange-700/10 hover:bg-orange-700/15";
+  return "odd:bg-base-800/50 hover:bg-base-800";
+}
+
+function tierRankClasses(rank: number): string {
+  if (rank === 1) return "text-base font-bold text-amber-300";
+  if (rank <= 3) return "font-semibold text-slate-300";
+  if (rank <= 5) return "font-semibold text-orange-400";
+  return "text-slate-500";
 }
 
 type Mode = "allTime" | "season";
@@ -224,9 +272,10 @@ export function Records() {
   const hasReal = hasRealWorldData(category);
   const isFiltered = archetypeFilter !== "all" || teamFilter !== "all";
 
+  // --- All-Time Career: unchanged single-category ranked list ---
   const allRows = useMemo((): RecordRow[] => {
+    if (mode === "season") return [];
     const topN = isFiltered ? 750 : 100;
-    if (mode === "season") return season ? seasonOnlyRecord(category, season, topN) : [];
     return combinedRecordFor(category, seasonArchives, season, topN);
   }, [category, mode, seasonArchives, season, isFiltered]);
 
@@ -246,8 +295,43 @@ export function Records() {
   const expandedRow = allRows.find((r) => r.rank === expandedRank);
   const expandedWriteup = useMemo(() => {
     if (!expandedRow) return undefined;
-    return writeupFor(expandedRow, category, seasonArchives, season, year, mode === "season");
-  }, [expandedRow, category, seasonArchives, season, year, mode]);
+    return writeupFor(expandedRow, category, seasonArchives, season, year, false);
+  }, [expandedRow, category, seasonArchives, season, year]);
+
+  // --- This Season: Round 62 sortable multi-column table, one per stat group ---
+  const seasonRows = useMemo((): SeasonStatRow[] => {
+    if (mode !== "season" || !season) return [];
+    const cats = CATEGORIES.filter((c) => CATEGORY_GROUP[c] === group);
+    const topN = isFiltered ? 750 : 100;
+    return seasonGroupTable(cats, category, season, topN);
+  }, [mode, season, group, category, isFiltered]);
+
+  const seasonFilteredRows = useMemo(
+    () =>
+      seasonRows.filter((r) => {
+        if (archetypeFilter !== "all" && r.player?.archetype !== archetypeFilter) return false;
+        if (teamFilter !== "all" && r.club !== teamFilter) return false;
+        return true;
+      }),
+    [seasonRows, archetypeFilter, teamFilter],
+  );
+
+  const seasonTotalPages = Math.max(1, Math.ceil(seasonFilteredRows.length / PAGE_SIZE));
+  const seasonPagedRows = seasonFilteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+
+  const expandedSeasonRow = seasonFilteredRows.find((r) => r.rank === expandedRank);
+  const expandedSeasonWriteup = useMemo(() => {
+    if (!expandedSeasonRow || !season) return undefined;
+    const pseudoRow: RecordRow = {
+      rank: expandedSeasonRow.rank,
+      source: "sim",
+      name: expandedSeasonRow.name,
+      value: expandedSeasonRow.values[category] ?? 0,
+      player: expandedSeasonRow.player,
+      club: expandedSeasonRow.club,
+    };
+    return writeupFor(pseudoRow, category, seasonArchives, season, year, true);
+  }, [expandedSeasonRow, category, seasonArchives, season, year]);
 
   const groupCategories = CATEGORIES.filter((c) => CATEGORY_GROUP[c] === group);
 
@@ -300,30 +384,37 @@ export function Records() {
         ))}
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
-        {groupCategories.map((c) => (
-          <button
-            key={c}
-            onClick={() => selectCategory(c)}
-            className={`rounded-full border px-3 py-1 text-xs font-medium ${
-              category === c ? "border-accent bg-accent/10 text-accent-light" : "border-base-600 text-slate-400 hover:bg-base-800"
-            }`}
-          >
-            {CATEGORY_LABEL[c]}
-            {!hasRealWorldData(c) && <span className="ml-1 text-slate-600">· sim only</span>}
-          </button>
-        ))}
-        {group === "General" &&
-          PLACEHOLDER_STATS.map((p) => (
-            <span
-              key={p.key}
-              title="Not tracked yet — coming in a future round"
-              className="cursor-not-allowed rounded-full border border-dashed border-base-700 px-3 py-1 text-xs font-medium text-slate-600"
+      {mode === "allTime" && (
+        <div className="flex flex-wrap gap-1.5">
+          {groupCategories.map((c) => (
+            <button
+              key={c}
+              onClick={() => selectCategory(c)}
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                category === c ? "border-accent bg-accent/10 text-accent-light" : "border-base-600 text-slate-400 hover:bg-base-800"
+              }`}
             >
-              {p.label} <span className="text-slate-700">· coming soon</span>
-            </span>
+              {CATEGORY_LABEL[c]}
+              {!hasRealWorldData(c) && <span className="ml-1 text-slate-600">· sim only</span>}
+            </button>
           ))}
-      </div>
+          {group === "General" &&
+            PLACEHOLDER_STATS.map((p) => (
+              <span
+                key={p.key}
+                title="Not tracked yet — coming in a future round"
+                className="cursor-not-allowed rounded-full border border-dashed border-base-700 px-3 py-1 text-xs font-medium text-slate-600"
+              >
+                {p.label} <span className="text-slate-700">· coming soon</span>
+              </span>
+            ))}
+        </div>
+      )}
+      {mode === "season" && (
+        <p className="text-xs text-slate-500">
+          Click any column below to sort this season's {group} table by that stat — the Single-Game High card further down follows whichever column you're sorted by.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex gap-1.5">
@@ -377,74 +468,158 @@ export function Records() {
       )}
       {mode === "season" && !season && <div className="card text-sm text-slate-400">No season in progress — start a season to see this season's leaders.</div>}
 
-      <div className="card">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide text-slate-400">
-          <span>
-            {isFiltered ? `Filtered — ${filteredRows.length} players` : mode === "season" ? `This season — top ${filteredRows.length}` : `All-time top ${filteredRows.length}`}
-          </span>
-          {filteredRows.length > 0 && <span className="normal-case tracking-normal text-slate-500">Top 5 highlighted</span>}
-        </div>
-        <div className="space-y-0.5 text-sm">
-          {pagedRows.length === 0 && <div className="px-3 py-2 text-slate-500">No players match this filter.</div>}
-          {pagedRows.map((row) => {
-            const expanded = expandedRank === row.rank;
-            const isTop5 = row.rank <= 5;
-            const isGoat = row.rank === 1;
-            return (
-              <div key={row.rank}>
-                <button
-                  onClick={() => setExpandedRank(expanded ? null : row.rank)}
-                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${
-                    isTop5 ? "border border-accent/30 bg-accent/10 hover:bg-accent/15" : "odd:bg-base-800/50 hover:bg-base-800"
-                  }`}
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className={`w-8 tabular-nums ${isGoat ? "text-base font-bold text-accent-light" : isTop5 ? "font-semibold text-accent-light" : "text-slate-500"}`}>
-                      {row.rank}
-                    </span>
-                    {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                    <span className={`truncate ${isGoat ? "font-semibold" : ""}`}>{row.name}</span>
-                    {row.source === "real" && row.real?.stillActive && (
-                      <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
-                    )}
-                    {row.source === "sim" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
-                    {isGoat && mode === "allTime" && hasReal && row.source === "sim" && (
-                      <span className="shrink-0 rounded-full bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AussieFootySim record</span>
-                    )}
-                  </span>
-                  <span className="flex shrink-0 items-baseline gap-1.5">
-                    {simContributionCaption(row) && <span className="text-[11px] text-slate-500">({simContributionCaption(row)})</span>}
-                    <span className={`tabular-nums ${isGoat ? "text-base font-bold" : ""}`}>{row.value.toLocaleString()}</span>
-                    {isTop5 && <span className="hidden text-[11px] text-slate-500 sm:inline">{unit}</span>}
-                  </span>
-                </button>
-                {expanded && <p className="px-3 pb-2 text-xs text-slate-400">{expandedWriteup ?? "No write-up available yet for this player."}</p>}
-              </div>
-            );
-          })}
-        </div>
-        {totalPages > 1 && (
-          <div className="mt-3 flex items-center justify-center gap-3 border-t border-base-800 pt-3">
-            <button
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Prev
-            </button>
-            <span className="text-xs tabular-nums text-slate-500">
-              Page {page + 1} of {totalPages}
-            </span>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-              className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Next
-            </button>
+      {mode === "allTime" && (
+        <div className="card">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide text-slate-400">
+            <span>{isFiltered ? `Filtered — ${filteredRows.length} players` : `All-time top ${filteredRows.length}`}</span>
+            {filteredRows.length > 0 && <span className="normal-case tracking-normal text-slate-500">Gold #1 · Silver #2-3 · Bronze #4-5</span>}
           </div>
-        )}
-      </div>
+          <div className="space-y-0.5 text-sm">
+            {pagedRows.length === 0 && <div className="px-3 py-2 text-slate-500">No players match this filter.</div>}
+            {pagedRows.map((row) => {
+              const expanded = expandedRank === row.rank;
+              const isTop5 = row.rank <= 5;
+              const isGoat = row.rank === 1;
+              return (
+                <div key={row.rank}>
+                  <button
+                    onClick={() => setExpandedRank(expanded ? null : row.rank)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${tierRowClasses(row.rank)}`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className={`w-8 tabular-nums ${tierRankClasses(row.rank)}`}>{row.rank}</span>
+                      {row.club && <ClubBadgeByName name={row.club} size="sm" />}
+                      <span className={`truncate ${isGoat ? "font-semibold" : ""}`}>{row.name}</span>
+                      {row.source === "real" && row.real?.stillActive && (
+                        <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
+                      )}
+                      {row.source === "sim" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
+                      {isGoat && hasReal && row.source === "sim" && (
+                        <span className="shrink-0 rounded-full bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AussieFootySim record</span>
+                      )}
+                    </span>
+                    <span className="flex shrink-0 items-baseline gap-1.5">
+                      {simContributionCaption(row) && <span className="text-[11px] text-slate-500">({simContributionCaption(row)})</span>}
+                      <span className={`tabular-nums ${isGoat ? "text-base font-bold" : ""}`}>{row.value.toLocaleString()}</span>
+                      {isTop5 && <span className="hidden text-[11px] text-slate-500 sm:inline">{unit}</span>}
+                    </span>
+                  </button>
+                  {expanded && <p className="px-3 pb-2 text-xs text-slate-400">{expandedWriteup ?? "No write-up available yet for this player."}</p>}
+                </div>
+              );
+            })}
+          </div>
+          {totalPages > 1 && (
+            <div className="mt-3 flex items-center justify-center gap-3 border-t border-base-800 pt-3">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Prev
+              </button>
+              <span className="text-xs tabular-nums text-slate-500">
+                Page {page + 1} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === "season" && season && (
+        <div className="card overflow-x-auto">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide text-slate-400">
+            <span>{isFiltered ? `Filtered — ${seasonFilteredRows.length} players` : `This season — top ${seasonFilteredRows.length}`}</span>
+            <span className="normal-case tracking-normal text-slate-500">Click a column to sort by it</span>
+          </div>
+          {seasonPagedRows.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-slate-500">No players match this filter.</div>
+          ) : (
+            <table className="w-full min-w-max text-sm">
+              <thead>
+                <tr className="border-b border-base-700 text-xs uppercase tracking-wide text-slate-400">
+                  <th className="whitespace-nowrap px-2 py-2 text-left font-medium">Rank</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-left font-medium">Player</th>
+                  {groupCategories.map((c) => (
+                    <th
+                      key={c}
+                      title={`Sort by ${CATEGORY_LABEL[c]}, descending`}
+                      onClick={() => selectCategory(c)}
+                      className={`cursor-pointer whitespace-nowrap px-2 py-2 text-right font-medium hover:text-accent-light ${
+                        category === c ? "bg-accent/15 text-accent-light" : ""
+                      }`}
+                    >
+                      {CATEGORY_SHORT[c]}
+                      {category === c && <span className="ml-0.5">▾</span>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {seasonPagedRows.map((row) => {
+                  const expanded = expandedRank === row.rank;
+                  return (
+                    <Fragment key={row.rank}>
+                      <tr onClick={() => setExpandedRank(expanded ? null : row.rank)} className="cursor-pointer odd:bg-base-800/50 hover:bg-base-800">
+                        <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">{row.rank}</td>
+                        <td className="px-2 py-1.5">
+                          <span className="flex min-w-0 items-center gap-2">
+                            {row.club && <ClubBadgeByName name={row.club} size="sm" />}
+                            <span className="truncate">{row.name}</span>
+                          </span>
+                        </td>
+                        {groupCategories.map((c) => (
+                          <td
+                            key={c}
+                            className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums ${category === c ? "font-semibold text-accent-light" : "text-slate-300"}`}
+                          >
+                            {(row.values[c] ?? 0).toLocaleString()}
+                          </td>
+                        ))}
+                      </tr>
+                      {expanded && (
+                        <tr>
+                          <td colSpan={groupCategories.length + 2} className="px-3 pb-2 pt-0 text-xs text-slate-400">
+                            {expandedSeasonWriteup ?? "No write-up available yet for this player."}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          {seasonTotalPages > 1 && (
+            <div className="mt-3 flex items-center justify-center gap-3 border-t border-base-800 pt-3">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Prev
+              </button>
+              <span className="text-xs tabular-nums text-slate-500">
+                Page {page + 1} of {seasonTotalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(seasonTotalPages - 1, p + 1))}
+                disabled={page >= seasonTotalPages - 1}
+                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <SingleGameHighsCard category={category} label={label} />
     </div>
@@ -462,7 +637,8 @@ export function Records() {
  * opponent only, top 20 deep — see that file's own doc comment for exactly which 13 categories and
  * why). Renders nothing at all for a category with no single-game source captured (either no
  * single-game analog, like Games Played, or no real data at all, like Fantasy Points) — quieter than
- * an apologetic empty-state card.
+ * an apologetic empty-state card. Round 62: `category` now also tracks whichever column is sorted in
+ * the This-Season table, so this card follows that too, unchanged in its own logic.
  */
 function SingleGameHighsCard({ category, label }: { category: RecordCategory; label: string }) {
   if (category === "goals") {

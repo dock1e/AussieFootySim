@@ -96,24 +96,119 @@ const CATEGORY_WRITEUP_META: Record<RecordCategory, { verb: string; noun: string
 };
 
 /**
- * Tyler's own literal template (verbatim from his original request): "<player> is a legend of the
- * game, kicking <number> goals in a career of <games> games, starting in <start> with <club> and
- * <still active / end date>." Adapted, not copied verbatim, for two things the literal template
- * doesn't itself resolve: (1) the games-played category, where restating "playing 442 games in a
- * career of 442 games" would be redundant — the secondary games clause is dropped for that category
- * only; (2) a multi-club career (Lockett: St Kilda then Sydney) — the literal template only names
- * one club, so a `startClub !== endClub` career gets an extra "before finishing at <endClub>" clause
- * rather than silently dropping the second club (a 3+-club career collapses to first/last, a
- * disclosed simplification carried over unchanged from the original round). The SAME function drives
- * every real legend with a `bio` and any simulated player who reaches the podium in any of the 24
- * categories — one template, so the two can never read as inconsistent in tone.
+ * Precomputed prose fragments for the write-up template pool below — every conditional edge case
+ * (games-played redundancy, multi-club careers, active-vs-retired phrasing) is resolved exactly ONCE
+ * here, so the 36 templates in `WRITEUP_TEMPLATES` can freely recombine fields without each having to
+ * re-derive that logic itself. `tally`/`clubPhrase` are Tyler's own original template's two trickiest
+ * clauses, generalized: `tally` drops the redundant "in a career of 442 games" when the category
+ * already IS games played; `clubPhrase` only mentions a second club when the career actually had one
+ * (a 3+-club career still collapses to first/last, a disclosed simplification carried over unchanged
+ * from the original round). `endA`/`endB`/`endC` are three independent phrasings of the same
+ * active/retired fact, so templates that both reference an end-clause don't all say the exact same
+ * words.
+ */
+interface Frag {
+  name: string;
+  verb: string;
+  noun: string;
+  startYear: number;
+  endYear: number;
+  startClub: string;
+  stillActive: boolean;
+  tally: string;
+  clubPhrase: string;
+  endA: string;
+  endB: string;
+  endC: string;
+}
+
+function toFrag(i: LegendWriteupInput): Frag {
+  const meta = CATEGORY_WRITEUP_META[i.category];
+  const valueStr = i.value.toLocaleString();
+  const sameClub = i.startClub === i.endClub;
+  return {
+    name: i.name,
+    verb: meta.verb,
+    noun: meta.noun,
+    startYear: i.startYear,
+    endYear: i.endYear,
+    startClub: i.startClub,
+    stillActive: i.stillActive,
+    tally: i.category === "gamesPlayed" ? `${valueStr} games` : `${valueStr} ${meta.noun} across ${i.games} games`,
+    clubPhrase: sameClub ? `with ${i.startClub}` : `with ${i.startClub}, before finishing at ${i.endClub}`,
+    endA: i.stillActive ? "is still adding to it today" : `retired in ${i.endYear}`,
+    endB: i.stillActive ? "remains an active force today" : `bowed out in ${i.endYear}`,
+    endC: i.stillActive ? "shows no sign of stopping" : `called time in ${i.endYear}`,
+  };
+}
+
+/**
+ * 36 distinct write-up phrasings — Tyler: "The exact same writeup is used on each player in the
+ * records screen, we should have a selection of 30 or 40 similar options to cycle through so its not
+ * so repetitive. Only the top 3 need their writeups, not the whole 100." Every template consumes the
+ * same `Frag` (see above), so none of them need their own redundancy/multi-club/active-retired logic
+ * — they just recombine the same resolved fragments in a different sentence shape. Template #0 is
+ * Tyler's own original wording, kept verbatim as one option among the 36 rather than replaced.
+ * Selection is deterministic (see `formatLegendWriteup`), not random — the same player always gets
+ * the same write-up within a session, it just won't be the literal same sentence as the next player
+ * on the podium.
+ */
+const WRITEUP_TEMPLATES: ((f: Frag) => string)[] = [
+  (f) => `${f.name} is a legend of the game, ${f.verb} ${f.tally}, starting in ${f.startYear} ${f.clubPhrase} and ${f.endA}.`,
+  (f) => `Few can match ${f.name}, who racked up ${f.tally} after debuting in ${f.startYear} ${f.clubPhrase} — and ${f.endB}.`,
+  (f) => `${f.name} built a career defined by ${f.verb} ${f.noun}: ${f.tally}, ${f.clubPhrase} since ${f.startYear}, and ${f.endA}.`,
+  (f) => `Since bursting onto the scene in ${f.startYear}, ${f.name} has been ${f.verb} ${f.noun} ever since — ${f.tally} ${f.clubPhrase}, and ${f.endC}.`,
+  (f) => `${f.tally} — that's the tally ${f.name} has built ${f.clubPhrase} since ${f.startYear}, and ${f.endA}.`,
+  (f) => `${f.name} is one of the competition's true greats, ${f.verb} ${f.tally} in a career that began in ${f.startYear} ${f.clubPhrase} and ${f.endB}.`,
+  (f) => `From ${f.startYear} onward, ${f.name} made a habit of ${f.verb} ${f.noun}, finishing with ${f.tally} ${f.clubPhrase}, and ${f.endC}.`,
+  (f) => `${f.name}'s legacy is ${f.tally}, forged ${f.clubPhrase} since ${f.startYear} — and ${f.endA}.`,
+  (f) => `${f.name} stands among the all-time greats after ${f.verb} ${f.tally} ${f.clubPhrase} since debuting in ${f.startYear}, and ${f.endB}.`,
+  (f) => `Debuting in ${f.startYear} ${f.clubPhrase}, ${f.name} went on to finish with ${f.tally}, and ${f.endC}.`,
+  (f) => `${f.name} carved out a legendary career ${f.clubPhrase}, ${f.verb} ${f.tally} since ${f.startYear} and ${f.endA}.`,
+  (f) => `There's a reason ${f.name} is spoken of in legendary terms: ${f.tally}, ${f.clubPhrase} since ${f.startYear}, and ${f.endB}.`,
+  (f) => `${f.name} etched their name into the record books, ${f.verb} ${f.tally} across a career ${f.clubPhrase} that started in ${f.startYear} and ${f.endC}.`,
+  (f) => `A ${f.startYear} debut ${f.clubPhrase} set ${f.name} on their way to ${f.tally}, and ${f.endA}.`,
+  (f) => `${f.name} left an indelible mark on the competition, ${f.verb} ${f.tally} ${f.clubPhrase} since ${f.startYear}, and ${f.endB}.`,
+  (f) => `It's ${f.tally} for ${f.name}, whose career ${f.clubPhrase} began in ${f.startYear} and ${f.endC}.`,
+  (f) => `${f.name} became a household name ${f.clubPhrase}, ${f.verb} ${f.tally} in the years since ${f.startYear} — and ${f.endA}.`,
+  (f) => `Rarely has a career matched ${f.name}'s: ${f.tally}, ${f.clubPhrase}, running from ${f.startYear} and ${f.endB}.`,
+  (f) => `${f.name}'s name belongs among the legends — ${f.tally} ${f.clubPhrase} since a ${f.startYear} debut, and ${f.endC}.`,
+  (f) => `Year after year, ${f.name} kept ${f.verb} ${f.noun}, building to ${f.tally} ${f.clubPhrase} since ${f.startYear}, and ${f.endA}.`,
+  (f) => `${f.name} has been ${f.verb} ${f.noun} ${f.clubPhrase} since ${f.startYear}, amassing ${f.tally} and ${f.endB}.`,
+  (f) => `The numbers speak for themselves: ${f.tally} for ${f.name}, ${f.clubPhrase} since a ${f.startYear} debut, and ${f.endC}.`,
+  (f) => `${f.name} is a genuine great of the game — ${f.tally}, ${f.clubPhrase}, from ${f.startYear} onward, and ${f.endA}.`,
+  (f) => `Across a career ${f.clubPhrase} that began in ${f.startYear}, ${f.name} compiled ${f.tally}, and ${f.endB}.`,
+  (f) => `${f.name} has spent a career ${f.verb} ${f.noun} ${f.clubPhrase} — ${f.tally} since ${f.startYear}, and ${f.endC}.`,
+  (f) => `Beginning in ${f.startYear} ${f.clubPhrase}, ${f.name} steadily built a tally of ${f.tally}, and ${f.endA}.`,
+  (f) => `Few names carry as much weight as ${f.name}'s: ${f.tally} ${f.clubPhrase} since ${f.startYear}, and ${f.endB}.`,
+  (f) => `${f.name}'s ${f.startYear} debut ${f.clubPhrase} was the start of something special — ${f.tally}, and ${f.endC}.`,
+  (f) => `${f.tally} tells the story of ${f.name}'s career ${f.clubPhrase}, which started in ${f.startYear} and ${f.endA}.`,
+  (f) => `${f.name} has made a habit of it ${f.clubPhrase} since ${f.startYear}: ${f.tally}, and ${f.endB}.`,
+  (f) => `Consistency and longevity define ${f.name}'s career ${f.clubPhrase} — ${f.tally} since ${f.startYear}, and ${f.endC}.`,
+  (f) => `${f.name} arrived in ${f.startYear} ${f.clubPhrase} and never looked back, finishing with ${f.tally}, and ${f.endA}.`,
+  (f) => `${f.name}'s ${f.tally} ${f.clubPhrase} speaks to a career built since ${f.startYear}, and ${f.endB}.`,
+  (f) => `A true great of the game, ${f.name} compiled ${f.tally} ${f.clubPhrase} in the years since ${f.startYear}, and ${f.endC}.`,
+  (f) => `${f.name} has quietly built one of the great careers of the era — ${f.tally} ${f.clubPhrase} since ${f.startYear}, and ${f.endA}.`,
+  (f) => `From a ${f.startYear} debut ${f.clubPhrase} to ${f.tally}${f.stillActive ? " and counting" : ""}, ${f.name}'s career ${f.stillActive ? "continues to this day" : `wrapped up in ${f.endYear}`}.`,
+];
+
+/** Simple deterministic string hash (djb2-ish) — same `name + category` always maps to the same template index, so a given player's write-up doesn't change from one render to the next, but different players (and the same player across different categories) land on different templates. */
+function hashKey(key: string): number {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+/**
+ * Picks one of the 36 `WRITEUP_TEMPLATES` deterministically from `name + category` and renders it.
+ * The SAME function drives every real legend with a `bio` and any simulated player who reaches the
+ * podium in any of the 24 categories — one shared pool, so the two can never read as inconsistent in
+ * tone. See `WRITEUP_TEMPLATES`'s own doc comment for the "why 36, why deterministic" reasoning.
  */
 function formatLegendWriteup(i: LegendWriteupInput): string {
-  const meta = CATEGORY_WRITEUP_META[i.category];
-  const secondaryClause = i.category === "gamesPlayed" ? "," : ` in a career of ${i.games} games,`;
-  const clubClause = i.startClub === i.endClub ? `with ${i.startClub}` : `with ${i.startClub}, before finishing at ${i.endClub}`;
-  const endClause = i.stillActive ? "and is still adding to it today" : `and retiring in ${i.endYear}`;
-  return `${i.name} is a legend of the game, ${meta.verb} ${i.value.toLocaleString()} ${meta.noun}${secondaryClause} starting in ${i.startYear} ${clubClause} ${endClause}.`;
+  const f = toFrag(i);
+  const template = WRITEUP_TEMPLATES[hashKey(`${i.name}|${i.category}`) % WRITEUP_TEMPLATES.length];
+  return template(f);
 }
 
 /**

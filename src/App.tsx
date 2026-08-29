@@ -48,7 +48,7 @@ const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "coaching", label: "Coaching", screens: ["selection", "positionSwitch"] },
   { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
   { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts"] },
-  { key: "records", label: "Records", screens: ["records"] },
+  { key: "records", label: "Statistics", screens: ["records"] },
 ];
 
 const SCREEN_LABELS: Record<Screen, string> = {
@@ -63,7 +63,7 @@ const SCREEN_LABELS: Record<Screen, string> = {
   trade: "Trade",
   draft: "Draft",
   positionSwitch: "Position Switch",
-  records: "Records",
+  records: "Statistics",
 };
 
 export default function App() {

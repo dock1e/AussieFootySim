@@ -9,66 +9,88 @@ import { ARCHETYPES, type Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
 
 /**
- * The Records tab — Aug 2026. Originally built for two categories (career Goals, Games Played),
- * widened this round to Tyler's full ask: "The records section needs to be for all of our 23 or 24
- * tracked statistics. Each statistic from our game needs to be comparable against the AFL
- * historical records (where historical records are available). Similar to this AFL Stats Leaders
- * page. Take note of the different filter options available to sort and view the data by. Including
- * positions (archetypes), team, season and statistic categories" — with a link to
- * afl.com.au/stats/leaders as the reference.
+ * The Statistics tab (renamed from "Records" this round) — Aug 2026. Originally built for two
+ * categories (career Goals, Games Played), widened to all 24 the following round, and reorganized
+ * this round to Tyler's own exact grouping: "Lets make a small adjustment to the ordering and layout
+ * of the tabs, rename the Records tab to Statistics" with 5 named groups (General, Disposal Leaders,
+ * Scoring Leaders, Stoppage Kings, Defensive Leaders) and an explicit stat list for each.
  *
- * Filter dimensions, matching that reference page:
- *   - Statistic category groups (its own Key Stats/General Play/Possessions/Stoppages/Marks/
- *     Scoring/Defence tabs) — `CATEGORY_GROUP` below groups all 24 of our categories the same way.
- *   - Position — afl.com.au's Position filter maps onto this project's own `archetype` concept
- *     (confirmed in the [[Player Profile and Benchmarking]] research note). Real-world legends
- *     carry no archetype in this system, so a Position filter narrows the AussieFootySim side of
- *     the list only — disclosed inline rather than silently dropping real rows with no explanation.
- *   - Team — every row (real or sim) now carries a `club`, so this filters both sides evenly.
- *   - Season — afl.com.au's own Season picker selects which real competition-year's leaderboard
- *     you're viewing. We have no real single-season leaderboard source (afltables' own Career
- *     Totals page is an all-time compilation, not a season-by-season one), so this becomes an
- *     honest "All-Time Career vs. This Season" toggle instead: All-Time is the real+sim merge
- *     (unchanged), This Season is AussieFootySim's own current-season leaders only, with no
- *     real-world comparison at all — a single season's totals genuinely aren't comparable against a
- *     real ALL-TIME career record.
+ * Tyler's 5-group list names 21 of our 24 real categories. Three don't appear anywhere in it: plain
+ * Marks (distinct from Marks Inside 50 / Marks on the Lead, both of which HE placed under Scoring
+ * Leaders), Frees For, and Frees Against. Rather than block on a clarifying question, these 3 are
+ * folded into Disposal Leaders as this build's own judgment call — the closest thematic fit (general
+ * open-play stats), and consistent with how afl.com.au's own real Stats Leaders page bundles plain
+ * Marks alongside Disposals/Kicks/Handballs rather than with the Inside-50 marking stats. Flagged to
+ * Tyler in this round's own report rather than silently decided.
+ *
+ * The 3 "(Placeholder)" stats Tyler listed under General — Consecutive games played, Most games
+ * missed through injury, Most games missed through suspension — have no data model in this codebase
+ * yet (no injury tracking, no suspension tracking, no consecutive-streak counter). They render as
+ * non-interactive "coming soon" chips (`PLACEHOLDER_STATS`) rather than being silently dropped or
+ * faked with zeroes — genuinely new engine work, out of scope for a tab-layout round.
+ *
+ * Filter dimensions, matching the original afl.com.au/stats/leaders reference:
+ *   - Statistic category groups — `CATEGORY_GROUP` below, Tyler's 5-group scheme (see above).
+ *   - Position — maps onto this project's own `archetype` concept. Real-world legends carry no
+ *     archetype in this system, so a Position filter narrows the AussieFootySim side of the list
+ *     only — disclosed inline rather than silently dropping real rows with no explanation.
+ *   - Team — every row (real or sim) carries a `club`, so this filters both sides evenly.
+ *   - Season — "All-Time Career vs. This Season" toggle. Tyler this round: "By default I want it to
+ *     open as 'This Season'" — `mode` now defaults to `"season"` (was `"allTime"`).
+ * Also this round: every real-world row (not just the bio'd top 3) now carries its own `stillActive`
+ * flag, and an "Active" badge renders on any real row still playing as of the Aug 2026 data snapshot
+ * — Tyler: "Currently active players in the All Time Top 100 / All Time Record Holders screens such
+ * as Scott Pendlebury or Max Gawn etc should be shown as still active." Previously that fact only
+ * surfaced inside a bio'd top-3 player's write-up prose.
  * Not built this round (already researched, deliberately out of scope): the "BENCHMARKING"
  * colour-coded ELITE/ABOVE AVG/BELOW AVG cell shading from the reference screenshots — see
  * [[Player Profile and Benchmarking]] for why that needs its own realistic-percentile modelling
  * work rather than being a filter-row add-on.
  */
 
-type StatGroup = "Key Stats" | "Scoring" | "Possessions" | "General Play" | "Marks" | "Stoppages" | "Defence";
+type StatGroup = "General" | "Disposal Leaders" | "Scoring Leaders" | "Stoppage Kings" | "Defensive Leaders";
 
-const GROUP_ORDER: StatGroup[] = ["Key Stats", "Scoring", "Possessions", "General Play", "Marks", "Stoppages", "Defence"];
+const GROUP_ORDER: StatGroup[] = ["General", "Disposal Leaders", "Scoring Leaders", "Stoppage Kings", "Defensive Leaders"];
 
-/** Every one of the 24 categories' primary filter group — one group each, matching afl.com.au's own category tabs (a stat there can appear in more than one group; ours picks the single best-fit group to keep the picker simple). */
+/** Every one of the 24 categories' group, per Tyler's own round-58 list (see this file's own doc comment for the 3-stat judgment call and the 3 placeholders, handled separately via `PLACEHOLDER_STATS`). */
 const CATEGORY_GROUP: Record<RecordCategory, StatGroup> = {
-  fantasyPoints: "Key Stats",
-  goals: "Key Stats",
-  disposals: "Key Stats",
-  gamesPlayed: "Key Stats",
-  behinds: "Scoring",
-  shotsAtGoal: "Scoring",
-  goalAssists: "Scoring",
-  contestedPoss: "Possessions",
-  uncontestedPoss: "Possessions",
-  kicks: "General Play",
-  handballs: "General Play",
-  freeKicksFor: "General Play",
-  freeKicksAgainst: "General Play",
-  turnovers: "General Play",
-  marks: "Marks",
-  marksInside50: "Marks",
-  markLeadWins: "Marks",
-  interceptMarks: "Marks",
-  clearances: "Stoppages",
-  hitouts: "Stoppages",
-  hitoutsToAdvantage: "Stoppages",
-  tackles: "Defence",
-  spoils: "Defence",
-  interceptPossessions: "Defence",
+  gamesPlayed: "General",
+  fantasyPoints: "General",
+  disposals: "Disposal Leaders",
+  kicks: "Disposal Leaders",
+  handballs: "Disposal Leaders",
+  turnovers: "Disposal Leaders",
+  contestedPoss: "Disposal Leaders",
+  uncontestedPoss: "Disposal Leaders",
+  marks: "Disposal Leaders",
+  freeKicksFor: "Disposal Leaders",
+  freeKicksAgainst: "Disposal Leaders",
+  goals: "Scoring Leaders",
+  behinds: "Scoring Leaders",
+  shotsAtGoal: "Scoring Leaders",
+  goalAssists: "Scoring Leaders",
+  markLeadWins: "Scoring Leaders",
+  marksInside50: "Scoring Leaders",
+  clearances: "Stoppage Kings",
+  hitouts: "Stoppage Kings",
+  hitoutsToAdvantage: "Stoppage Kings",
+  tackles: "Defensive Leaders",
+  spoils: "Defensive Leaders",
+  interceptMarks: "Defensive Leaders",
+  interceptPossessions: "Defensive Leaders",
 };
+
+interface PlaceholderStat {
+  key: string;
+  label: string;
+}
+
+/** The 3 "(Placeholder)" stats from Tyler's own list — no data model yet, rendered as non-interactive "coming soon" chips in the General group only. Not a `RecordCategory` — these never touch `combinedRecordFor`/`seasonOnlyRecord`. */
+const PLACEHOLDER_STATS: PlaceholderStat[] = [
+  { key: "consecutiveGames", label: "Consecutive Games Played" },
+  { key: "gamesMissedInjury", label: "Most Games Missed (Injury)" },
+  { key: "gamesMissedSuspension", label: "Most Games Missed (Suspension)" },
+];
 
 const CATEGORY_UNIT: Record<RecordCategory, string> = {
   fantasyPoints: "points",
@@ -112,9 +134,9 @@ export function Records() {
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
   const year = useSaveStore((s) => s.year);
 
-  const [group, setGroup] = useState<StatGroup>("Key Stats");
-  const [category, setCategory] = useState<RecordCategory>("goals");
-  const [mode, setMode] = useState<Mode>("allTime");
+  const [group, setGroup] = useState<StatGroup>("General");
+  const [category, setCategory] = useState<RecordCategory>("gamesPlayed");
+  const [mode, setMode] = useState<Mode>("season");
   const [archetypeFilter, setArchetypeFilter] = useState<Archetype | "all">("all");
   const [teamFilter, setTeamFilter] = useState<string>("all");
   const [expandedRank, setExpandedRank] = useState<number | null>(1);
@@ -165,7 +187,7 @@ export function Records() {
   return (
     <div className="space-y-5">
       <div>
-        <div className="font-display text-2xl italic">Records</div>
+        <div className="font-display text-2xl italic">Statistics</div>
         <div className="text-sm text-slate-400">
           The greatest of all time — real AFL/VFL legends and every AussieFootySim player, ranked together across all {CATEGORIES.length} tracked statistics.
         </div>
@@ -202,6 +224,16 @@ export function Records() {
             {!hasRealWorldData(c) && <span className="ml-1 text-slate-600">· sim only</span>}
           </button>
         ))}
+        {group === "General" &&
+          PLACEHOLDER_STATS.map((p) => (
+            <span
+              key={p.key}
+              title="Not tracked yet — coming in a future round"
+              className="cursor-not-allowed rounded-full border border-dashed border-base-700 px-3 py-1 text-xs font-medium text-slate-600"
+            >
+              {p.label} <span className="text-slate-700">· coming soon</span>
+            </span>
+          ))}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -304,7 +336,12 @@ export function Records() {
                       <span className="text-slate-500 tabular-nums">#{row.rank}</span>
                       <span className="font-semibold">{row.name}</span>
                     </span>
-                    {row.source === "sim" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {row.source === "real" && row.real?.stillActive && (
+                        <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
+                      )}
+                      {row.source === "sim" && <span className="text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
+                    </span>
                   </div>
                   <div className="mt-0.5 flex items-center gap-2 text-sm text-slate-400">
                     {row.club && <ClubBadgeByName name={row.club} size="sm" />}
@@ -339,6 +376,9 @@ export function Records() {
                     <span className="w-8 text-slate-500 tabular-nums">{row.rank}</span>
                     {row.club && <ClubBadgeByName name={row.club} size="sm" />}
                     <span className="truncate">{row.name}</span>
+                    {row.source === "real" && row.real?.stillActive && (
+                      <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
+                    )}
                     {row.source === "sim" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
                   </span>
                   <span className="tabular-nums">{row.value.toLocaleString()}</span>

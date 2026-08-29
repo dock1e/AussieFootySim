@@ -5,6 +5,7 @@ import { ClubBadgeByName } from "./ClubBadge";
 import { combinedRecordFor, seasonOnlyRecord, writeupFor, type RecordRow } from "../engine/records";
 import { hasRealWorldData, type RecordCategory } from "../data/realWorldRecords";
 import { SINGLE_GAME_GOALS, SINGLE_GAME_DISPOSALS } from "../data/afltablesBigLists";
+import { gameHighsFor } from "../data/afltablesGameHighs";
 import { ALL_LEAGUE_STATS } from "../engine/seasonSummary";
 import { ARCHETYPES, type Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
@@ -69,16 +70,40 @@ import { CLUBS } from "../types/club";
  * Disposals, and only once a linked player has actually racked up something in this save (a fresh
  * save's rows look unchanged until then).
  *
- * Round 59 also adds the "Single-Game Highs" reference section at the bottom of the page — Tyler:
- * "5 goals in a game, 30 disposals in a game (add these to our records for tracking as well)". These
- * two are event LEDGERS (one row per match performance, not one row per player — see
- * `data/afltablesBigLists.ts`'s own doc comment), a genuinely different shape from every category
- * above, so rather than force them into the group/category picker they render in their own
- * always-visible card beneath it, independent of whichever group/category is currently selected. Three
- * more Big Lists Tyler asked to "capture" this round — All Margins, team scores ranked by size, and
- * drawn games — are deliberately NOT rendered anywhere in this UI: his own words scope them to "we
- * will use this data in future features", so they're captured as typed, ready-to-consume data in
- * `data/afltablesBigLists.ts` only.
+ * Round 59 also adds the "Single-Game Highs" reference section — Tyler: "5 goals in a game, 30
+ * disposals in a game (add these to our records for tracking as well)". Round 61 significantly
+ * reworks this whole tab on Tyler's own detailed feedback (quoted per-item below), including
+ * widening Single-Game Highs from a fixed, always-visible Goals+Disposals pair to a per-category
+ * section contextual to whichever stat is selected — see `SingleGameHighsCard` below.
+ *
+ * Round 61, Tyler sent 8 concrete pieces of feedback on this tab (a 9th, Benchmarking percentiles,
+ * was deliberately deferred to its own future round — substantial scope, and a standing open design
+ * question about match-log retention that needs his own steer):
+ *   1. "The 'Leading <statistic> this season' section... is redundant and a waste of space." Removed.
+ *      Judgment call, disclosed: the equivalent "Most X in AFL/VFL history" All-Time headline card
+ *      had the exact same redundancy (it duplicated the #1 row that's now shown, highlighted, in the
+ *      list itself) — removed for the same reason, not just the literally-named season one.
+ *   2. "Even the top 3 section, just roll it into the top 100 list but provide a highlight to
+ *      distinguish the top 5." The old separate "Top 3 — click for their story" card is gone; ranks
+ *      1-5 now render inline in the main list with a highlighted background, rank 1 slightly more
+ *      prominent again within that band. Every row (not just former top-3) was already independently
+ *      clickable to reveal its own write-up (Round 59 widened that), so no interaction was lost.
+ *   3. "Lets paginate the top 100 at 25." Done — `PAGE_SIZE` below, Prev/Next controls.
+ *   4-6. "I love the Single-Game High section... I encourage more of this across the other statistics
+ *      as well... needs to be relevant to the stat that we're currently looking at though." Widened
+ *      from 2 fixed categories to every one of our 15 single-game-eligible categories (see
+ *      `data/afltablesGameHighs.ts`'s own doc comment for the 2 that still use the older, richer
+ *      bg6/bg12 source, and which 9 have no single-game data at all and render no card). "Squeeze 3
+ *      [tables] in" was Tyler's reaction to the OLD fixed-pair layout; it doesn't carry forward
+ *      cleanly once the section became contextual to a single selected stat (there's exactly one
+ *      relevant table per category now, not several) — flagged in this round's own report rather
+ *      than silently reinterpreted.
+ *   7. This-Season write-ups no longer reuse the All-Time pool's career-arc prose (debut year, club
+ *      history, retired/active framing) — `engine/records.ts`'s new `seasonOnly` `writeupFor` param
+ *      selects a separate, season-scoped template pool instead.
+ *   8. Real debut dates (`data/realDebutDates.ts`, sourced from afltables' bg10.txt) now feed the
+ *      All-Time write-up's start year, fixing sim rows that used to assume every loaded player's
+ *      AussieFootySim career start WAS their real debut.
  */
 
 type StatGroup = "General" | "Disposal Leaders" | "Scoring Leaders" | "Stoppage Kings" | "Defensive Leaders";
@@ -178,6 +203,9 @@ function simContributionCaption(row: RecordRow): string | null {
 
 type Mode = "allTime" | "season";
 
+/** Round 61, Tyler: "Lets paginate the top 100 at 25." */
+const PAGE_SIZE = 25;
+
 export function Records() {
   const season = useSeasonStore((s) => s.season);
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
@@ -189,6 +217,7 @@ export function Records() {
   const [archetypeFilter, setArchetypeFilter] = useState<Archetype | "all">("all");
   const [teamFilter, setTeamFilter] = useState<string>("all");
   const [expandedRank, setExpandedRank] = useState<number | null>(1);
+  const [page, setPage] = useState(0);
 
   const label = CATEGORY_LABEL[category];
   const unit = CATEGORY_UNIT[category];
@@ -201,11 +230,6 @@ export function Records() {
     return combinedRecordFor(category, seasonArchives, season, topN);
   }, [category, mode, seasonArchives, season, isFiltered]);
 
-  // The headline + podium are always the TRUE, unfiltered #1 / top 3 — a Position/Team filter
-  // narrows the browsable list below, it doesn't redefine what "the record" is.
-  const goat = allRows[0];
-  const podium = allRows.slice(0, 3);
-
   const filteredRows = useMemo(
     () =>
       allRows.filter((r) => {
@@ -215,22 +239,38 @@ export function Records() {
       }),
     [allRows, archetypeFilter, teamFilter],
   );
-  // When unfiltered, the podium above already showed ranks 1-3 — skip them here. When filtered,
-  // the podium is a different (unfiltered) set of players that may not even be in `filteredRows`,
-  // so nothing to skip.
-  const rest = isFiltered ? filteredRows : filteredRows.slice(3);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const pagedRows = filteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
   const expandedRow = allRows.find((r) => r.rank === expandedRank);
   const expandedWriteup = useMemo(() => {
     if (!expandedRow) return undefined;
-    return writeupFor(expandedRow, category, seasonArchives, season, year);
-  }, [expandedRow, category, seasonArchives, season, year]);
+    return writeupFor(expandedRow, category, seasonArchives, season, year, mode === "season");
+  }, [expandedRow, category, seasonArchives, season, year, mode]);
 
   const groupCategories = CATEGORIES.filter((c) => CATEGORY_GROUP[c] === group);
 
   function selectCategory(next: RecordCategory) {
     setCategory(next);
     setExpandedRank(1);
+    setPage(0);
+  }
+
+  function selectMode(next: Mode) {
+    setMode(next);
+    setExpandedRank(1);
+    setPage(0);
+  }
+
+  function selectArchetypeFilter(next: Archetype | "all") {
+    setArchetypeFilter(next);
+    setPage(0);
+  }
+
+  function selectTeamFilter(next: string) {
+    setTeamFilter(next);
+    setPage(0);
   }
 
   return (
@@ -290,10 +330,7 @@ export function Records() {
           {(["allTime", "season"] as const).map((m) => (
             <button
               key={m}
-              onClick={() => {
-                setMode(m);
-                setExpandedRank(1);
-              }}
+              onClick={() => selectMode(m)}
               className={`rounded-full px-3 py-1 text-xs font-medium ${
                 mode === m ? "bg-accent text-white" : "bg-base-800 text-slate-400 hover:bg-base-700"
               }`}
@@ -305,7 +342,7 @@ export function Records() {
         <select
           className="rounded-lg border border-base-600 bg-base-900 px-2.5 py-1 text-xs text-slate-200"
           value={archetypeFilter}
-          onChange={(e) => setArchetypeFilter(e.target.value as Archetype | "all")}
+          onChange={(e) => selectArchetypeFilter(e.target.value as Archetype | "all")}
           aria-label="Filter by position"
         >
           <option value="all">All positions</option>
@@ -318,7 +355,7 @@ export function Records() {
         <select
           className="rounded-lg border border-base-600 bg-base-900 px-2.5 py-1 text-xs text-slate-200"
           value={teamFilter}
-          onChange={(e) => setTeamFilter(e.target.value)}
+          onChange={(e) => selectTeamFilter(e.target.value)}
           aria-label="Filter by team"
         >
           <option value="all">All teams</option>
@@ -333,108 +370,52 @@ export function Records() {
         )}
       </div>
 
-      {mode === "allTime" && goat && (
-        <div className="card">
-          <div className="text-xs uppercase tracking-wide text-slate-400">
-            {hasReal ? `Most ${label} in AFL/VFL history` : `No AFL/VFL all-time record available for ${label}`}
-          </div>
-          <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="font-display text-4xl italic tabular-nums">{goat.value.toLocaleString()}</span>
-            <span className="text-lg font-semibold">{goat.name}</span>
-            {goat.club && <ClubBadgeByName name={goat.club} />}
-            {hasReal && goat.source === "sim" && (
-              <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent-light">AussieFootySim record</span>
-            )}
-          </div>
-          {simContributionCaption(goat) && <p className="mt-1 text-xs text-slate-500">{simContributionCaption(goat)} — still an active AussieFootySim player, continuing their real career in this save.</p>}
-          {!hasReal && (
-            <p className="mt-2 text-xs text-slate-500">
-              No reliable, publicly-compiled real-world AFL/VFL all-time total exists for {label.toLowerCase()} — this is AussieFootySim's own all-time leaderboard only.
-            </p>
-          )}
-        </div>
-      )}
-      {mode === "season" && season && goat && (
-        <div className="card">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Leading {label} this season</div>
-          <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="font-display text-4xl italic tabular-nums">{goat.value.toLocaleString()}</span>
-            <span className="text-lg font-semibold">{goat.name}</span>
-            {goat.club && <ClubBadgeByName name={goat.club} />}
-          </div>
-          <p className="mt-2 text-xs text-slate-500">This season's totals only — not compared against real-world AFL data, which is all-time career history rather than a single season.</p>
-        </div>
+      {mode === "allTime" && !hasReal && (
+        <p className="text-xs text-slate-500">
+          No reliable, publicly-compiled real-world AFL/VFL all-time total exists for {label.toLowerCase()} — this is AussieFootySim's own all-time leaderboard only.
+        </p>
       )}
       {mode === "season" && !season && <div className="card text-sm text-slate-400">No season in progress — start a season to see this season's leaders.</div>}
 
-      {podium.length > 0 && (
-        <div className="card">
-          <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Top 3 — click for their story</div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {podium.map((row) => {
-              const expanded = expandedRank === row.rank;
-              return (
-                <button
-                  key={row.rank}
-                  onClick={() => setExpandedRank(expanded ? null : row.rank)}
-                  className={`rounded-lg border p-3 text-left transition ${
-                    expanded ? "border-accent bg-accent/5" : "border-base-600 bg-base-800/50 hover:bg-base-800"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2">
-                      <span className="text-slate-500 tabular-nums">#{row.rank}</span>
-                      <span className="font-semibold">{row.name}</span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      {row.source === "real" && row.real?.stillActive && (
-                        <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
-                      )}
-                      {row.source === "sim" && <span className="text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-2 text-sm text-slate-400">
-                    {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                    <span className="tabular-nums">
-                      {row.value.toLocaleString()} {unit}
-                    </span>
-                  </div>
-                  {simContributionCaption(row) && <p className="mt-0.5 text-[11px] text-slate-500">{simContributionCaption(row)}</p>}
-                  {expanded && expandedWriteup && <p className="mt-2 text-xs text-slate-300">{expandedWriteup}</p>}
-                  {expanded && !expandedWriteup && <p className="mt-2 text-xs text-slate-500">No write-up available yet for this player.</p>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       <div className="card">
-        <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
-          {isFiltered ? `Filtered — ${filteredRows.length} players` : mode === "season" ? `This season — top ${filteredRows.length}` : `All-time top ${filteredRows.length}`}
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide text-slate-400">
+          <span>
+            {isFiltered ? `Filtered — ${filteredRows.length} players` : mode === "season" ? `This season — top ${filteredRows.length}` : `All-time top ${filteredRows.length}`}
+          </span>
+          {filteredRows.length > 0 && <span className="normal-case tracking-normal text-slate-500">Top 5 highlighted</span>}
         </div>
         <div className="space-y-0.5 text-sm">
-          {rest.length === 0 && <div className="px-3 py-2 text-slate-500">No players match this filter.</div>}
-          {rest.map((row) => {
+          {pagedRows.length === 0 && <div className="px-3 py-2 text-slate-500">No players match this filter.</div>}
+          {pagedRows.map((row) => {
             const expanded = expandedRank === row.rank;
+            const isTop5 = row.rank <= 5;
+            const isGoat = row.rank === 1;
             return (
               <div key={row.rank}>
                 <button
                   onClick={() => setExpandedRank(expanded ? null : row.rank)}
-                  className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left odd:bg-base-800/50 hover:bg-base-800"
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${
+                    isTop5 ? "border border-accent/30 bg-accent/10 hover:bg-accent/15" : "odd:bg-base-800/50 hover:bg-base-800"
+                  }`}
                 >
                   <span className="flex min-w-0 items-center gap-2">
-                    <span className="w-8 text-slate-500 tabular-nums">{row.rank}</span>
+                    <span className={`w-8 tabular-nums ${isGoat ? "text-base font-bold text-accent-light" : isTop5 ? "font-semibold text-accent-light" : "text-slate-500"}`}>
+                      {row.rank}
+                    </span>
                     {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                    <span className="truncate">{row.name}</span>
+                    <span className={`truncate ${isGoat ? "font-semibold" : ""}`}>{row.name}</span>
                     {row.source === "real" && row.real?.stillActive && (
                       <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
                     )}
                     {row.source === "sim" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
+                    {isGoat && mode === "allTime" && hasReal && row.source === "sim" && (
+                      <span className="shrink-0 rounded-full bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AussieFootySim record</span>
+                    )}
                   </span>
                   <span className="flex shrink-0 items-baseline gap-1.5">
                     {simContributionCaption(row) && <span className="text-[11px] text-slate-500">({simContributionCaption(row)})</span>}
-                    <span className="tabular-nums">{row.value.toLocaleString()}</span>
+                    <span className={`tabular-nums ${isGoat ? "text-base font-bold" : ""}`}>{row.value.toLocaleString()}</span>
+                    {isTop5 && <span className="hidden text-[11px] text-slate-500 sm:inline">{unit}</span>}
                   </span>
                 </button>
                 {expanded && <p className="px-3 pb-2 text-xs text-slate-400">{expandedWriteup ?? "No write-up available yet for this player."}</p>}
@@ -442,51 +423,119 @@ export function Records() {
             );
           })}
         </div>
+        {totalPages > 1 && (
+          <div className="mt-3 flex items-center justify-center gap-3 border-t border-base-800 pt-3">
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <span className="text-xs tabular-nums text-slate-500">
+              Page {page + 1} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={page >= totalPages - 1}
+              className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
 
+      <SingleGameHighsCard category={category} label={label} />
+    </div>
+  );
+}
+
+/**
+ * Round 61 — Single-Game Highs, now contextual to whichever category is selected (Tyler: "The
+ * Single-Game High section needs to be relevant to the stat that we're currently looking at
+ * though. Biggest goal kicking haul should only be visible when looking at the goal kicking tab and
+ * disposals only visible for the disposal leaders tab"), rather than the old fixed, always-visible
+ * Goals+Disposals pair. Goals/Disposals keep their richer existing source (`afltablesBigLists.ts` —
+ * exact date, venue, and for Disposals a kicks/handballs breakdown, top 50 deep); every other
+ * single-game-eligible category uses the newer, plainer `afltablesGameHighs.ts` source (year +
+ * opponent only, top 20 deep — see that file's own doc comment for exactly which 13 categories and
+ * why). Renders nothing at all for a category with no single-game source captured (either no
+ * single-game analog, like Games Played, or no real data at all, like Fantasy Points) — quieter than
+ * an apologetic empty-state card.
+ */
+function SingleGameHighsCard({ category, label }: { category: RecordCategory; label: string }) {
+  if (category === "goals") {
+    return (
       <div className="card">
-        <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game Highs</div>
-        <div className="mb-3 mt-1 text-xs text-slate-500">
-          The biggest individual match performances in VFL/AFL history — one row per match, not per player, so a prolific performer can appear more than once.
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300">Biggest Goalkicking Hauls</div>
-            <div className="space-y-0.5 text-sm">
-              {SINGLE_GAME_GOALS.slice(0, 15).map((g) => (
-                <div key={g.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="w-5 text-slate-500 tabular-nums">{g.rank}</span>
-                    {g.club && <ClubBadgeByName name={g.club} size="sm" />}
-                    <span className="truncate">{g.player}</span>
-                  </span>
-                  <span className="shrink-0 text-right text-xs text-slate-400">
-                    <span className="tabular-nums text-slate-200">{g.scoreLine}</span> · {g.date}
-                  </span>
-                </div>
-              ))}
+        <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game High — {label}</div>
+        <div className="mb-3 mt-1 text-xs text-slate-500">The biggest individual goalkicking hauls in VFL/AFL history — one row per match, not per player, so a prolific performer can appear more than once.</div>
+        <div className="space-y-0.5 text-sm">
+          {SINGLE_GAME_GOALS.slice(0, 15).map((g) => (
+            <div key={g.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="w-5 text-slate-500 tabular-nums">{g.rank}</span>
+                {g.club && <ClubBadgeByName name={g.club} size="sm" />}
+                <span className="truncate">{g.player}</span>
+              </span>
+              <span className="shrink-0 text-right text-xs text-slate-400">
+                <span className="tabular-nums text-slate-200">{g.scoreLine}</span> · {g.date}
+              </span>
             </div>
-          </div>
-          <div>
-            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300">Biggest Disposal Games</div>
-            <div className="space-y-0.5 text-sm">
-              {SINGLE_GAME_DISPOSALS.slice(0, 15).map((d) => (
-                <div key={d.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="w-5 text-slate-500 tabular-nums">{d.rank}</span>
-                    {d.club && <ClubBadgeByName name={d.club} size="sm" />}
-                    <span className="truncate">{d.player}</span>
-                  </span>
-                  <span className="shrink-0 text-right text-xs text-slate-400">
-                    <span className="tabular-nums text-slate-200">{d.disposals}</span> ({d.kicks}k, {d.handballs}hb) · {d.date}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+          ))}
         </div>
-        <p className="mt-3 text-[11px] text-slate-600">Showing the top 15 of each — 50 deep in the underlying data.</p>
+        <p className="mt-3 text-[11px] text-slate-600">Showing the top 15 — 50 deep in the underlying data.</p>
       </div>
+    );
+  }
+
+  if (category === "disposals") {
+    return (
+      <div className="card">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game High — {label}</div>
+        <div className="mb-3 mt-1 text-xs text-slate-500">The biggest individual disposal counts in VFL/AFL history since 1965 — one row per match, not per player.</div>
+        <div className="space-y-0.5 text-sm">
+          {SINGLE_GAME_DISPOSALS.slice(0, 15).map((d) => (
+            <div key={d.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="w-5 text-slate-500 tabular-nums">{d.rank}</span>
+                {d.club && <ClubBadgeByName name={d.club} size="sm" />}
+                <span className="truncate">{d.player}</span>
+              </span>
+              <span className="shrink-0 text-right text-xs text-slate-400">
+                <span className="tabular-nums text-slate-200">{d.disposals}</span> ({d.kicks}k, {d.handballs}hb) · {d.date}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[11px] text-slate-600">Showing the top 15 — 50 deep in the underlying data.</p>
+      </div>
+    );
+  }
+
+  const highs = gameHighsFor(category);
+  if (!highs) return null;
+
+  return (
+    <div className="card">
+      <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game High — {label}</div>
+      <div className="mb-3 mt-1 text-xs text-slate-500">The best individual match performances in VFL/AFL history for {label.toLowerCase()} — one row per match, not per player. No exact date on this source, unlike Goals/Disposals above.</div>
+      <div className="space-y-0.5 text-sm">
+        {highs.map((h) => (
+          <div key={h.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="w-5 text-slate-500 tabular-nums">{h.rank}</span>
+              {h.club && <ClubBadgeByName name={h.club} size="sm" />}
+              <span className="truncate">{h.player}</span>
+            </span>
+            <span className="shrink-0 text-right text-xs text-slate-400">
+              <span className="tabular-nums text-slate-200">{h.value}</span> · {h.year}
+              {h.opponentClub ? ` v ${h.opponentClub}` : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-[11px] text-slate-600">Showing all {highs.length} — afltables' own Game Highs table doesn't go deeper than this for {label.toLowerCase()}.</p>
     </div>
   );
 }

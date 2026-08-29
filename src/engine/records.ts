@@ -2,6 +2,7 @@ import type { Player } from "../types/player.ts";
 import { playerFullName } from "../types/player.ts";
 import { getPlayerById, getPlayerByFullName } from "../data/loadPlayers.ts";
 import { realWorldRecordsFor, type RealWorldRecordEntry, type RecordCategory } from "../data/realWorldRecords.ts";
+import { debutYearFor } from "../data/realDebutDates.ts";
 import { allTimePlayerTotals, seasonPlayerTotals, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
 import type { Season } from "./season.ts";
 
@@ -245,6 +246,15 @@ function formatLegendWriteup(i: LegendWriteupInput): string {
  * 2025-season snapshot baseline, see `types/player.ts`) — that's a single real SEASON's totals, not
  * a real career total, so adding it would silently misstate a modelled player's own AussieFootySim
  * career as bigger than what they've actually racked up inside this simulation.
+ *
+ * Round 61, Tyler: "all our plays in the This Season tab believe that they first started their
+ * careers in 2026." The bug: `startYear` used to be ONLY the earliest year this SAVE has the player
+ * recorded playing — correct for a genuinely new, generated player, but wrong for any loaded player
+ * who's also a real AFL athlete whose actual career predates the save (Nick Daicos would read as
+ * "started in 2026" instead of his real 2022 debut). `data/realDebutDates.ts`'s `debutYearFor` now
+ * supplies the true year when known; `Math.min` against the sim-tracked year is a defensive floor,
+ * not the expected case — a real debut should never be LATER than the save's own earliest record of
+ * the player, but this still favours the earlier year rather than silently overriding it if that ever happened.
  */
 function simLegendWriteupInput(player: Player, category: RecordCategory, value: number, seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, currentYear: number): LegendWriteupInput {
   const years: number[] = [];
@@ -261,7 +271,9 @@ function simLegendWriteupInput(player: Player, category: RecordCategory, value: 
     }
   }
   years.sort((a, b) => a - b);
-  const startYear = years[0] ?? currentYear;
+  const simStartYear = years[0] ?? currentYear;
+  const realDebutYear = debutYearFor(playerFullName(player));
+  const startYear = realDebutYear !== undefined ? Math.min(realDebutYear, simStartYear) : simStartYear;
   const endYear = years[years.length - 1] ?? currentYear;
   const games = allTimePlayerTotals(seasonArchives, liveSeason).get(player.PlayerID)?.gamesPlayed ?? 0;
   return {
@@ -463,14 +475,119 @@ export function seasonOnlyRecord(category: RecordCategory, season: Season, topN 
   return candidates.slice(0, topN).map((c, i) => ({ rank: i + 1, source: "sim", name: c.name, value: c.value, player: c.player, club: c.player.Team }));
 }
 
+/** "1st"/"2nd"/"3rd"/"4th"... — used only by the season write-up pool below, to phrase a row's standing without repeating the bare rank number that's already shown right next to the write-up. */
+function ordinal(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+interface SeasonWriteupInput {
+  name: string;
+  category: RecordCategory;
+  value: number;
+  gamesThisSeason: number;
+  club: string;
+  rank: number;
+}
+
+interface SeasonFrag {
+  name: string;
+  verb: string;
+  noun: string;
+  tally: string;
+  club: string;
+  rankPhrase: string;
+}
+
+function toSeasonFrag(i: SeasonWriteupInput): SeasonFrag {
+  const meta = CATEGORY_WRITEUP_META[i.category];
+  const valueStr = i.value.toLocaleString();
+  const games = i.gamesThisSeason;
+  return {
+    name: i.name,
+    verb: meta.verb,
+    noun: meta.noun,
+    tally: i.category === "gamesPlayed" ? `${valueStr} games` : `${valueStr} ${meta.noun} through ${games} game${games === 1 ? "" : "s"}`,
+    club: i.club,
+    rankPhrase: i.rank === 1 ? "leads the competition" : `sits ${ordinal(i.rank)} in the competition`,
+  };
+}
+
+/**
+ * Round 61, Tyler: "The write ups are written mostly for All-Time Career record players; the write
+ * ups dont work well for the This Season tab." The 36-template `WRITEUP_TEMPLATES` pool above always
+ * narrates a full CAREER arc (a debut year, a club history, active-vs-retired) — exactly wrong for a
+ * single in-progress season, where there's no arc to tell yet. This is a smaller, separate pool (16
+ * templates, same deterministic per-player selection via `hashKey` as the all-time pool) that only
+ * ever talks about THIS season's form: no start year, no career club history, no active/retired
+ * framing. Deliberately not reused for the all-time pool's `LegendWriteupInput` shape — season rows
+ * need a genuinely different set of facts (games played THIS season, not a career span), so a
+ * separate `SeasonWriteupInput`/`SeasonFrag` keeps that distinction explicit rather than overloading
+ * one shape to mean two different things depending on caller.
+ */
+const SEASON_WRITEUP_TEMPLATES: ((f: SeasonFrag) => string)[] = [
+  (f) => `${f.name} ${f.rankPhrase} in ${f.noun} this season, ${f.verb} ${f.tally} for ${f.club}.`,
+  (f) => `In career-best form, ${f.name} has been ${f.verb} ${f.noun} all season — ${f.tally} for ${f.club} so far.`,
+  (f) => `${f.name} ${f.rankPhrase} for ${f.club} in ${f.noun}, with ${f.tally} this season.`,
+  (f) => `It's been a breakout season for ${f.name}, who ${f.rankPhrase} in ${f.noun} — ${f.tally} for ${f.club}.`,
+  (f) => `${f.tally} for ${f.name} this season, enough to see them ${f.rankPhrase.replace("sits", "sit")} in ${f.noun} for ${f.club}.`,
+  (f) => `${f.name} has made ${f.noun} a strength this year, ${f.verb} ${f.tally} for ${f.club} so far.`,
+  (f) => `Few have been better in ${f.noun} this season than ${f.name}, who ${f.rankPhrase} with ${f.tally} for ${f.club}.`,
+  (f) => `${f.name}'s ${f.tally} this season has ${f.club} fans taking notice — good enough to see them ${f.rankPhrase.replace("sits", "sit")}.`,
+  (f) => `Through the season so far, ${f.name} has been ${f.verb} ${f.noun} at a rate that has them ${f.rankPhrase.replace("sits", "sitting")} — ${f.tally}.`,
+  (f) => `${f.name} is putting together a strong campaign for ${f.club}, ${f.verb} ${f.tally} and ${f.rankPhrase.replace("sits", "sitting")} in ${f.noun}.`,
+  (f) => `This season belongs to ${f.name} in ${f.noun}: ${f.tally}, ${f.rankPhrase.replace("sits", "sitting")} for ${f.club}.`,
+  (f) => `${f.name} has been in red-hot form for ${f.club}, racking up ${f.tally} and ${f.rankPhrase.replace("sits", "sitting")} in ${f.noun}.`,
+  (f) => `With ${f.tally} so far, ${f.name} ${f.rankPhrase} in ${f.noun} for ${f.club} this season.`,
+  (f) => `${f.name} continues to impress in ${f.club}'s colours, ${f.verb} ${f.tally} this season and ${f.rankPhrase.replace("sits", "sitting")} in ${f.noun}.`,
+  (f) => `A standout season in ${f.noun} for ${f.name} — ${f.tally}, good enough to ${f.rankPhrase} for ${f.club}.`,
+  (f) => `${f.name}'s ${f.noun} numbers this season speak for themselves: ${f.tally}, ${f.rankPhrase.replace("sits", "sitting")} for ${f.club}.`,
+];
+
+function formatSeasonWriteup(i: SeasonWriteupInput): string {
+  const f = toSeasonFrag(i);
+  const template = SEASON_WRITEUP_TEMPLATES[hashKey(`${i.name}|${i.category}|season`) % SEASON_WRITEUP_TEMPLATES.length];
+  return template(f);
+}
+
+function seasonWriteupInputFor(player: Player, category: RecordCategory, value: number, season: Season, rank: number): SeasonWriteupInput {
+  const t = seasonPlayerTotals(season).get(player.PlayerID);
+  return {
+    name: playerFullName(player),
+    category,
+    value,
+    gamesThisSeason: t?.gamesPlayed ?? 0,
+    club: player.Team,
+    rank,
+  };
+}
+
 /**
  * A single row's write-up, computed on demand (not pre-attached to every `RecordRow` — see
- * `combinedRecord`'s own doc comment for why). `undefined` when there's genuinely nothing to show:
- * a real row outside its category's own top 3 (no `bio` was ever scraped for it), or a `seasonOnly`
- * row (no career span to narrate for a single season).
+ * `combinedRecord`'s own doc comment for why). `undefined` when there's genuinely nothing to show: a
+ * real row outside its category's own top 3 (no `bio` was ever scraped for it).
+ *
+ * `seasonOnly` (Round 61) selects between the two template pools — pass `true` for a row that came
+ * from `seasonOnlyRecord` (the Statistics tab's "This Season" mode), `false`/omitted for a row from
+ * `combinedRecordFor` ("All-Time Career" mode). Every `seasonOnlyRecord` row is `source: "sim"` by
+ * construction (that function never merges in real-world data — see its own doc comment), so the
+ * `seasonOnly` branch only ever needs to handle the sim case.
  */
-export function writeupFor(row: RecordRow, category: RecordCategory, seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, currentYear: number): string | undefined {
+export function writeupFor(row: RecordRow, category: RecordCategory, seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, currentYear: number, seasonOnly = false): string | undefined {
   if (row.source === "sim" && row.player) {
+    if (seasonOnly && liveSeason) {
+      return formatSeasonWriteup(seasonWriteupInputFor(row.player, category, row.value, liveSeason, row.rank));
+    }
     return formatLegendWriteup(simLegendWriteupInput(row.player, category, row.value, seasonArchives, liveSeason, currentYear));
   }
   if (row.source === "real" && row.real) {

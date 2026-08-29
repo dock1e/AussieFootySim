@@ -4,6 +4,7 @@ import { useSaveStore } from "../store/useSaveStore";
 import { ClubBadgeByName } from "./ClubBadge";
 import { combinedRecordFor, seasonOnlyRecord, writeupFor, type RecordRow } from "../engine/records";
 import { hasRealWorldData, type RecordCategory } from "../data/realWorldRecords";
+import { SINGLE_GAME_GOALS, SINGLE_GAME_DISPOSALS } from "../data/afltablesBigLists";
 import { ALL_LEAGUE_STATS } from "../engine/seasonSummary";
 import { ARCHETYPES, type Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
@@ -46,6 +47,28 @@ import { CLUBS } from "../types/club";
  * colour-coded ELITE/ABOVE AVG/BELOW AVG cell shading from the reference screenshots — see
  * [[Player Profile and Benchmarking]] for why that needs its own realistic-percentile modelling
  * work rather than being a filter-row add-on.
+ *
+ * Round 59 adds a 25th category, Finals Appearances, to General — Tyler: "most finals appearances
+ * (add this to our General)", sourced from afltables' bg13.txt Big List. Its sim-side total is
+ * LIVE-SEASON-ONLY (see `seasonFinalsAppearances` in `engine/records.ts` for why archived seasons
+ * aren't counted) — a disclosed under-count for any player whose finals appearances span more than
+ * one season, same "flag it, don't fake it" convention this file already applies elsewhere. Worth
+ * being explicit about the practical effect: a season caps out at 4 finals appearances per player,
+ * while the real-world top-100 runs 22-40, so in "All-Time Career" mode this category will in
+ * practice show ONLY real legends — a sim player's finals tally only ever surfaces in "This Season"
+ * mode. Not a bug, just a direct consequence of the disclosed limitation, verified in
+ * `verify_round59_scratch.ts`.
+ *
+ * Round 59 also adds the "Single-Game Highs" reference section at the bottom of the page — Tyler:
+ * "5 goals in a game, 30 disposals in a game (add these to our records for tracking as well)". These
+ * two are event LEDGERS (one row per match performance, not one row per player — see
+ * `data/afltablesBigLists.ts`'s own doc comment), a genuinely different shape from every category
+ * above, so rather than force them into the group/category picker they render in their own
+ * always-visible card beneath it, independent of whichever group/category is currently selected. Three
+ * more Big Lists Tyler asked to "capture" this round — All Margins, team scores ranked by size, and
+ * drawn games — are deliberately NOT rendered anywhere in this UI: his own words scope them to "we
+ * will use this data in future features", so they're captured as typed, ready-to-consume data in
+ * `data/afltablesBigLists.ts` only.
  */
 
 type StatGroup = "General" | "Disposal Leaders" | "Scoring Leaders" | "Stoppage Kings" | "Defensive Leaders";
@@ -55,6 +78,7 @@ const GROUP_ORDER: StatGroup[] = ["General", "Disposal Leaders", "Scoring Leader
 /** Every one of the 24 categories' group, per Tyler's own round-58 list (see this file's own doc comment for the 3-stat judgment call and the 3 placeholders, handled separately via `PLACEHOLDER_STATS`). */
 const CATEGORY_GROUP: Record<RecordCategory, StatGroup> = {
   gamesPlayed: "General",
+  finalsAppearances: "General",
   fantasyPoints: "General",
   disposals: "Disposal Leaders",
   kicks: "Disposal Leaders",
@@ -97,6 +121,7 @@ const CATEGORY_UNIT: Record<RecordCategory, string> = {
   goals: "goals",
   disposals: "disposals",
   gamesPlayed: "games",
+  finalsAppearances: "finals",
   behinds: "behinds",
   shotsAtGoal: "shots at goal",
   goalAssists: "goal assists",
@@ -122,10 +147,11 @@ const CATEGORY_UNIT: Record<RecordCategory, string> = {
 /** Reuses the Dashboard's own `ALL_LEAGUE_STATS` labels (plus one extra for `gamesPlayed`, which isn't a `LeagueStat`) so a stat's name can never drift between the two surfaces. */
 const CATEGORY_LABEL = {
   gamesPlayed: "Games Played",
+  finalsAppearances: "Finals Appearances",
   ...Object.fromEntries(ALL_LEAGUE_STATS.map((s) => [s.key, s.label])),
 } as Record<RecordCategory, string>;
 
-const CATEGORIES: RecordCategory[] = ["gamesPlayed", ...ALL_LEAGUE_STATS.map((s) => s.key)];
+const CATEGORIES: RecordCategory[] = ["gamesPlayed", "finalsAppearances", ...ALL_LEAGUE_STATS.map((s) => s.key)];
 
 type Mode = "allTime" | "season";
 
@@ -388,6 +414,50 @@ export function Records() {
             );
           })}
         </div>
+      </div>
+
+      <div className="card">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game Highs</div>
+        <div className="mb-3 mt-1 text-xs text-slate-500">
+          The biggest individual match performances in VFL/AFL history — one row per match, not per player, so a prolific performer can appear more than once.
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300">Biggest Goalkicking Hauls</div>
+            <div className="space-y-0.5 text-sm">
+              {SINGLE_GAME_GOALS.slice(0, 15).map((g) => (
+                <div key={g.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="w-5 text-slate-500 tabular-nums">{g.rank}</span>
+                    {g.club && <ClubBadgeByName name={g.club} size="sm" />}
+                    <span className="truncate">{g.player}</span>
+                  </span>
+                  <span className="shrink-0 text-right text-xs text-slate-400">
+                    <span className="tabular-nums text-slate-200">{g.scoreLine}</span> · {g.date}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300">Biggest Disposal Games</div>
+            <div className="space-y-0.5 text-sm">
+              {SINGLE_GAME_DISPOSALS.slice(0, 15).map((d) => (
+                <div key={d.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="w-5 text-slate-500 tabular-nums">{d.rank}</span>
+                    {d.club && <ClubBadgeByName name={d.club} size="sm" />}
+                    <span className="truncate">{d.player}</span>
+                  </span>
+                  <span className="shrink-0 text-right text-xs text-slate-400">
+                    <span className="tabular-nums text-slate-200">{d.disposals}</span> ({d.kicks}k, {d.handballs}hb) · {d.date}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <p className="mt-3 text-[11px] text-slate-600">Showing the top 15 of each — 50 deep in the underlying data.</p>
       </div>
     </div>
   );

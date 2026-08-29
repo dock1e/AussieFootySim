@@ -28,11 +28,15 @@ export type { RecordCategory } from "../data/realWorldRecords.ts";
  * `REAL_WORLD_RECORDS`, and this file needs the same type, so it's defined once at the data end to
  * avoid a circular import.
  *
- * Deliberately scoped to career-level totals only. Single-game records (most disposals in a game,
- * etc.) and the "click through to the actual match" cross-linking Tyler also described once are a
- * different mechanism (scanning every persisted match's own box score for single-game highs, not a
- * career-total merge) — see the [[Player Profile and Benchmarking]] research note for that piece,
- * deliberately not built this round either.
+ * Deliberately scoped to career-level totals only — this file's own merge logic never touches a
+ * single match's box score. Round 59 DID add real-world single-game highs (5 goals in a game, 30
+ * disposals in a game) per Tyler's own "add these to our records for tracking as well," but as a
+ * genuinely separate mechanism: `data/afltablesBigLists.ts`'s event ledgers, rendered by
+ * `components/Records.tsx` directly, never routed through this file's `RecordRow`/`combinedRecord`
+ * machinery, since they're one-row-per-MATCH not one-row-per-player. Still NOT built: any AussieFootySim
+ * SIM-side single-game highs (scanning every persisted sim match's own box score the way the real-world
+ * ledgers do for real matches), or the "click through to the actual match" cross-linking Tyler also
+ * described once — see the [[Player Profile and Benchmarking]] research note for that piece.
  */
 
 export interface RecordRow {
@@ -70,6 +74,7 @@ interface LegendWriteupInput {
  */
 const CATEGORY_WRITEUP_META: Record<RecordCategory, { verb: string; noun: string }> = {
   gamesPlayed: { verb: "playing", noun: "games" },
+  finalsAppearances: { verb: "playing in", noun: "finals" },
   goals: { verb: "kicking", noun: "goals" },
   behinds: { verb: "kicking", noun: "behinds" },
   shotsAtGoal: { verb: "taking", noun: "shots at goal" },
@@ -272,6 +277,39 @@ function realLegendWriteupInput(entry: RealWorldRecordEntry, category: RecordCat
 }
 
 /**
+ * Live-season finals appearances, per player — Round 59, Tyler: "most finals appearances (add this
+ * to our General)". A genuine headcount of finals matches (not h&a) each player has a box-score line
+ * for, mirroring `aggregateBoxScores`'s own per-match box-score walk (`seasonSummary.ts`) but over
+ * `season.finals?.matches` instead of `season.played` — `FinalsMatch` carries `week` rather than
+ * `round` (see `engine/finals.ts`), so it isn't a `PlayedMatch` and can't go through that existing
+ * reducer directly; this is a deliberately minimal headcount, not a full stat aggregate, since
+ * "appearances" is all this category needs.
+ *
+ * **Disclosed limitation**: `archiveSeason` (`seasonSummary.ts`) only ever persists `season.played`
+ * box scores into `SeasonArchiveEntry` — `season.finals` is never archived. So this can only ever
+ * count the LIVE season's finals appearances; a sim player's Finals Appearances total in the merged
+ * Statistics tab is an under-count for anyone who also made finals in an already-archived season, not
+ * a true all-time figure the way every other category's sim total is. In practice this cap is severe
+ * enough to be worth spelling out plainly: a season's finals bracket allows at most 4 appearances
+ * per player (one final per week across the 4-week bracket), while the real-world top-100 for this
+ * category runs 22-40 career appearances — so no sim player can EVER crack the "All-Time Career"
+ * view's default top-100 for this one category specifically, no matter how many flags a save wins.
+ * Sim players only ever show up here in "This Season" mode (`seasonOnlyRecord`), or if the UI's topN
+ * is deliberately widened well past 100. Flagged here rather than silently presented as complete.
+ */
+function seasonFinalsAppearances(season: Season): Map<number, number> {
+  const counts = new Map<number, number>();
+  if (!season.finals) return counts;
+  for (const m of season.finals.matches) {
+    for (const idStr of Object.keys(m.result.boxScore)) {
+      const playerId = Number(idStr);
+      counts.set(playerId, (counts.get(playerId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/**
  * The merge itself — real-world `realEntries` (already ranked, but re-sorted here rather than
  * trusted, since a sim player can slot in anywhere, and `realEntries` is `[]` for a category with no
  * real-world source) plus every simulated player with a nonzero `value` in `category`, sorted
@@ -283,15 +321,27 @@ function realLegendWriteupInput(entry: RealWorldRecordEntry, category: RecordCat
  * `writeupFor`'s concern).
  */
 function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEntry[], seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, topN: number): RecordRow[] {
-  const simTotals = allTimePlayerTotals(seasonArchives, liveSeason);
   type Candidate = { name: string; value: number; source: "real" | "sim"; player?: Player; real?: RealWorldRecordEntry };
   const candidates: Candidate[] = [];
-  for (const t of simTotals.values()) {
-    const value = category === "gamesPlayed" ? t.gamesPlayed : t[category];
-    if (value <= 0) continue;
-    const player = getPlayerById(t.playerId);
-    if (!player) continue; // defensive only — every totals entry comes from a real generated player
-    candidates.push({ name: playerFullName(player), value, source: "sim", player });
+  if (category === "finalsAppearances") {
+    // Special-cased: sourced from `season.finals`, not `allTimePlayerTotals` — see
+    // `seasonFinalsAppearances`'s own doc comment for why (and its disclosed live-season-only scope).
+    const finalsCounts = liveSeason ? seasonFinalsAppearances(liveSeason) : new Map<number, number>();
+    for (const [playerId, value] of finalsCounts) {
+      if (value <= 0) continue;
+      const player = getPlayerById(playerId);
+      if (!player) continue; // defensive only — every count entry comes from a real generated player
+      candidates.push({ name: playerFullName(player), value, source: "sim", player });
+    }
+  } else {
+    const simTotals = allTimePlayerTotals(seasonArchives, liveSeason);
+    for (const t of simTotals.values()) {
+      const value = category === "gamesPlayed" ? t.gamesPlayed : t[category];
+      if (value <= 0) continue;
+      const player = getPlayerById(t.playerId);
+      if (!player) continue; // defensive only — every totals entry comes from a real generated player
+      candidates.push({ name: playerFullName(player), value, source: "sim", player });
+    }
   }
   for (const entry of realEntries) {
     candidates.push({ name: entry.name, value: entry.value, source: "real", real: entry });
@@ -316,15 +366,25 @@ export function combinedRecordFor(category: RecordCategory, seasonArchives: Seas
  * elsewhere (the Dashboard's own Competition Leaders card).
  */
 export function seasonOnlyRecord(category: RecordCategory, season: Season, topN = 100): RecordRow[] {
-  const totals = seasonPlayerTotals(season);
   type Candidate = { name: string; value: number; player: Player };
   const candidates: Candidate[] = [];
-  for (const t of totals.values()) {
-    const value = category === "gamesPlayed" ? t.gamesPlayed : t[category];
-    if (value <= 0) continue;
-    const player = getPlayerById(t.playerId);
-    if (!player) continue;
-    candidates.push({ name: playerFullName(player), value, player });
+  if (category === "finalsAppearances") {
+    const finalsCounts = seasonFinalsAppearances(season);
+    for (const [playerId, value] of finalsCounts) {
+      if (value <= 0) continue;
+      const player = getPlayerById(playerId);
+      if (!player) continue;
+      candidates.push({ name: playerFullName(player), value, player });
+    }
+  } else {
+    const totals = seasonPlayerTotals(season);
+    for (const t of totals.values()) {
+      const value = category === "gamesPlayed" ? t.gamesPlayed : t[category];
+      if (value <= 0) continue;
+      const player = getPlayerById(t.playerId);
+      if (!player) continue;
+      candidates.push({ name: playerFullName(player), value, player });
+    }
   }
   candidates.sort((a, b) => b.value - a.value);
   return candidates.slice(0, topN).map((c, i) => ({ rank: i + 1, source: "sim", name: c.name, value: c.value, player: c.player, club: c.player.Team }));

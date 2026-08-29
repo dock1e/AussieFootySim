@@ -53,7 +53,7 @@ import type { LeagueStat } from "../engine/seasonSummary.ts";
  * #1 or #97.
  */
 
-export type RecordCategory = LeagueStat | "gamesPlayed";
+export type RecordCategory = LeagueStat | "gamesPlayed" | "finalsAppearances";
 
 export interface RealWorldRecordEntry {
   name: string;
@@ -104,7 +104,7 @@ export interface RealWorldRecordEntry {
  * North Melbourne's brief 1999-2007 rebrand), BB (Brisbane Bears, the other half of the 1997 merger
  * that became Brisbane Lions).
  */
-const CLUB_CODE_MAP: Record<string, string> = {
+export const CLUB_CODE_MAP: Record<string, string> = {
   AD: "Adelaide",
   BL: "Brisbane Lions",
   CA: "Carlton",
@@ -130,7 +130,7 @@ const CLUB_CODE_MAP: Record<string, string> = {
   BB: "Brisbane Lions",
 };
 
-function clubFromCode(code: string): string | undefined {
+export function clubFromCode(code: string): string | undefined {
   return CLUB_CODE_MAP[code];
 }
 
@@ -186,6 +186,27 @@ function parseDisposalsTail(raw: string): RealWorldRecordEntry[] {
     const codes = tm.split("/");
     const club = clubFromCode(codes[codes.length - 1]);
     return { name, value: Number(valueStr), games: Number(gamesStr), club, stillActive: activeStr === "1" };
+  });
+}
+
+/**
+ * Parses ranks 4-100 of the new Finals Appearances category (Round 59, Tyler: "most finals
+ * appearances (add this to our General)") from afltables' own dedicated Big List
+ * (`https://afltables.com/afl/stats/biglists/bg13.txt`, "All players ranked by finals games
+ * played") — unlike every other category in this file, Finals Appearances has NO Career Totals page
+ * equivalent at all, so the entire 1-100 list is sourced from this one Big List rather than blended
+ * with a second source the way Disposals is. Raw rows are `"Name|TeamCodes|Value|Active"` — no
+ * Games or Years column on this source (bg13.txt tracks only finals games and, as a same-column
+ * secondary sort, finals goals — the goals figure isn't captured here since it's not one of our
+ * tracked categories), so `stillActive` again reads the source's own `*` marker directly, same
+ * convention as `parseDisposalsTail`.
+ */
+function parseFinalsTail(raw: string): RealWorldRecordEntry[] {
+  return raw.split(";").map((row) => {
+    const [name, tm, valueStr, activeStr] = row.split("|");
+    const codes = tm.split("/");
+    const club = clubFromCode(codes[codes.length - 1]);
+    return { name, value: Number(valueStr), club, stillActive: activeStr === "1" };
   });
 }
 
@@ -453,9 +474,35 @@ const MARKS_INSIDE_50_RAW =
 const GOAL_ASSISTS_RAW =
   "Scott Pendlebury|CW|2006-2026|333|442;Eddie Betts|CA/AD|2005-2021|318|350;Tom Hawkins|GE|2007-2024|296|359;Patrick Dangerfield|AD/GE|2008-2026|289|377;Joel Selwood|GE|2007-2022|264|355;Robbie Gray|PA|2007-2022|262|271;Gary Ablett|GE/GC|2002-2020|261|345;Steve Johnson|GE/GW|2002-2017|256|281;Jack Riewoldt|RI|2007-2023|249|347;Travis Boak|PA|2007-2025|248|387;Luke Breust|HW|2011-2025|246|308;Taylor Walker|AD|2009-2026|246|317;Marcus Bontempelli|WB|2014-2026|243|280;Brent Harvey|NM|1996-2016|233|303;Lance Franklin|HW/SY|2005-2023|231|354;Nick Riewoldt|SK|2001-2017|224|308;Toby Greene|GW|2012-2026|223|282;Dustin Martin|RI|2010-2024|221|302;Matthew Pavlich|FR|2000-2016|216|292;Dayne Zorko|BL|2012-2026|212|317;Christian Petracca|ME/GC|2016-2026|211|232;Shane Edwards|RI|2007-2022|211|303;Adam Goodes|SY|1999-2015|210|285;Chris Judd|WC/CA|2002-2015|208|257;Marc Murphy|CA|2006-2021|207|300;Sam Mitchell|HW/WC|2002-2017|207|320;Shaun Burgoyne|PA/HW|2002-2021|207|390;Kieren Jack|SY|2007-2019|202|256;Daniel Wells|NM/CW|2003-2019|201|258;Jordan Lewis|HW/ME|2005-2019|199|319";
 
-/** Every category with a real-world source — 16 of 24, see this file's own doc comment for the full split and why. */
+// --- Finals Appearances (Round 59) — afltables' own dedicated Big List, bg13.txt, in full ---
+// "All players ranked by finals games played" — ranks 1-100 captured Aug 2026. No Years/Games
+// column on this source (see `parseFinalsTail`'s own doc comment), so the top-3 bios below are
+// cross-referenced from each player's own row in this file's other categories (Selwood and
+// Burgoyne from DISPOSALS_RAW/TACKLES_RAW, Tuck from REAL_WORLD_GAMES_PLAYED) rather than lifted
+// directly off bg13.txt itself.
+const FINALS_TAIL_RAW =
+  "Scott Pendlebury|CW|33|1;Tom Hawkins|GE|32|0;Gordon Coventry|CW|31|0;Patrick Dangerfield|AD/GE|31|1;Harry Taylor|GE|31|0;Leigh Matthews|HW|29|0;Wayne Schimmelbusch|KA|29|0;Mark Blicavs|GE|29|1;Bruce Doull|CA|29|0;Lance Franklin|HW/SY|28|0;Jason Akermanis|BB/BL/WB|28|0;Bill Hutchison|ES|28|0;Adam Goodes|SY|28|0;Jimmy Bartel|GE|28|0;Steele Sidebottom|CW|28|1;Mitch Duncan|GE|28|0;Jarrad McVeigh|SY|28|0;Gary Ayres|HW|28|0;Chris Mew|HW|28|0;Kevin Bartlett|RI|27|0;Charlie Cameron|AD/BL|27|1;Dick Reynolds|ES|27|0;Harry Collier|CW|27|0;Martin Pike|ME/FI/KA/BL|27|0;Heath Shaw|CW/GW|27|0;Grant Birchall|HW/BL|27|0;Dermott Brereton|HW/SY/CW|26|0;Steve Johnson|GE/GW|26|0;Luke Parker|SY/KA|26|1;Isaac Smith|HW/GE|26|0;Gary Rohan|SY/GE|26|0;Jude Bolton|SY|26|0;Jordan Lewis|HW/ME|26|0;Andrew Mackie|GE|26|0;Albert Collier|CW/FI|26|0;Sam Mitchell|HW/WC|26|0;Stephen Silvagni|CA|26|0;Gary Ablett|GE/GC|25|0;Luke Hodge|HW/BL|25|0;Dean Kemp|WC|25|0;Lachie Neale|FR/BL|25|1;John Blakey|FI/KA|25|0;Rod McGregor|CA|25|0;David Dench|KA|25|0;Chris Langford|HW|25|0;Jack Titus|RI|24|0;Ryan O'Keefe|SY|24|0;Brent Harvey|KA|24|0;Brent Crosswell|CA/KA/ME|24|0;Robert DiPierdomenico|HW|24|0;Craig Bradley|CA|24|0;Gavin Wanganeen|ES/PA|24|0;Glenn Archer|KA|24|0;Nick Dal Santo|SK/KA|24|0;Rodney Eade|HW/BB|24|0;Dan Hannebery|SY/SK|24|0;Corey Enright|GE|24|0;Guy McKenna|WC|24|0;Wayne Carey|KA/AD|23|0;Alex Jesaulenko|CA/SK|23|0;John Nicholls|CA|23|0;Ron Barassi|ME/CA|23|0;Tim Watson|ES|23|0;Jack Dyer|RI|23|0;Adam Schneider|SY/SK|23|0;Alan Didak|CW|23|0;Peter Jones|CA|23|0;Nigel Lappin|BB/BL|23|0;Justin Leppitsch|BB/BL|23|0;Earl Spalding|ME/CA|23|0;Simon Goodwin|AD|23|0;Francis Bourke|RI|23|0;Justin Madden|ES/CA|23|0;Joel Corey|GE|23|0;Dustin Fletcher|ES|23|0;James Kelly|GE/ES|23|0;Keith Greig|KA|23|0;Dane Rampe|SY|23|1;Josh Gibson|KA/HW|23|0;Dick Lee|CW|22|0;Barry Hall|SK/SY/WB|22|0;Paul Chapman|GE/ES|22|0;Malcolm Blight|KA|22|0;Rene Kink|CW/ES/SK|22|0;David McKay|CA|22|0;Andrew McLeod|AD|22|0;Len Thompson|CW/SY/FI|22|0;Frank Adams|ME|22|0;Kieren Jack|SY|22|0;Tyson Edwards|AD|22|0;Josh Kennedy|HW/SY|22|0;Chris Waterman|WC|22|0;Shaun Hart|BB/BL|22|0;Tony Shaw|CW|22|0;Darren Jolly|ME/SY/CW|22|0;Josh Dunkley|WB/BL|22|1;Charlie Hammond|CA|22|0";
+
+/**
+ * Real-world finals-appearances leaders, top 100, VFL/AFL history 1897-2026 (Round 59). `bio.games`
+ * for the top-3 is each player's own TOTAL CAREER games (cross-referenced from
+ * `REAL_WORLD_GAMES_PLAYED`/`DISPOSALS_RAW`/`TACKLES_RAW` elsewhere in this file — bg13.txt itself
+ * has no games-played column at all), not their finals value — using the finals count for both
+ * `value` and `games` produced a write-up that read as "40 finals across 40 games" (implying every
+ * career game was a final), which every other category's write-ups never do. "40 finals across a
+ * 355-game career" is the honest, intended shape of that sentence.
+ */
+export const REAL_WORLD_FINALS_APPEARANCES: RealWorldRecordEntry[] = [
+  { name: "Joel Selwood", value: 40, bio: { games: 355, startYear: 2007, endYear: 2022, stillActive: false, startClub: "Geelong", endClub: "Geelong" } },
+  { name: "Michael Tuck", value: 39, bio: { games: 426, startYear: 1972, endYear: 1991, stillActive: false, startClub: "Hawthorn", endClub: "Hawthorn" } },
+  { name: "Shaun Burgoyne", value: 35, bio: { games: 407, startYear: 2002, endYear: 2021, stillActive: false, startClub: "Port Adelaide", endClub: "Hawthorn" } },
+  ...parseFinalsTail(FINALS_TAIL_RAW),
+];
+
+/** Every category with a real-world source — 17 of 24 as of Round 59, see this file's own doc comment for the full split and why. */
 export const REAL_WORLD_RECORDS: Partial<Record<RecordCategory, RealWorldRecordEntry[]>> = {
   gamesPlayed: REAL_WORLD_GAMES_PLAYED,
+  finalsAppearances: REAL_WORLD_FINALS_APPEARANCES,
   goals: REAL_WORLD_CAREER_GOALS,
   disposals: [...parseEntries(DISPOSALS_RAW, 3), ...parseDisposalsTail(DISPOSALS_TAIL_RAW)],
   kicks: parseEntries(KICKS_RAW, 3),

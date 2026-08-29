@@ -11,15 +11,18 @@ in `../Configuration.md` ("Tech stack decision record") and `../Engine.md` ("Tec
 re-checked there against 2026 alternatives.
 
 ## Getting started
+Download Node.js: https://nodejs.org/en/download
+Open Command Prompt/Windows PowerShell: cd to the AussieFootySim folder location
+Run the following commands in sequence
 
 ```bash
 npm install
 npm run build:data   # regenerate src/data/generated/players.json from ../Player Database/players_master.csv
-npm run dev           # start the Vite dev server
-npm test               # run the Vitest suite
 npm run build          # type-check + production build
-npm run simulate -- --games=1000 --seed=1 --out=sim-results/results.jsonl   # headless balance-testing CLI
+npm run dev           # start the Vite dev server
 ```
+
+Open your browser and navigate to your http://localhost:5173/
 
 Re-run `npm run build:data` any time the vault's `players_master.csv` changes — the
 generated JSON is gitignored on purpose (it's a build artifact, not a source file).

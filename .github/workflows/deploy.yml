@@ -1,0 +1,46 @@
+# Builds AussieFootySim (tsc + vite build, same as `npm run build` locally) and publishes the static
+# output to GitHub Pages every time master is pushed. No secrets/tokens to manage — deploy-pages uses
+# GitHub's own OIDC token. One-time manual step still required in the repo's own settings (can't be
+# done from a workflow file): Settings -> Pages -> Source: "GitHub Actions".
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deploy in flight at a time; let an in-progress run finish rather than cancelling it, so a
+# quick double-push can't publish a half-built dist/.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

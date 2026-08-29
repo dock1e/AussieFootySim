@@ -10,12 +10,13 @@ import { Contracts } from "./components/Contracts";
 import { TradePeriod } from "./components/TradePeriod";
 import { Draft } from "./components/Draft";
 import { PositionSwitch } from "./components/PositionSwitch";
+import { Records } from "./components/Records";
 import { useGameStore } from "./store/useGameStore";
 import { useSeasonStore } from "./store/useSeasonStore";
 import { useSaveStore } from "./store/useSaveStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
 
-type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "combine" | "contracts" | "trade" | "draft" | "positionSwitch";
+type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "combine" | "contracts" | "trade" | "draft" | "positionSwitch" | "records";
 
 /**
  * Nav consolidation — Aug 2026 round 52, [[UI Consolidation Review]]. Tyler:
@@ -47,6 +48,7 @@ const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "coaching", label: "Coaching", screens: ["selection", "positionSwitch"] },
   { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
   { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts"] },
+  { key: "records", label: "Records", screens: ["records"] },
 ];
 
 const SCREEN_LABELS: Record<Screen, string> = {
@@ -61,6 +63,7 @@ const SCREEN_LABELS: Record<Screen, string> = {
   trade: "Trade",
   draft: "Draft",
   positionSwitch: "Position Switch",
+  records: "Records",
 };
 
 export default function App() {
@@ -187,6 +190,7 @@ export default function App() {
         {screen === "trade" && <TradePeriod />}
         {screen === "draft" && <Draft />}
         {screen === "positionSwitch" && <PositionSwitch />}
+        {screen === "records" && <Records />}
       </main>
     </div>
   );

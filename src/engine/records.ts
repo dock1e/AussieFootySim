@@ -1,8 +1,8 @@
 import type { Player } from "../types/player.ts";
 import { playerFullName } from "../types/player.ts";
-import { getPlayerById } from "../data/loadPlayers.ts";
+import { getPlayerById, getPlayerByFullName } from "../data/loadPlayers.ts";
 import { realWorldRecordsFor, type RealWorldRecordEntry, type RecordCategory } from "../data/realWorldRecords.ts";
-import { allTimePlayerTotals, seasonPlayerTotals, type SeasonArchiveEntry } from "./seasonSummary.ts";
+import { allTimePlayerTotals, seasonPlayerTotals, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
 import type { Season } from "./season.ts";
 
 export type { RecordCategory } from "../data/realWorldRecords.ts";
@@ -43,12 +43,28 @@ export interface RecordRow {
   rank: number;
   source: "real" | "sim";
   name: string;
+  /** For a `"real"` row that's also a continuing career (see `simContribution` below), this is already the MERGED total — `real.value + simContribution`, not the bare frozen real number. */
   value: number;
-  /** Present only for `source === "sim"` — lets the UI link through to a squad/contract/profile view, and is how the Position (archetype) filter applies (real rows have no archetype concept in this system). */
+  /**
+   * Present for every `sim` row, AND — since Round 60 — for a `"real"` row that's a continuing
+   * career: a real legend (e.g. Scott Pendlebury) who's ALSO currently loaded as a playable
+   * AussieFootySim player. Lets the UI link through to a squad/contract/profile view, and is how the
+   * Position (archetype) filter applies to that row (a pure real row, with no linked player, has no
+   * archetype concept in this system and is unaffected by that filter).
+   */
   player?: Player;
   /** Present only for `source === "real"` — the full scraped entry, incl. `bio` when this row is one of that category's top 3. `writeupFor` reads this to build the row's write-up on demand. */
   real?: RealWorldRecordEntry;
-  /** Known for every `sim` row (always `player.Team`) and, since this round, every `real` row too (`RealWorldRecordEntry.club`, scraped alongside every entry, not just the bio'd top 3) — `undefined` only for the handful of legacy Goals/Games real rows outside the top 3, whose original source didn't carry a club column. */
+  /**
+   * Round 60, Tyler: "If I play a game with Scott Pendlebury, will the number of disposals he
+   * achieves in my simulated game be added to the 11,169 disposals? If not, it should." Present only
+   * on a merged continuing-career row — the portion of `value` that came from THIS save specifically
+   * (`value - simContribution` recovers the frozen real starting total). Kept separate rather than
+   * silently blended so the UI can disclose the split honestly instead of presenting one opaque
+   * number of unclear provenance.
+   */
+  simContribution?: number;
+  /** Known for every `sim` row (`player.Team`, always the LIVE current club — so a merged row reflects a trade even though the frozen real snapshot wouldn't know about it) and every `real` row too (`RealWorldRecordEntry.club`, scraped alongside every entry, not just the bio'd top 3) — `undefined` only for the handful of legacy Goals/Games real rows outside the top 3, whose original source didn't carry a club column. */
   club?: string;
 }
 
@@ -261,12 +277,23 @@ function simLegendWriteupInput(player: Player, category: RecordCategory, value: 
   };
 }
 
-function realLegendWriteupInput(entry: RealWorldRecordEntry, category: RecordCategory): LegendWriteupInput | undefined {
+/**
+ * `value` is a caller-supplied override, not `entry.value` — for a merged continuing-career row
+ * (Round 60) `entry.value` is only the frozen real starting total, and the write-up needs to narrate
+ * the row's TRUE (possibly real+sim) total so its prose number doesn't visibly disagree with the
+ * number displayed right next to it. `games`/`startYear`/`endYear`/`stillActive`/clubs still come
+ * from the real bio unchanged — a disclosed simplification; a merged row's `games` doesn't also grow
+ * by the save's own games played, so "11,211 disposals across 442 games" undercounts games slightly
+ * for an active continuing player. Fixing that too would need `games` merged the same way `value` is,
+ * which needs its own sim-side "games played in this category" concept per category — real, separable
+ * follow-up work, not attempted this round.
+ */
+function realLegendWriteupInput(entry: RealWorldRecordEntry, category: RecordCategory, value: number): LegendWriteupInput | undefined {
   if (!entry.bio) return undefined;
   return {
     name: entry.name,
     category,
-    value: entry.value,
+    value,
     games: entry.bio.games,
     startYear: entry.bio.startYear,
     endYear: entry.bio.endYear,
@@ -319,37 +346,83 @@ function seasonFinalsAppearances(season: Season): Map<number, number> {
  * write-up regardless of its rank, not just the top 3 — so unlike the original round, this function
  * itself no longer needs a `currentYear` (that's only relevant to write-up generation, now entirely
  * `writeupFor`'s concern).
+ *
+ * Round 60 adds career continuation: BEFORE, a real legend who was also currently loaded as a
+ * playable AussieFootySim player (e.g. Scott Pendlebury, still an active real player as of this
+ * data's own scrape) produced TWO unrelated rows once he'd played any simulated minutes — his frozen
+ * real total, and a separate `source: "sim"` row starting from 0 — which is exactly what Tyler
+ * flagged: "If I play a game with Scott Pendlebury, will the number of disposals he achieves... be
+ * added to the 11,169 disposals? If not, it should." Now, `getPlayerByFullName` checks whether each
+ * real entry's name resolves to a currently-loaded player; if it does AND that player has a nonzero
+ * sim total for this category, the two are merged into ONE row (`value = real + sim`, `simContribution`
+ * records the save-specific portion — see `RecordRow`'s own doc comment for why that split is kept
+ * rather than hidden), and that player is excluded from the separate sim-only loop below so they're
+ * never double-counted as two rows. A player who hasn't touched this category in the save yet (no sim
+ * minutes) still renders exactly as before — a bare real row — so a fresh save looks unchanged until
+ * something has actually happened to merge in.
  */
+/**
+ * Reads `category`'s own value off a `SeasonPlayerTotals` — shared by every non-`finalsAppearances`
+ * sim lookup in `combinedRecord` so there's exactly one place doing this narrowing. `"finalsAppearances"`
+ * can't ever reach here for real (that category is handled entirely via `seasonFinalsAppearances`'s own
+ * `Map<number, number>`, never via `SeasonPlayerTotals` — see every call site below), but the type
+ * system doesn't know that across function boundaries, so the guard exists purely to narrow `category`
+ * down to `SeasonPlayerTotals`'s own indexable keys.
+ */
+function simStatValue(t: SeasonPlayerTotals, category: RecordCategory): number {
+  if (category === "finalsAppearances") return 0;
+  return category === "gamesPlayed" ? t.gamesPlayed : t[category];
+}
+
 function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEntry[], seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, topN: number): RecordRow[] {
-  type Candidate = { name: string; value: number; source: "real" | "sim"; player?: Player; real?: RealWorldRecordEntry };
+  type Candidate = { name: string; value: number; source: "real" | "sim"; player?: Player; real?: RealWorldRecordEntry; simContribution?: number };
   const candidates: Candidate[] = [];
-  if (category === "finalsAppearances") {
-    // Special-cased: sourced from `season.finals`, not `allTimePlayerTotals` — see
-    // `seasonFinalsAppearances`'s own doc comment for why (and its disclosed live-season-only scope).
-    const finalsCounts = liveSeason ? seasonFinalsAppearances(liveSeason) : new Map<number, number>();
+
+  // One shared playerId -> sim value lookup, built once regardless of which branch `category` needs
+  // — reused both for the real-entry merge below and the sim-only candidate loop, so there's exactly
+  // one place that knows how to read a sim total for this category.
+  const finalsCounts = category === "finalsAppearances" ? (liveSeason ? seasonFinalsAppearances(liveSeason) : new Map<number, number>()) : null;
+  const simTotals = finalsCounts ? null : allTimePlayerTotals(seasonArchives, liveSeason);
+  function simValueFor(playerId: number): number {
+    if (finalsCounts) return finalsCounts.get(playerId) ?? 0;
+    const t = simTotals!.get(playerId);
+    return t ? simStatValue(t, category) : 0;
+  }
+
+  const consumedPlayerIds = new Set<number>();
+  for (const entry of realEntries) {
+    const linkedPlayer = getPlayerByFullName(entry.name);
+    const simContribution = linkedPlayer ? simValueFor(linkedPlayer.PlayerID) : 0;
+    if (linkedPlayer && simContribution > 0) {
+      consumedPlayerIds.add(linkedPlayer.PlayerID);
+      candidates.push({ name: entry.name, value: entry.value + simContribution, source: "real", real: entry, player: linkedPlayer, simContribution });
+    } else {
+      candidates.push({ name: entry.name, value: entry.value, source: "real", real: entry });
+    }
+  }
+
+  if (finalsCounts) {
     for (const [playerId, value] of finalsCounts) {
-      if (value <= 0) continue;
+      if (value <= 0 || consumedPlayerIds.has(playerId)) continue;
       const player = getPlayerById(playerId);
       if (!player) continue; // defensive only — every count entry comes from a real generated player
       candidates.push({ name: playerFullName(player), value, source: "sim", player });
     }
   } else {
-    const simTotals = allTimePlayerTotals(seasonArchives, liveSeason);
-    for (const t of simTotals.values()) {
-      const value = category === "gamesPlayed" ? t.gamesPlayed : t[category];
+    for (const t of simTotals!.values()) {
+      if (consumedPlayerIds.has(t.playerId)) continue;
+      const value = simStatValue(t, category);
       if (value <= 0) continue;
       const player = getPlayerById(t.playerId);
       if (!player) continue; // defensive only — every totals entry comes from a real generated player
       candidates.push({ name: playerFullName(player), value, source: "sim", player });
     }
   }
-  for (const entry of realEntries) {
-    candidates.push({ name: entry.name, value: entry.value, source: "real", real: entry });
-  }
+
   candidates.sort((a, b) => b.value - a.value);
   return candidates.slice(0, topN).map((c, i) => {
-    const club = c.source === "sim" ? c.player?.Team : (c.real?.club ?? c.real?.bio?.endClub);
-    return { rank: i + 1, source: c.source, name: c.name, value: c.value, player: c.player, real: c.real, club };
+    const club = c.player?.Team ?? c.real?.club ?? c.real?.bio?.endClub;
+    return { rank: i + 1, source: c.source, name: c.name, value: c.value, player: c.player, real: c.real, club, simContribution: c.simContribution };
   });
 }
 
@@ -401,7 +474,7 @@ export function writeupFor(row: RecordRow, category: RecordCategory, seasonArchi
     return formatLegendWriteup(simLegendWriteupInput(row.player, category, row.value, seasonArchives, liveSeason, currentYear));
   }
   if (row.source === "real" && row.real) {
-    const input = realLegendWriteupInput(row.real, category);
+    const input = realLegendWriteupInput(row.real, category, row.value);
     return input ? formatLegendWriteup(input) : undefined;
   }
   return undefined;

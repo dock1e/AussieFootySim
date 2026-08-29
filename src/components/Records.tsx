@@ -59,6 +59,16 @@ import { CLUBS } from "../types/club";
  * mode. Not a bug, just a direct consequence of the disclosed limitation, verified in
  * `verify_round59_scratch.ts`.
  *
+ * Round 60, Tyler: "If I play a game with Scott Pendlebury, will the number of disposals he achieves
+ * in my simulated game be added to the 11,169 disposals? If not, it should." Answer was no — a real
+ * legend who's ALSO a currently-loaded, playable AussieFootySim player produced two unrelated rows,
+ * his frozen real total and a separate sim-only row starting from 0. Now `engine/records.ts`'s
+ * `combinedRecord` merges the two into one continuing-career row (see its own doc comment), and
+ * `simContributionCaption` below renders the honest split ("11,169 real + 42 this save") rather than
+ * hiding it behind one opaque blended number — applies to every category with real data, not just
+ * Disposals, and only once a linked player has actually racked up something in this save (a fresh
+ * save's rows look unchanged until then).
+ *
  * Round 59 also adds the "Single-Game Highs" reference section at the bottom of the page — Tyler:
  * "5 goals in a game, 30 disposals in a game (add these to our records for tracking as well)". These
  * two are event LEDGERS (one row per match performance, not one row per player — see
@@ -152,6 +162,19 @@ const CATEGORY_LABEL = {
 } as Record<RecordCategory, string>;
 
 const CATEGORIES: RecordCategory[] = ["gamesPlayed", "finalsAppearances", ...ALL_LEAGUE_STATS.map((s) => s.key)];
+
+/**
+ * Round 60, Tyler: "If I play a game with Scott Pendlebury, will the number of disposals he
+ * achieves in my simulated game be added to the 11,169 disposals? If not, it should." `row.value` on
+ * a merged continuing-career row is already the true total (real + this save) — this only builds the
+ * small disclosure caption showing the split, so the merge reads as transparent rather than an opaque
+ * blended number. `null` for every ordinary row (no `simContribution`), which is most of them.
+ */
+function simContributionCaption(row: RecordRow): string | null {
+  if (!row.simContribution) return null;
+  const base = row.value - row.simContribution;
+  return `${base.toLocaleString()} real + ${row.simContribution.toLocaleString()} this save`;
+}
 
 type Mode = "allTime" | "season";
 
@@ -323,6 +346,7 @@ export function Records() {
               <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent-light">AussieFootySim record</span>
             )}
           </div>
+          {simContributionCaption(goat) && <p className="mt-1 text-xs text-slate-500">{simContributionCaption(goat)} — still an active AussieFootySim player, continuing their real career in this save.</p>}
           {!hasReal && (
             <p className="mt-2 text-xs text-slate-500">
               No reliable, publicly-compiled real-world AFL/VFL all-time total exists for {label.toLowerCase()} — this is AussieFootySim's own all-time leaderboard only.
@@ -375,6 +399,7 @@ export function Records() {
                       {row.value.toLocaleString()} {unit}
                     </span>
                   </div>
+                  {simContributionCaption(row) && <p className="mt-0.5 text-[11px] text-slate-500">{simContributionCaption(row)}</p>}
                   {expanded && expandedWriteup && <p className="mt-2 text-xs text-slate-300">{expandedWriteup}</p>}
                   {expanded && !expandedWriteup && <p className="mt-2 text-xs text-slate-500">No write-up available yet for this player.</p>}
                 </button>
@@ -407,7 +432,10 @@ export function Records() {
                     )}
                     {row.source === "sim" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
                   </span>
-                  <span className="tabular-nums">{row.value.toLocaleString()}</span>
+                  <span className="flex shrink-0 items-baseline gap-1.5">
+                    {simContributionCaption(row) && <span className="text-[11px] text-slate-500">({simContributionCaption(row)})</span>}
+                    <span className="tabular-nums">{row.value.toLocaleString()}</span>
+                  </span>
                 </button>
                 {expanded && <p className="px-3 pb-2 text-xs text-slate-400">{expandedWriteup ?? "No write-up available yet for this player."}</p>}
               </div>

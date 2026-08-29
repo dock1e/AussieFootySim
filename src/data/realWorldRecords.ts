@@ -1,42 +1,73 @@
+import type { LeagueStat } from "../engine/seasonSummary.ts";
+
 /**
- * Real-world VFL/AFL all-time record data — Aug 2026, [[Records]]'s own AFL-wide tier (games,
- * career goals) widened here into full top-100 ranked lists specifically so `engine/records.ts`
- * can merge them against AussieFootySim's own simulated `allTimePlayerTotals` into one combined
- * leaderboard. This supersedes [[Records]]'s own prior design-note stance ("no modelled player
- * should ever 'hold' a real Tony Lockett-tier record — that would misrepresent modelled data as
- * real") — Tyler's own explicit ask this round is exactly that comparison, so this file is now the
- * source of truth for the real side of it. See [[Records]] for the full 22-category real-history
- * reference (Brownlow, Coleman, All-Australian, etc.) — this file only widens the two categories
- * Tyler named concretely (career goals, career games) from that note's own top-10 excerpts to a
- * full top 100, since a merged leaderboard needs the whole list, not just the headline names.
+ * Real-world VFL/AFL all-time record data — Aug 2026, [[Records]]'s own AFL-wide tier widened
+ * across two rounds. The Records tab round (see `engine/records.ts`) first built this for the two
+ * categories Tyler named concretely (career goals, career games). This round widens it to Tyler's
+ * full ask: "The records section needs to be for all of our 23 or 24 tracked statistics. Each
+ * statistic from our game needs to be comparable against the AFL historical records (where
+ * historical records are available)." His own parenthetical is the operative word — this file is
+ * now the honest source of truth for BOTH which of AussieFootySim's 24 trackable categories
+ * (`RecordCategory` below — the 22 `LEADERBOARD_STAT_FIELDS`, plus Fantasy Points, plus Games
+ * Played) have a genuine real-world all-time source, and which do not.
  *
- * Sourced directly from afltables.com's own all-time leaderboards (the same primary source
- * [[Records]] already used), scraped via a live browser session this round:
- *   - https://afltables.com/afl/stats/alltime/careergoals.html (career goals)
- *   - https://afltables.com/afl/stats/alltime/highs.html (career games)
- * Both lists are frozen at the moment they were fetched (Aug 2026) — they do NOT update as the
- * real 2026 AFL season continues, the same "real-world reference snapshot" convention [[Records]]
- * itself already uses. A real, load-bearing correction made this round: Records.md's own prior
- * note (researched earlier in Aug 2026) had Scott Pendlebury's games tally at 437 — re-verified
- * fresh this round directly against afltables.com and confirmed at 442, matching Tyler's own
- * figure exactly. Real AFL games record tallies move week to week for an active player; always
- * prefer a fresh check over an older cached figure.
+ * Real research, not assumption, went into that split. afltables.com's "Detailed Player Stats"
+ * (kicks, handballs, marks, tackles, hitouts, etc.) only exist from 1965 onward — not the full
+ * 1897-2026 VFL/AFL history that Games/Goals cover, since those are the only two stats tracked
+ * since the competition's 1897 start. Several of our categories (contested/uncontested
+ * possessions, marks inside 50, goal assists) are more modern Champion Data metrics still, whose
+ * own "games" column in the source table reflects games that stat was actually recorded for, not
+ * necessarily the player's full career game tally — see the `games` field's own doc comment below.
  *
- * `bio` (career span, clubs, still-active status, full write-up ingredients) is populated ONLY for
- * the top 3 of each category — the scope Tyler asked for ("for the top 3, an option to see a brief
- * write up"). Verified individually against each player's own afltables.com career-summary page
- * (not just the leaderboard row) for the top 3, since a write-up needs exact start/end years and
- * every club they played for, not just a season-count. Ranks 4-100 intentionally carry no `bio` —
- * the merged leaderboard only shows their name and value, same as afl.com.au's own Stats Leaders
- * list does for anyone outside its own "brief write-up" spotlight.
+ * 16 of the 24 categories have a real source and are populated in `REAL_WORLD_RECORDS`: Games
+ * Played and Goals (top 100 — a deeper dedicated all-time list exists for both, scraped the
+ * Records-tab round from https://afltables.com/afl/stats/alltime/careergoals.html and
+ * https://afltables.com/afl/stats/alltime/highs.html), plus Disposals, Kicks, Handballs, Marks,
+ * Behinds, Hit Outs, Tackles, Clearances, Frees For, Frees Against, Contested Possessions,
+ * Uncontested Possessions, Marks Inside 50, and Goal Assists (top 25 each — the deepest real,
+ * publicly-compiled source found for these, afltables' own "Career Totals and Averages" page,
+ * https://afltables.com/afl/stats/players.html, scraped fresh this round via live DOM extraction of
+ * each stat's own top-30 table, `.slice(0, 25)`'d for a clean, verified depth. A disclosed, honest
+ * depth difference from Games/Goals's top 100 — not fabricated padding to reach 100 for categories
+ * whose deepest real source only goes 30 deep to begin with).
+ *
+ * 8 categories have NO reliable, publicly-compiled real-world all-time source and are deliberately
+ * absent from `REAL_WORLD_RECORDS` (see `hasRealWorldData`): Marks On the Lead, Hitouts to
+ * Advantage, Shots at Goal, Spoils, Intercept Marks, Intercept Possessions, Turnovers, and Fantasy
+ * Points — either too-modern Champion Data-only metrics with no all-time compilation, or (Fantasy
+ * Points) not a traditional stat afltables or any other public source tracks career totals for at
+ * all. `engine/records.ts`'s `combinedRecordFor` still returns a full AussieFootySim-only
+ * leaderboard for these — Tyler's own words scope real comparison to "where historical records are
+ * available," not gate the whole category out of the tab.
+ *
+ * `bio` (career span, clubs, still-active status, write-up ingredients) is populated ONLY for the
+ * top 3 of each category — same scope as the original round ("for the top 3, an option to see a
+ * brief write up"), individually verified against each entry's own scraped Years/TM columns. Every
+ * OTHER entry (not just the top 3) still carries the lighter `games`/`club` fields the scraped
+ * source already provides — enough for a club badge and the Team filter at full depth, just not a
+ * full write-up.
  */
+
+export type RecordCategory = LeagueStat | "gamesPlayed";
 
 export interface RealWorldRecordEntry {
   name: string;
-  /** Career total for whichever category this entry belongs to — goals for `REAL_WORLD_CAREER_GOALS`, games for `REAL_WORLD_GAMES_PLAYED`. */
+  /** Career total for whichever category this entry belongs to. */
   value: number;
+  /**
+   * Games this stat was recorded for, per afltables' own table — known for every entry (not just
+   * bio'd top-3). For Games/Goals (tracked since 1897) this is a genuine full-career game tally.
+   * For the more modern Champion Data-era categories (contested/uncontested possessions, marks
+   * inside 50, goal assists, etc.) a player's own figure here can be noticeably lower than their
+   * true total career games, if detailed tracking of that specific stat only began partway through
+   * their career — afltables' own per-category table, not a second independent source, so this is
+   * exactly what "games" means on that player's row in that specific stat's own table.
+   */
+  games?: number;
+  /** Full club name for badge/Team-filter purposes — afltables' own TM column, last code (their most recent club), mapped via `CLUB_CODE_MAP`. Known for every entry, not just bio'd top-3. */
+  club?: string;
   bio?: {
-    /** Career games played — for the games-played list this always equals `value`; kept as its own field so `engine/records.ts`'s `formatLegendWriteup` has one consistent shape for both categories. */
+    /** Career games played — for the games-played list this always equals `value`; kept as its own field so `engine/records.ts`'s `formatLegendWriteup` has one consistent shape for every category. */
     games: number;
     startYear: number;
     /** The last year they appeared, real or (for a still-active player) simply the year this data was frozen. Superseded by `stillActive` in the generated write-up when true. */
@@ -45,6 +76,77 @@ export interface RealWorldRecordEntry {
     startClub: string;
     endClub: string;
   };
+}
+
+/**
+ * afltables' own club shorthand codes, mapped to the full club names `types/club.ts`'s `CLUBS`
+ * array uses (so `ClubBadgeByName` resolves correctly). Five codes are historical/predecessor clubs
+ * rather than one of the current 18 — mapped to their modern successor for badge purposes, same
+ * convention real AFL media uses when citing a pre-merger/pre-relocation/pre-rename player's tally
+ * against today's club names: FO (Footscray, renamed Western Bulldogs 1997), SM (South Melbourne,
+ * relocated to become Sydney in 1982), FI (Fitzroy, merged into Brisbane Lions 1996), KA (Kangaroos,
+ * North Melbourne's brief 1999-2007 rebrand), BB (Brisbane Bears, the other half of the 1997 merger
+ * that became Brisbane Lions).
+ */
+const CLUB_CODE_MAP: Record<string, string> = {
+  AD: "Adelaide",
+  BL: "Brisbane Lions",
+  CA: "Carlton",
+  CW: "Collingwood",
+  ES: "Essendon",
+  FR: "Fremantle",
+  GE: "Geelong",
+  GC: "Gold Coast",
+  GW: "Greater Western Sydney",
+  HW: "Hawthorn",
+  ME: "Melbourne",
+  NM: "North Melbourne",
+  PA: "Port Adelaide",
+  RI: "Richmond",
+  SK: "St Kilda",
+  SY: "Sydney",
+  WC: "West Coast",
+  WB: "Western Bulldogs",
+  FO: "Western Bulldogs",
+  SM: "Sydney",
+  FI: "Brisbane Lions",
+  KA: "North Melbourne",
+  BB: "Brisbane Lions",
+};
+
+function clubFromCode(code: string): string | undefined {
+  return CLUB_CODE_MAP[code];
+}
+
+/**
+ * Parses one of the raw `"Name|TM|Years|Value|GM"` semicolon-joined rows captured directly from a
+ * live afltables.com DOM extraction this round (`Career Totals and Averages`,
+ * https://afltables.com/afl/stats/players.html — see each category's own anchor id in its raw
+ * constant's name). Deliberately parses the exact verbatim captured strings rather than hand-typed
+ * object literals, for every category except Games/Goals — 350 entries across 14 categories is
+ * error-prone to retype by eye; this keeps every value exactly as scraped. `bioCount` entries (the
+ * ones a write-up gets built for) additionally get their `bio` populated from the same row's own
+ * Years/TM columns — `stillActive` is a frozen fact of the Aug 2026 scrape (did this player's own
+ * Years range extend to the 2026 season), same "real-world reference snapshot" convention the
+ * existing Games/Goals data already uses, not re-derived from whatever in-sim year a save has
+ * reached.
+ */
+function parseEntries(raw: string, bioCount: number): RealWorldRecordEntry[] {
+  return raw.split(";").map((row, i) => {
+    const [name, tm, years, valueStr, gamesStr] = row.split("|");
+    const codes = tm.split("/");
+    const club = clubFromCode(codes[codes.length - 1]);
+    const value = Number(valueStr);
+    const games = Number(gamesStr);
+    const base: RealWorldRecordEntry = { name, value, games, club };
+    if (i >= bioCount) return base;
+    const [startYear, endYear] = years.split("-").map(Number);
+    const startClub = clubFromCode(codes[0]) ?? club ?? "";
+    return {
+      ...base,
+      bio: { games, startYear, endYear, stillActive: endYear >= 2026, startClub, endClub: club ?? "" },
+    };
+  });
 }
 
 /** Real-world career goalkicking leaders, top 100, VFL/AFL history 1897-2026. */
@@ -254,3 +356,81 @@ export const REAL_WORLD_GAMES_PLAYED: RealWorldRecordEntry[] = [
   { name: "Don Scott", value: 302 },
   { name: "Luke Power", value: 302 },
 ];
+
+// --- Raw scraped rows, afltables.com "Career Totals and Averages" (https://afltables.com/afl/stats/players.html), Aug 2026 ---
+// Format per entry: "Name|TM|Years|Value|GM" — captured verbatim via live DOM extraction, correctly
+// rank-ordered (afltables renders each category as two side-by-side sequential sub-lists, ranks
+// 1-15 then 16-30 — extraction reads each sub-column in its own row order and concatenates rather
+// than reading left-right per row, which would otherwise interleave ranks 1,16,2,17,3,18...).
+
+const DISPOSALS_RAW =
+  "Scott Pendlebury|CW|2006-2026|11169|442;Robert Harvey|SK|1988-2008|9656|383;Brent Harvey|NM|1996-2016|9213|432;Kevin Bartlett|RI|1965-1983|9151|402;Travis Boak|PA|2007-2025|8976|387;Gary Ablett|GE/GC|2002-2020|8896|357;Craig Bradley|CA|1986-2002|8776|375;Joel Selwood|GE|2007-2022|8746|355;Lachie Neale|FR/BL|2012-2026|8731|317;Sam Mitchell|HW/WC|2002-2017|8687|329;Steele Sidebottom|CW|2009-2026|8522|374;Patrick Dangerfield|AD/GE|2008-2026|8507|377;Michael Tuck|HW|1972-1991|8423|425;Scott West|WB|1993-2008|8222|324;David Mundy|FR|2005-2022|8042|376;Luke Parker|SY/NM|2011-2026|7893|338;Jack Macrae|WB/SK|2013-2026|7691|282;Rory Laird|AD|2013-2026|7652|287;Tony Shaw|CW|1978-1994|7632|313;Brendon Goddard|SK/ES|2003-2018|7606|334;Luke Hodge|HW/BL|2002-2019|7589|346;Simon Black|BL|1998-2013|7580|322;Jordan Lewis|HW/ME|2005-2019|7506|319;Zach Merrett|ES|2014-2026|7481|274;Nick Dal Santo|SK/NM|2002-2016|7375|322";
+
+const KICKS_RAW =
+  "Kevin Bartlett|RI|1965-1983|8293|402;Michael Tuck|HW|1972-1991|6353|425;Leigh Matthews|HW|1969-1985|6017|331;Craig Bradley|CA|1986-2002|5876|375;Wayne Richardson|CW|1966-1978|5829|276;Brent Harvey|NM|1996-2016|5687|432;Robert Harvey|SK|1988-2008|5648|383;Scott Pendlebury|CW|2006-2026|5553|442;Ian Nankervis|GE|1967-1983|5540|324;John Murphy|FI/SM/NM|1967-1980|5276|246;Brad Johnson|WB|1994-2010|5121|364;Nathan Buckley|BB/CW|1993-2007|5075|280;Heath Shaw|CW/GW|2005-2020|5062|325;Greg Wells|ME/CA|1969-1982|4890|266;Steele Sidebottom|CW|2009-2026|4885|374;Bernie Quinlan|FO/FI|1969-1986|4858|365;Luke Hodge|HW/BL|2002-2019|4834|346;Dayne Zorko|BL|2012-2026|4823|317;Kade Simpson|CA|2003-2020|4766|342;Gary Ablett|GE/GC|2002-2020|4696|357;Nathan Burke|SK|1987-2003|4674|323;Paul Roos|FI/SY|1982-1998|4588|356;Tony Shaw|CW|1978-1994|4587|313;Shannon Hurn|WC|2006-2023|4569|333;Garry Wilson|FI|1971-1984|4564|268";
+
+const MARKS_RAW =
+  "Nick Riewoldt|SK|2001-2017|2944|336;Gary Dempsey|FO/NM|1967-1984|2906|328;Stewart Loewe|SK|1986-2002|2503|321;Matthew Richardson|RI|1993-2009|2270|282;Brad Johnson|WB|1994-2010|2153|364;Paul Roos|FI/SY|1982-1998|2140|356;Brendon Goddard|SK/ES|2003-2018|2103|334;Simon Madden|ES|1974-1992|2063|377;Matthew Pavlich|FR|2000-2016|2046|353;Adam Goodes|SY|1999-2015|2038|372;Bernie Quinlan|FO/FI|1969-1986|2025|365;Heath Shaw|CW/GW|2005-2020|2017|325;Chris Grant|WB|1990-2007|2003|341;Paul Salmon|ES/HW|1983-2002|1966|324;Kade Simpson|CA|2003-2020|1949|342;Tom Hawkins|GE|2007-2024|1927|359;Lance Franklin|HW/SY|2005-2023|1912|354;Mitch Duncan|GE|2010-2025|1909|305;Barry Hall|SK/SY/WB|1996-2011|1897|289;David Cloke|RI/CW|1974-1991|1882|332;Terry Daniher|SY/ES|1976-1992|1869|313;Barry Round|FO/SY|1969-1985|1855|327;Corey Enright|GE|2001-2016|1836|332;Steele Sidebottom|CW|2009-2026|1834|374;Jack Riewoldt|RI|2007-2023|1833|347";
+
+const HANDBALLS_RAW =
+  "Scott Pendlebury|CW|2006-2026|5616|442;Lachie Neale|FR/BL|2012-2026|4841|317;Travis Boak|PA|2007-2025|4563|387;Joel Selwood|GE|2007-2022|4399|355;Josh Kennedy|HW/SY|2008-2022|4203|290;Gary Ablett|GE/GC|2002-2020|4200|357;Sam Mitchell|HW/WC|2002-2017|4155|329;Jack Macrae|WB/SK|2013-2026|4134|282;Scott West|WB|1993-2008|4093|324;Ollie Wines|PA|2013-2026|4092|292;Patrick Cripps|CA|2014-2026|4025|253;Robert Harvey|SK|1988-2008|4008|383;Rory Laird|AD|2013-2026|3962|287;Patrick Dangerfield|AD/GE|2008-2026|3951|377;Luke Parker|SY/NM|2011-2026|3941|338;Adam Treloar|GW/CW/WB|2012-2026|3916|263;Clayton Oliver|ME/GW|2016-2026|3863|228;David Mundy|FR|2005-2022|3851|376;Matt Priddis|WC|2006-2017|3815|240;Simon Black|BL|1998-2013|3781|322;Daniel Cross|WB/ME|2002-2015|3687|249;Jordan Lewis|HW/ME|2005-2019|3656|319;Steele Sidebottom|CW|2009-2026|3637|374;Greg Williams|GE/SY/CA|1984-1997|3600|250;Callan Ward|WB/GW|2008-2025|3573|327";
+
+const BEHINDS_RAW =
+  "Kevin Bartlett|RI|1965-1983|781|403;Lance Franklin|HW/SY|2005-2023|742|354;Leigh Matthews|HW|1969-1985|724|330;Gary Ablett|HW/GE|1982-1996|690|248;Jason Dunstall|HW|1985-1998|641|269;Bernie Quinlan|FO/FI|1969-1986|612|364;Tony Lockett|SK/SY|1983-2002|590|281;Matthew Richardson|RI|1993-2009|551|282;Doug Wade|GE/NM|1961-1975|523|205;Jack Riewoldt|RI|2007-2023|480|347;Stephen Kernahan|CA|1986-1997|471|251;Peter McKenna|CW/CA|1965-1977|470|190;Wayne Carey|KA/AD|1989-2004|457|272;Nick Riewoldt|SK|2001-2017|455|336;Tom Hawkins|GE|2007-2024|448|359;Jeremy Cameron|GW/GE|2012-2026|445|297;Taylor Walker|AD|2009-2026|438|317;Matthew Pavlich|FR|2000-2016|435|353;Matthew Lloyd|ES|1995-2009|424|270;Barry Hall|SK/SY/WB|1996-2011|421|289;Saverio Rocca|CW/KA|1992-2006|411|257;Stewart Loewe|SK|1986-2002|410|321;Richard Osborne|FI/SY/WB/CW|1982-1998|408|283;Brendan Fevola|CA/BL|1999-2010|403|204;Garry Wilson|FI|1971-1984|398|268";
+
+const HITOUTS_RAW =
+  "Todd Goldstein|NM/ES|2008-2025|10608|345;Max Gawn|ME|2011-2026|8985|270;Aaron Sandilands|FR|2003-2019|8502|271;Brodie Grundy|CW/ME/SY|2013-2026|8348|263;Jarrod Witts|CW/GC|2013-2026|7499|218;Sam Jacobs|CA/AD/GW|2009-2020|6787|208;Dean Cox|WC|2001-2014|6628|290;Gary Dempsey|FO/NM|1967-1984|6479|294;Shane Mumford|GE/SY/GW|2008-2021|6352|216;Justin Madden|ES/CA|1980-1996|5746|332;Paddy Ryder|ES/PA/SK|2006-2022|5614|281;Nic Naitanui|WC|2009-2022|5549|213;Ben McEvoy|SK/HW|2008-2022|5277|252;Reilly O'Brien|AD|2016-2026|5237|148;Simon Madden|ES|1974-1992|5226|356;Jeff White|FR/ME|1995-2008|5000|268;Darren Jolly|ME/SY/CW|2001-2013|4968|237;Peter Everitt|SK/HW/SY|1993-2008|4961|291;Toby Nankervis|SY/RI|2015-2026|4954|191;Stefan Martin|ME/BL/WB|2008-2022|4661|203;Len Thompson|CW/SM/FI|1965-1980|4643|269;Matthew Clarke|BB/BL/AD/SK|1993-2007|4600|258;Mark Lee|RI|1977-1991|4304|233;Don Scott|HW|1967-1981|4184|264;Brad Ottens|RI/GE|1998-2011|4135|245";
+
+const TACKLES_RAW =
+  "Scott Pendlebury|CW|2006-2026|2031|442;Joel Selwood|GE|2007-2022|1798|355;Matt Priddis|WC|2006-2017|1629|240;Travis Boak|PA|2007-2025|1611|387;Jack Steele|GW/SK/ME|2015-2026|1602|225;Luke Parker|SY/NM|2011-2026|1598|338;Liam Shiels|HW/NM|2009-2024|1560|288;Dayne Zorko|BL|2012-2026|1546|317;Gary Ablett|GE/GC|2002-2020|1534|357;Lenny Hayes|SK|1999-2014|1496|297;Shaun Burgoyne|PA/HW|2002-2021|1492|407;Jude Bolton|SY|1999-2013|1490|325;Josh Kennedy|HW/SY|2008-2022|1488|290;Andrew Swallow|NM|2006-2017|1481|224;Tom Liberatore|WB|2011-2026|1451|268;James Kelly|GE/ES|2002-2017|1446|313;Marcus Bontempelli|WB|2014-2026|1444|280;Jack Redden|BL/WC|2009-2022|1435|263;David Mundy|FR|2005-2022|1422|376;Scott Thompson|ME/AD|2001-2017|1409|308;Rory Sloane|AD|2009-2023|1397|255;Jack Viney|ME|2013-2025|1396|237;Zach Merrett|ES|2014-2026|1379|274;Patrick Cripps|CA|2014-2026|1376|253;Josh Dunkley|WB/BL|2016-2026|1374|217";
+
+const CLEARANCES_RAW =
+  "Lachie Neale|FR/BL|2012-2026|2040|317;Patrick Dangerfield|AD/GE|2008-2026|1922|377;Scott Pendlebury|CW|2006-2026|1910|442;Joel Selwood|GE|2007-2022|1846|355;Josh Kennedy|HW/SY|2008-2022|1809|290;Patrick Cripps|CA|2014-2026|1804|253;Sam Mitchell|HW/WC|2002-2017|1801|329;Simon Black|BL|1998-2013|1715|322;Tom Liberatore|WB|2011-2026|1692|268;Luke Parker|SY/NM|2011-2026|1590|338;Travis Boak|PA|2007-2025|1585|387;Gary Ablett|GE/GC|2002-2020|1545|357;Chris Judd|WC/CA|2002-2015|1499|279;Clayton Oliver|ME/GW|2016-2026|1495|228;David Mundy|FR|2005-2022|1494|376;Marcus Bontempelli|WB|2014-2026|1480|280;Matt Priddis|WC|2006-2017|1473|240;Ollie Wines|PA|2013-2026|1455|292;Trent Cotchin|RI|2008-2023|1441|306;Scott Thompson|ME/AD|2001-2017|1423|308;Callan Ward|WB/GW|2008-2025|1420|327;Luke Shuey|WC|2010-2023|1378|248;Ben Cunnington|NM|2010-2023|1359|238;Adam Simpson|NM|1995-2009|1282|260;Nat Fyfe|FR|2010-2025|1282|248";
+
+const FREES_FOR_RAW =
+  "Ian Nankervis|GE|1967-1983|1081|319;Len Thompson|CW/SM/FI|1965-1980|988|297;John Murphy|FI/SM/NM|1967-1980|985|244;Michael Tuck|HW|1972-1991|957|422;Kevin Bartlett|RI|1965-1983|931|397;Gary Dempsey|FO/NM|1967-1984|923|325;Garry Wilson|FI|1971-1984|907|267;Don Scott|HW|1967-1981|893|298;Joel Selwood|GE|2007-2022|890|355;Sam Newman|GE|1964-1980|845|278;Justin Madden|ES/CA|1980-1996|821|332;Simon Madden|ES|1974-1992|820|374;Wayne Richardson|CW|1966-1978|813|271;Allan Davis|SK/ME/ES/CW|1966-1980|796|246;Leigh Matthews|HW|1969-1985|794|328;Bill Picken|CW/SY|1974-1986|787|237;Greg Wells|ME/CA|1969-1982|784|262;Wayne Schimmelbusch|NM|1973-1987|763|304;Kevin Sheedy|RI|1967-1979|759|245;Barry Round|FO/SY|1969-1985|747|325;Jeff Sarau|SK|1973-1983|724|221;Bruce Nankervis|GE|1970-1983|716|247;Francis Bourke|RI|1967-1981|715|295;David Dench|NM|1969-1984|703|274;Dale Weightman|RI|1978-1993|693|274";
+
+const FREES_AGAINST_RAW =
+  "Don Scott|HW|1967-1981|1303|298;Len Thompson|CW/SM/FI|1965-1980|963|296;Leigh Matthews|HW|1969-1985|939|328;Michael Tuck|HW|1972-1991|906|422;Kevin Bartlett|RI|1965-1983|856|397;Alan Martello|HW/RI|1970-1983|855|251;Sam Newman|GE|1964-1980|847|278;David Cloke|RI/CW|1974-1991|781|329;Roger Merrett|ES/BB|1978-1996|777|313;Justin Madden|ES/CA|1980-1996|772|332;Gary Dempsey|FO/NM|1967-1984|767|325;Jeff Sarau|SK|1973-1983|740|221;Simon Madden|ES|1974-1992|736|374;Mark Lee|RI|1977-1991|721|233;Bernie Quinlan|FO/FI|1969-1986|717|363;Peter Moore|CW/ME|1974-1987|710|243;Barry Round|FO/SY|1969-1985|702|325;Francis Bourke|RI|1967-1981|696|295;Bruce Doull|CA|1969-1986|694|353;Wayne Richardson|CW|1966-1978|687|270;Lance Franklin|HW/SY|2005-2023|680|354;Carl Ditterich|SK/ME|1963-1980|676|248;Allan Davis|SK/ME/ES/CW|1966-1980|661|246;Robert Walls|CA/FI|1967-1980|660|258;John Nicholls|CA|1957-1974|655|199";
+
+const CONTESTED_POSS_RAW =
+  "Patrick Dangerfield|AD/GE|2008-2026|4737|377;Scott Pendlebury|CW|2006-2026|4456|442;Lachie Neale|FR/BL|2012-2026|4157|317;Josh Kennedy|HW/SY|2008-2022|4007|290;Gary Ablett|GE/GC|2002-2020|4000|357;Joel Selwood|GE|2007-2022|3984|355;Travis Boak|PA|2007-2025|3743|387;Luke Parker|SY/NM|2011-2026|3683|338;Patrick Cripps|CA|2014-2026|3673|253;Simon Black|BL|1998-2013|3523|313;David Mundy|FR|2005-2022|3418|376;Sam Mitchell|HW/WC|2002-2017|3401|329;Ollie Wines|PA|2013-2026|3392|292;Clayton Oliver|ME/GW|2016-2026|3362|228;Chris Judd|WC/CA|2002-2015|3276|279;Tom Liberatore|WB|2011-2026|3271|268;Trent Cotchin|RI|2008-2023|3262|306;Nat Fyfe|FR|2010-2025|3206|248;Marcus Bontempelli|WB|2014-2026|3193|280;Matt Priddis|WC|2006-2017|3176|240;Callan Ward|WB/GW|2008-2025|3134|327;Scott Thompson|ME/AD|2001-2017|3000|308;Jack Macrae|WB/SK|2013-2026|2999|282;Dustin Martin|RI|2010-2024|2942|302;Shaun Burgoyne|PA/HW|2002-2021|2905|407";
+
+const UNCONTESTED_POSS_RAW =
+  "Scott Pendlebury|CW|2006-2026|6640|442;Brent Harvey|NM|1996-2016|5743|391;Steele Sidebottom|CW|2009-2026|5664|374;Sam Mitchell|HW/WC|2002-2017|5333|329;Travis Boak|PA|2007-2025|5253|387;Andrew Gaff|WC|2011-2024|5208|280;Brendon Goddard|SK/ES|2003-2018|5205|334;Kane Cornes|PA|2001-2015|5068|300;Zach Merrett|ES|2014-2026|4992|274;Corey Enright|GE|2001-2016|4951|332;Joel Selwood|GE|2007-2022|4943|355;Kade Simpson|CA|2003-2020|4916|342;Gary Ablett|GE/GC|2002-2020|4898|357;Rory Laird|AD|2013-2026|4873|287;Bradley Hill|HW/FR/SK|2012-2026|4790|300;Jordan Lewis|HW/ME|2005-2019|4786|319;Jack Macrae|WB/SK|2013-2026|4766|282;Luke Hodge|HW/BL|2002-2019|4745|346;Lachie Whitfield|GW|2013-2026|4742|278;David Mundy|FR|2005-2022|4703|376;Mitch Duncan|GE|2010-2025|4687|305;Grant Birchall|HW/BL|2006-2021|4644|287;Leigh Montagna|SK|2002-2017|4643|287;Jake Lloyd|SY|2014-2026|4636|294;Lachie Neale|FR/BL|2012-2026|4555|317";
+
+const MARKS_INSIDE_50_RAW =
+  "Tom Hawkins|GE|2007-2024|1091|359;Lance Franklin|HW/SY|2005-2023|1043|354;Jack Riewoldt|RI|2007-2023|1038|347;Nick Riewoldt|SK|2001-2017|1017|336;Barry Hall|SK/SY/WB|1996-2011|936|257;Josh Kennedy|CA/WC|2006-2022|791|293;Matthew Lloyd|ES|1995-2009|763|211;Jonathan Brown|BL|2000-2014|762|256;Jeremy Cameron|GW/GE|2012-2026|751|297;Taylor Walker|AD|2009-2026|720|317;Brendan Fevola|CA/BL|1999-2010|708|204;Matthew Richardson|RI|1993-2009|703|183;Matthew Pavlich|FR|2000-2016|660|353;Warren Tredrea|PA|1997-2010|656|237;Travis Cloke|CW/WB|2005-2017|640|256;Jarryd Roughead|HW|2005-2019|633|283;Jack Gunston|AD/HW/BL|2010-2026|633|300;Tom Lynch|GC/RI|2011-2026|628|251;Jack Darling|WC/NM|2011-2026|626|342;Michael O'Loughlin|SY|1995-2009|594|220;Daniel Bradshaw|BB/BL/SY|1996-2010|593|196;David Neitz|ME|1993-2008|589|187;Drew Petrie|NM/WC|2001-2017|538|332;Chris Tarrant|CW/FR|1998-2012|538|257;Jesse Hogan|ME/FR/GW|2015-2026|537|190";
+
+const GOAL_ASSISTS_RAW =
+  "Scott Pendlebury|CW|2006-2026|333|442;Eddie Betts|CA/AD|2005-2021|318|350;Tom Hawkins|GE|2007-2024|296|359;Patrick Dangerfield|AD/GE|2008-2026|289|377;Joel Selwood|GE|2007-2022|264|355;Robbie Gray|PA|2007-2022|262|271;Gary Ablett|GE/GC|2002-2020|261|345;Steve Johnson|GE/GW|2002-2017|256|281;Jack Riewoldt|RI|2007-2023|249|347;Travis Boak|PA|2007-2025|248|387;Luke Breust|HW|2011-2025|246|308;Taylor Walker|AD|2009-2026|246|317;Marcus Bontempelli|WB|2014-2026|243|280;Brent Harvey|NM|1996-2016|233|303;Lance Franklin|HW/SY|2005-2023|231|354;Nick Riewoldt|SK|2001-2017|224|308;Toby Greene|GW|2012-2026|223|282;Dustin Martin|RI|2010-2024|221|302;Matthew Pavlich|FR|2000-2016|216|292;Dayne Zorko|BL|2012-2026|212|317;Christian Petracca|ME/GC|2016-2026|211|232;Shane Edwards|RI|2007-2022|211|303;Adam Goodes|SY|1999-2015|210|285;Chris Judd|WC/CA|2002-2015|208|257;Marc Murphy|CA|2006-2021|207|300";
+
+/** Every category with a real-world source — 16 of 24, see this file's own doc comment for the full split and why. */
+export const REAL_WORLD_RECORDS: Partial<Record<RecordCategory, RealWorldRecordEntry[]>> = {
+  gamesPlayed: REAL_WORLD_GAMES_PLAYED,
+  goals: REAL_WORLD_CAREER_GOALS,
+  disposals: parseEntries(DISPOSALS_RAW, 3),
+  kicks: parseEntries(KICKS_RAW, 3),
+  marks: parseEntries(MARKS_RAW, 3),
+  handballs: parseEntries(HANDBALLS_RAW, 3),
+  behinds: parseEntries(BEHINDS_RAW, 3),
+  hitouts: parseEntries(HITOUTS_RAW, 3),
+  tackles: parseEntries(TACKLES_RAW, 3),
+  clearances: parseEntries(CLEARANCES_RAW, 3),
+  freeKicksFor: parseEntries(FREES_FOR_RAW, 3),
+  freeKicksAgainst: parseEntries(FREES_AGAINST_RAW, 3),
+  contestedPoss: parseEntries(CONTESTED_POSS_RAW, 3),
+  uncontestedPoss: parseEntries(UNCONTESTED_POSS_RAW, 3),
+  marksInside50: parseEntries(MARKS_INSIDE_50_RAW, 3),
+  goalAssists: parseEntries(GOAL_ASSISTS_RAW, 3),
+};
+
+/** `REAL_WORLD_RECORDS[category]`, or `[]` for one of the 8 categories with no real-world source — the safe default `engine/records.ts`'s merge already treats as "no real entries to merge in." */
+export function realWorldRecordsFor(category: RecordCategory): RealWorldRecordEntry[] {
+  return REAL_WORLD_RECORDS[category] ?? [];
+}
+
+/** Whether `category` has a genuine real-world AFL/VFL all-time source at all — Tyler's own "(where historical records are available)" caveat, made queryable. Drives the Records tab's honest disclosure for the 8 categories that don't. */
+export function hasRealWorldData(category: RecordCategory): boolean {
+  return category in REAL_WORLD_RECORDS;
+}

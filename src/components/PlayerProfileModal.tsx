@@ -10,6 +10,7 @@ import { ClubBadgeByName } from "./ClubBadge";
 import { PlayerLink } from "./PlayerLink";
 import { seasonPlayerTotals, allTimePlayerTotals, toAverageMap, ALL_LEAGUE_STATS, type LeagueStat, type SeasonPlayerTotals, type SeasonArchiveEntry } from "../engine/seasonSummary";
 import { simCareerSpan } from "../engine/records";
+import { draftHistoryFor, type DraftHistoryEntry } from "../data/realDraftHistory";
 import type { Season } from "../engine/season";
 import type { BoxScoreLine } from "../engine/match";
 import {
@@ -42,6 +43,16 @@ import {
  * (season-cumulative Rating) column — `engine/ratings.ts`'s AussieFootySim
  * Rating exists per-MATCH but isn't summed into a season/career total
  * anywhere yet (a real, separable follow-up, not attempted this round).
+ *
+ * Round 65 — [[Real Draft History and Prospect Talent Pool]]. Fills the
+ * "no Draft/Recruited-From equivalent" gap flagged above: `draftHistoryFor`
+ * looks up `data/realDraftHistory.ts` by exact full-name match (same
+ * merge pattern as `getPlayerByFullName`) and, when found, adds a Draft
+ * chip to the header strip plus a "Draft & Honours" table (pick, club,
+ * grade, real-world career votes/awards). Silently absent for any player
+ * with no match — which as of this round is most players, since real
+ * draft history only covers 2025 in full plus ~10 individually-verified
+ * notable rows from 2008-2023, not the full 18-year history yet.
  */
 
 const KEY_STATS: LeagueStat[] = ["disposals", "kicks", "handballs", "marks", "tackles", "clearances", "fantasyPoints"];
@@ -143,6 +154,9 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
 
   const yearRows = useMemo(() => yearRowsFor(player, seasonArchives, season, year), [player, seasonArchives, season, year]);
 
+  const draftEntries = useMemo(() => draftHistoryFor(playerFullName(player)), [player]);
+  const primaryDraftEntry = useMemo(() => primaryDraftEntryOf(draftEntries), [draftEntries]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-card border border-base-700 bg-base-800/60 px-4 py-3 text-sm">
@@ -162,10 +176,65 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
           <span className="text-slate-400">Archetype </span>
           <span className="font-semibold">{player.archetype}</span>
         </div>
+        {primaryDraftEntry && (
+          <div>
+            <span className="text-slate-400">Draft </span>
+            <span className="font-semibold tabular-nums">
+              {primaryDraftEntry.year}
+              {primaryDraftEntry.pickNumber !== null ? `, Pick ${primaryDraftEntry.pickNumber}` : ""}
+            </span>
+            <span className="text-slate-500"> ({primaryDraftEntry.club})</span>
+          </div>
+        )}
         {span.stillActive && (
           <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-400">Active {year}</span>
         )}
       </div>
+
+      {draftEntries.length > 0 && (
+        <section>
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Draft &amp; Honours</div>
+          <p className="mb-2 text-[11px] text-slate-500">
+            Real-world draft/trade history sourced from draftguru.com.au (Aug 2026). Games, goals, and votes below
+            are this player's real-world career-to-date totals — separate from the AussieFootySim stats elsewhere
+            on this page.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500">
+                  <th className="py-1.5 pr-3 font-normal">Year</th>
+                  <th className="py-1.5 pr-3 font-normal">Type</th>
+                  <th className="py-1.5 pr-3 font-normal">Pick</th>
+                  <th className="py-1.5 pr-3 font-normal">Club</th>
+                  <th className="py-1.5 pr-3 font-normal">Grade</th>
+                  <th className="py-1.5 pr-3 text-right font-normal">Games</th>
+                  <th className="py-1.5 pr-3 text-right font-normal">Goals</th>
+                  <th className="py-1.5 pr-3 text-right font-normal">CV</th>
+                  <th className="py-1.5 pr-3 text-right font-normal">BV</th>
+                  <th className="py-1.5 font-normal">Awards</th>
+                </tr>
+              </thead>
+              <tbody>
+                {draftEntries.map((e, i) => (
+                  <tr key={i} className="border-t border-base-800">
+                    <td className="py-1.5 pr-3 tabular-nums">{e.year}</td>
+                    <td className="py-1.5 pr-3">{e.draftType}</td>
+                    <td className="py-1.5 pr-3 tabular-nums">{e.pickNumber ?? "—"}</td>
+                    <td className="py-1.5 pr-3">{e.club}</td>
+                    <td className="py-1.5 pr-3">{e.grade}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{e.games}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{e.goals}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{e.coachesVotes}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{e.brownlowVotes}</td>
+                    <td className="py-1.5 text-xs text-slate-400">{e.awards || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section>
         <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Key Stats &amp; Performance</div>
@@ -267,6 +336,14 @@ function ToggleGroup<T extends string>({ value, onChange, labels }: { value: T; 
 interface YearRow {
   year: number;
   totals: SeasonPlayerTotals;
+}
+
+/** Which of a player's (possibly several — draft, then a later trade, etc.) real-world entries best represents "how they entered the system": earliest entry that actually has a pick number (National/Rookie/Pre-Draft/Pre-Season), falling back to the earliest entry of any type (e.g. a Trade or FA row) if none has one. */
+function primaryDraftEntryOf(entries: DraftHistoryEntry[]): DraftHistoryEntry | null {
+  if (entries.length === 0) return null;
+  const withPick = entries.filter((e) => e.pickNumber !== null).sort((a, b) => a.year - b.year);
+  if (withPick.length > 0) return withPick[0];
+  return [...entries].sort((a, b) => a.year - b.year)[0];
 }
 
 /** One row per year this player has a `gamesPlayed > 0` entry, oldest first — every archived season plus (if applicable) the live one. Shared by `CareerTable` and `FantasyPointsChart` so both read off the identical underlying rows. */

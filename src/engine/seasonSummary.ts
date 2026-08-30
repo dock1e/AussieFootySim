@@ -5,7 +5,8 @@ import { fantasyPointsFor, computeAussieFootySimRatings } from "./ratings.ts";
 import { computeLadder, type LadderRow, type MatchOutcome } from "./ladder.ts";
 import { roundsForClub, type FixtureMatch } from "./fixture.ts";
 import { isRoundPlayed, type Season, type PlayedMatch } from "./season.ts";
-import type { BoxScoreLine } from "./match.ts";
+import type { BoxScoreLine, MatchResult } from "./match.ts";
+import type { FinalsSeriesResult } from "./finals.ts";
 
 /**
  * Season-wide (multi-match) summary helpers for the Aug 2026 round 50
@@ -268,26 +269,80 @@ export function toAverageMap(totals: Map<number, SeasonPlayerTotals>): Map<numbe
 }
 
 /**
- * One completed season's worth of history, compact enough to keep forever —
- * the final ladder plus every player's own season totals, NOT the full
- * match-by-match `played` log (see [[Season Stats and Records]]'s own
- * persistence recommendation for why: the UI only ever needs pre-aggregated
- * per-season numbers, so keeping the full log would be unnecessary weight
- * for data nothing reads at that granularity). `playerTotals` is a plain
- * array, not a `Map` — arrays round-trip through `JSON.stringify`/IndexedDB
- * natively, so `SaveGameData`'s own serialize/deserialize pair (which
- * already has to special-case `Season.condition`'s real `Map`) needs zero
- * new special-casing for this.
+ * One completed season's worth of history — the final ladder, every
+ * player's own season totals, AND (Round 64, [[Player Profile and
+ * Benchmarking]]) the match-by-match log itself: `played` (every h&a
+ * match) and `finals` (the 4-week bracket, if that season reached finals).
+ *
+ * Originally (Round 54) this deliberately kept ONLY the aggregated
+ * `playerTotals`, not the full log — "the UI only ever needs pre-aggregated
+ * per-season numbers." Round 64 reverses that call: Tyler wants to reopen a
+ * specific historical match years later ("relish their players amazing
+ * game even if it was 5 or 6 seasons ago... bask in that glory"), which
+ * needs the real box score for that one match, not just a season sum a
+ * per-game high can't be reconstructed from.
+ *
+ * **Every match's `result.events` is stripped to `[]` at archive time** —
+ * NOT kept, despite `MatchResult`'s own type still technically allowing it.
+ * Measured directly while building this round's verify script: one match's
+ * full tick-by-tick event log (706 events, each carrying every on-ground
+ * player's live position via `trackedPositions`) serializes to ~1.5MB;
+ * projected across a full 216-match season that's ~330MB, and archiving
+ * just TWO seasons at that size crashes `JSON.stringify` outright
+ * (`RangeError: Invalid string length`) — which is exactly the code path
+ * `useSaveStore.ts`'s `exportJSON` uses for the save-file export/import
+ * feature. Box score alone is ~26KB/match (~5.7MB/season) — safe
+ * indefinitely. The stripped data was never actually needed here: `.events`
+ * has exactly one consumer in this codebase, live tick-by-tick match
+ * playback (`useMatchPlayback.ts`/`LiveMatch.tsx`/`MatchCanvas.tsx`), and it
+ * only ever reads the LIVE `Season.played`, never an archive — confirmed by
+ * grepping every `.events` site before adding this — so no archived-match
+ * consumer (single-game highs, Benchmarking, `ArchivedMatchView`) loses
+ * anything by not having it. If a future round wants archived-match replay,
+ * that's a deliberate, separate decision to make then, not a side effect of
+ * this one.
+ *
+ * `played`/`finals` are OPTIONAL — an archive entry from a save written
+ * before Round 64 simply won't have them. Every reader of these two fields
+ * (single-game-high scanning, match click-through) treats a missing value
+ * as "no match log available for this season," an honest boundary, not an
+ * error — the same convention `allTimePlayerTotals` already established
+ * for "only counts what's actually been tracked." No `SAVE_SCHEMA_VERSION`
+ * bump needed, matching every other additive field this project has
+ * shipped (`eligibility`, `combineWindow`, etc.) — see saveGame.ts.
+ *
+ * `playerTotals`/`played`/`finals.matches` are plain arrays, not `Map`s —
+ * arrays round-trip through `JSON.stringify`/IndexedDB natively, so
+ * `SaveGameData`'s own serialize/deserialize pair (which already has to
+ * special-case `Season.condition`'s real `Map`) needs zero new
+ * special-casing for any of this — confirmed by reading `MatchResult`/
+ * `PlayedMatch`/`FinalsSeriesResult` fresh before adding this: none of them
+ * carry a `Map`/`Set` anywhere in their shape.
  */
 export interface SeasonArchiveEntry {
   year: number;
   ladder: LadderRow[];
   playerTotals: SeasonPlayerTotals[];
+  /** Every home-and-away match this season, box score included, `result.events` stripped to `[]` (see this interface's own doc comment for why). `undefined` for an archive written before Round 64. */
+  played?: PlayedMatch[];
+  /** The 4-week finals bracket this season reached, or `null` if this club's season/the competition didn't have one recorded (shouldn't happen in practice — every season runs finals — but mirrors `Season.finals`'s own nullability rather than assuming). Same `result.events`-stripped box scores as `played`. `undefined` (as opposed to `null`) for an archive written before Round 64. */
+  finals?: FinalsSeriesResult | null;
 }
 
-/** Builds one archive entry from a just-finished season — called from `saveGame.ts`'s `runOffSeasonOnSave`, the one moment a season's own data would otherwise be discarded outright (`season` gets set to `null` there). */
+/** Strips the heavy tick-by-tick event log down to just the box score/score line a match needs once archived — see `SeasonArchiveEntry`'s own doc comment for the measured size blowout this avoids. */
+function stripEventsForArchive(result: MatchResult): MatchResult {
+  return { ...result, events: [] };
+}
+
+/** Builds one archive entry from a just-finished season — called from `saveGame.ts`'s `runOffSeasonOnSave`, the one moment a season's own data would otherwise be discarded outright (`season` gets set to `null` there). Round 64: now also keeps the `played`/`finals` match logs (box score, events stripped — see `SeasonArchiveEntry`'s own doc comment), not just the aggregated totals. */
 export function archiveSeason(season: Season, year: number): SeasonArchiveEntry {
-  return { year, ladder: season.ladder, playerTotals: [...seasonPlayerTotals(season).values()] };
+  return {
+    year,
+    ladder: season.ladder,
+    playerTotals: [...seasonPlayerTotals(season).values()],
+    played: season.played.map((m) => ({ ...m, result: stripEventsForArchive(m.result) })),
+    finals: season.finals ? { ...season.finals, matches: season.finals.matches.map((m) => ({ ...m, result: stripEventsForArchive(m.result) })) } : season.finals,
+  };
 }
 
 function mergeTotals(maps: Map<number, SeasonPlayerTotals>[]): Map<number, SeasonPlayerTotals> {

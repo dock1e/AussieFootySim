@@ -12,6 +12,7 @@ import { defaultTeamPlan } from "../engine/tactics";
 import { TeamPrep } from "./MatchPreparation";
 import { SelectionGround, GROUND_ROW_POSITIONS } from "./SelectionGround";
 import { SelectionPlayerList } from "./SelectionPlayerList";
+import { PlayerLink } from "./PlayerLink";
 
 /**
  * Selection Committee — Configuration.md "Positions" (18 on-field slots + 5
@@ -230,7 +231,7 @@ function InterchangeEligibilityEditor({
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-base-700 px-1.5 py-0.5 text-[10px] tabular-nums text-slate-400">#{player.jumperNumber}</span>
                 <span className="text-sm font-semibold text-slate-100">
-                  {player.fname} {player.lname}
+                  <PlayerLink player={player} />
                 </span>
                 <span className="text-xs text-slate-500">{player.archetype}</span>
               </div>

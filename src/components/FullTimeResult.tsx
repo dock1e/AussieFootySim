@@ -6,6 +6,7 @@ import { quarterlyPoints, sumTeam } from "../engine/summary";
 import { computeAussieFootySimRatings, fantasyPointsFor } from "../engine/ratings";
 import { DetailedStatsTable } from "./DetailedStatsTable";
 import { ClubBadgeByName } from "./ClubBadge";
+import { PlayerLink } from "./PlayerLink";
 
 /**
  * Full-time result screen — User Interface.md "Full-time result": score,
@@ -127,7 +128,7 @@ export function FullTimeResult({
           <div className="flex items-center justify-between">
             <div>
               <div className="text-lg font-semibold">
-                {bestOnGround.player.fname} {bestOnGround.player.lname}
+                <PlayerLink player={bestOnGround.player} />
               </div>
               <div className="mt-0.5 flex items-center gap-1.5 text-sm text-slate-400">
                 <ClubBadgeByName name={bestOnGround.player.Team} size="sm" />
@@ -290,7 +291,7 @@ function TopPerformers({
             <span className="flex items-center gap-2 truncate">
               <span className="w-4 shrink-0 text-slate-500 tabular-nums">{i + 1}</span>
               <span className="truncate">
-                {player.fname} {player.lname}
+                <PlayerLink player={player} />
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-3 tabular-nums">

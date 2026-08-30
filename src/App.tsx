@@ -11,6 +11,7 @@ import { TradePeriod } from "./components/TradePeriod";
 import { Draft } from "./components/Draft";
 import { PositionSwitch } from "./components/PositionSwitch";
 import { Records } from "./components/Records";
+import { PlayerProfileModal } from "./components/PlayerProfileModal";
 import { useGameStore } from "./store/useGameStore";
 import { useSeasonStore } from "./store/useSeasonStore";
 import { useSaveStore } from "./store/useSaveStore";
@@ -192,6 +193,7 @@ export default function App() {
         {screen === "positionSwitch" && <PositionSwitch />}
         {screen === "records" && <Records />}
       </main>
+      <PlayerProfileModal />
     </div>
   );
 }

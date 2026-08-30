@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState } from "react";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { ClubBadgeByName } from "./ClubBadge";
+import { PlayerLink } from "./PlayerLink";
 import { combinedRecordFor, seasonGroupTable, writeupFor, type RecordRow, type SeasonStatRow } from "../engine/records";
 import { hasRealWorldData, type RecordCategory } from "../data/realWorldRecords";
 import { SINGLE_GAME_GOALS, SINGLE_GAME_DISPOSALS } from "../data/afltablesBigLists";
@@ -489,7 +490,15 @@ export function Records() {
                     <span className="flex min-w-0 items-center gap-2">
                       <span className={`w-8 tabular-nums ${tierRankClasses(row.rank)}`}>{row.rank}</span>
                       {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                      <span className={`truncate ${isGoat ? "font-semibold" : ""}`}>{row.name}</span>
+                      <span className={`truncate ${isGoat ? "font-semibold" : ""}`}>
+                        {row.player ? (
+                          <PlayerLink player={row.player} as="span">
+                            {row.name}
+                          </PlayerLink>
+                        ) : (
+                          row.name
+                        )}
+                      </span>
                       {row.source === "real" && row.real?.stillActive && (
                         <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
                       )}
@@ -572,7 +581,11 @@ export function Records() {
                         <td className="px-2 py-1.5">
                           <span className="flex min-w-0 items-center gap-2">
                             {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                            <span className="truncate">{row.name}</span>
+                            <span className="truncate">
+                              <PlayerLink player={row.player} as="span">
+                                {row.name}
+                              </PlayerLink>
+                            </span>
                           </span>
                         </td>
                         {groupCategories.map((c) => (

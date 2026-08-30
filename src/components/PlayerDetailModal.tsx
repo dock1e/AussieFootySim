@@ -3,6 +3,7 @@ import { RATED_ATTRIBUTES, playerFullName } from "../types/player";
 import { seedMorale } from "../engine/morale";
 import { freeAgencyStatus } from "../engine/contracts";
 import { fitnessBand, moraleBand, NumberWithPill, StatusPill, type PillTone } from "./StatusPill";
+import { usePlayerProfileStore } from "../store/usePlayerProfileStore";
 
 /**
  * Player Detail Modal — User Interface.md's shared component: header row,
@@ -143,9 +144,20 @@ export function PlayerDetailModal({ player, currentYear, onClose }: PlayerDetail
               </div>
             </div>
           </div>
-          <button onClick={onClose} className="rounded-lg bg-base-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-base-600" aria-label="Close">
-            Close
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={() => {
+                onClose();
+                usePlayerProfileStore.getState().openPlayer(p.PlayerID);
+              }}
+              className="rounded-lg bg-primary/20 px-3 py-1.5 text-sm font-medium text-primary-light hover:bg-primary/30"
+            >
+              View Full Profile &amp; Benchmarking
+            </button>
+            <button onClick={onClose} className="rounded-lg bg-base-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-base-600" aria-label="Close">
+              Close
+            </button>
+          </div>
         </div>
         <div className="mt-2 text-xs text-slate-500">
           Age {p.Age} &middot; {p.height}cm &middot; {p.weight}kg &middot; Drafted {p.draft_year} (Pick {p.draft_pick}, {p.draft_draftType}) &middot; Origin:{" "}

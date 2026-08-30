@@ -263,7 +263,15 @@ function formatLegendWriteup(i: LegendWriteupInput): string {
  * not the expected case — a real debut should never be LATER than the save's own earliest record of
  * the player, but this still favours the earlier year rather than silently overriding it if that ever happened.
  */
-function simLegendWriteupInput(player: Player, category: RecordCategory, value: number, seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, currentYear: number): LegendWriteupInput {
+/**
+ * Extracted Round 64 ([[Player Profile and Benchmarking]]'s header strip
+ * needs the exact same "debut year"/"still active" derivation this function
+ * originally computed inline for write-ups only) — behaviour is byte-for-byte
+ * unchanged, just now reusable instead of a second copy of this logic living
+ * in the Player Profile view. See the doc comment that used to sit here
+ * (now on `simLegendWriteupInput` below) for the full reasoning.
+ */
+export function simCareerSpan(player: Player, seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, currentYear: number): { startYear: number; endYear: number; stillActive: boolean } {
   const years: number[] = [];
   for (const archive of seasonArchives) {
     const t = archive.playerTotals.find((pt) => pt.playerId === player.PlayerID);
@@ -282,6 +290,34 @@ function simLegendWriteupInput(player: Player, category: RecordCategory, value: 
   const realDebutYear = debutYearFor(playerFullName(player));
   const startYear = realDebutYear !== undefined ? Math.min(realDebutYear, simStartYear) : simStartYear;
   const endYear = years[years.length - 1] ?? currentYear;
+  return { startYear, endYear, stillActive };
+}
+
+/**
+ * Computes a simulated player's own `LegendWriteupInput` purely from AussieFootySim data that
+ * already exists. Debut year is the earliest year (across `seasonArchives` plus, if they're in it,
+ * the live season) this player has a `gamesPlayed > 0` entry; "still active" is true iff they have
+ * one in the LIVE season specifically. **Disclosed simplification**: `startClub`/`endClub` both read
+ * the player's current `Team` — this codebase doesn't track club-per-season history yet (only a
+ * live "current club," mutated in place by trades/free agency), so a player who has actually changed
+ * clubs mid-career would read as a single-club career here. Real club history is exactly the kind of
+ * data the researched [[Player Profile and Benchmarking]] note flags AussieFootySim needs
+ * regardless of this feature. Deliberately does NOT fold in `stat_GM`/`stat_GL` (the player's real
+ * 2025-season snapshot baseline, see `types/player.ts`) — that's a single real SEASON's totals, not
+ * a real career total, so adding it would silently misstate a modelled player's own AussieFootySim
+ * career as bigger than what they've actually racked up inside this simulation.
+ *
+ * Round 61, Tyler: "all our plays in the This Season tab believe that they first started their
+ * careers in 2026." The bug: `startYear` used to be ONLY the earliest year this SAVE has the player
+ * recorded playing — correct for a genuinely new, generated player, but wrong for any loaded player
+ * who's also a real AFL athlete whose actual career predates the save (Nick Daicos would read as
+ * "started in 2026" instead of his real 2022 debut). `data/realDebutDates.ts`'s `debutYearFor` now
+ * supplies the true year when known; `Math.min` against the sim-tracked year is a defensive floor,
+ * not the expected case — a real debut should never be LATER than the save's own earliest record of
+ * the player, but this still favours the earlier year rather than silently overriding it if that ever happened.
+ */
+function simLegendWriteupInput(player: Player, category: RecordCategory, value: number, seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, currentYear: number): LegendWriteupInput {
+  const { startYear, endYear, stillActive } = simCareerSpan(player, seasonArchives, liveSeason, currentYear);
   const games = allTimePlayerTotals(seasonArchives, liveSeason).get(player.PlayerID)?.gamesPlayed ?? 0;
   return {
     name: playerFullName(player),

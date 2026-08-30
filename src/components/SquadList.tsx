@@ -5,6 +5,7 @@ import { useSaveStore } from "../store/useSaveStore";
 import { NumberWithPill, fitnessBand, moraleBand } from "./StatusPill";
 import { seedMorale } from "../engine/morale";
 import { freeAgencyStatus } from "../engine/contracts";
+import { PlayerLink } from "./PlayerLink";
 
 /**
  * Squad list — see User Interface.md "Squad list": "A dense, sortable
@@ -102,7 +103,7 @@ export function SquadList({ players, liveCondition }: { players: Player[]; liveC
               <tr key={p.PlayerID} className="border-b border-base-700/60 last:border-0 hover:bg-base-700/40">
                 <td className="px-3 py-2 tabular-nums text-slate-400">{p.jumperNumber}</td>
                 <td className="px-3 py-2 font-medium">
-                  {p.fname} {p.lname}
+                  <PlayerLink player={p} />
                 </td>
                 <td className="px-3 py-2 text-slate-400">{p.archetype}</td>
                 <td className="px-3 py-2 tabular-nums">{p.Age}</td>

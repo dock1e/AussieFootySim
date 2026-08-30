@@ -11,6 +11,7 @@ import { summariseLines } from "../data/lines";
 import { gapBand } from "./StatusPill";
 import { LadderTable } from "./LadderTable";
 import { ClubBadge } from "./ClubBadge";
+import { PlayerLink } from "./PlayerLink";
 import { Modal, ExpandHint } from "./Modal";
 import { RoundFixture } from "./SeasonHub";
 import { FullTimeResult } from "./FullTimeResult";
@@ -417,7 +418,7 @@ function LastGameCard({
             <div key={p.player.PlayerID} className="flex items-center justify-between gap-2">
               <span className="truncate">
                 <span className="mr-1.5 text-slate-500 tabular-nums">{i + 1}</span>
-                {playerFullName(p.player)}
+                <PlayerLink player={p.player} />
               </span>
               <span className="tabular-nums text-slate-400">
                 {p.rating.toFixed(0)} RTG &middot; {p.fantasyPoints.toFixed(0)} FP
@@ -636,7 +637,7 @@ function LeagueLeadersCard({
                     >
                       <span className="truncate">
                         <span className="mr-1 text-slate-500 tabular-nums">{i + 1}</span>
-                        {playerFullName(r.player)}
+                        <PlayerLink player={r.player} />
                       </span>
                       <span className="tabular-nums">{Math.round(r.value)}</span>
                     </div>
@@ -761,7 +762,9 @@ function LeaderModal({
               <span className="flex min-w-0 items-center gap-2">
                 <span className="w-6 text-slate-500 tabular-nums">{i + 1}</span>
                 <ClubBadge club={clubByName(r.player.Team)} size="sm" />
-                <span className="truncate">{playerFullName(r.player)}</span>
+                <span className="truncate">
+                  <PlayerLink player={r.player} />
+                </span>
               </span>
               <span className="tabular-nums">{activeView.isAverage ? r.value.toFixed(1) : Math.round(r.value)}</span>
             </div>

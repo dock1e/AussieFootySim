@@ -1,10 +1,21 @@
 /**
- * Data pipeline: `../Player Database/players_master.csv` (751 real AFL
- * players, see the vault's Player Database.md) -> `src/data/generated/players.json`,
- * typed against `src/types/player.ts`.
+ * Data pipeline: `data/players_master.csv` (751 real AFL players) ->
+ * `src/data/generated/players.json`, typed against `src/types/player.ts`.
  *
  * Run with: `npm run build:data` (== `node --experimental-strip-types scripts/buildData.ts`)
  * Zero npm dependencies on purpose — see scripts/csv.ts for why.
+ *
+ * Round 63 fix: CSV_PATH used to point two directories up, at the Obsidian
+ * vault's `Player Database/players_master.csv` — OUTSIDE this git repo. That
+ * worked locally (the vault folder is always there) but broke GitHub Actions:
+ * a fresh checkout only has what's tracked in `app/`, so `players.json` was
+ * never generated and `src/data/loadPlayers.ts`'s import of it failed the
+ * build with "Cannot find module './generated/players.json'". Fixed by
+ * copying the CSV into the repo at `app/data/players_master.csv` (now the
+ * canonical, CI-facing copy) and pointing CSV_PATH there. If the player
+ * database is ever refreshed (e.g. backlog item #1, end-of-season refresh),
+ * write the new CSV to *this* in-repo path — the vault's own
+ * `Player Database/players_master.csv` is no longer what the build reads.
  */
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -13,7 +24,7 @@ import { parseCsvToObjects } from "./csv.ts";
 import type { Player } from "../src/types/player.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CSV_PATH = join(__dirname, "..", "..", "Player Database", "players_master.csv");
+const CSV_PATH = join(__dirname, "..", "data", "players_master.csv");
 const OUT_DIR = join(__dirname, "..", "src", "data", "generated");
 const OUT_PATH = join(OUT_DIR, "players.json");
 

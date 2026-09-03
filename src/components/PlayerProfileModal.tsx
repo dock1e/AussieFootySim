@@ -74,6 +74,13 @@ import {
  * pathway — with its own amber "Rookie find" callout for the rare Rookie
  * pick whose real career actually turned out elite (Tyler's own example:
  * Rory Laird, 2011 Rookie pick 5) — see `draftTierOf` below.
+ *
+ * Round 68 — `draftEntries`/`yearRowsFor`'s real-data lookups below now pass
+ * `player.realFullName` (falling back to `playerFullName(player)` for a
+ * pre-round-68 save), not the live display name — found via a database
+ * architecture review, not a bug report: this component's own real-data
+ * joins would have silently gone empty the moment a future fictionalization
+ * pass renamed a player. See `Player.realFullName`'s own doc comment.
  */
 
 const KEY_STATS: LeagueStat[] = ["disposals", "kicks", "handballs", "marks", "tackles", "clearances", "fantasyPoints"];
@@ -176,7 +183,7 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
   const hasRealRows = yearRows.some((r) => r.isReal);
   const combinedCareerTotals = useMemo(() => sumYearRows(player.PlayerID, yearRows), [player, yearRows]);
 
-  const draftEntries = useMemo(() => draftHistoryFor(playerFullName(player)), [player]);
+  const draftEntries = useMemo(() => draftHistoryFor(player.realFullName ?? playerFullName(player)), [player]);
   const primaryDraftEntry = useMemo(() => primaryDraftEntryOf(draftEntries), [draftEntries]);
 
   return (
@@ -483,7 +490,7 @@ const DRAFT_PICK_TONE: Record<DraftTier, string> = {
  */
 function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], season: Season | null, year: number): YearRow[] {
   const rows: YearRow[] = [];
-  for (const real of realSeasonHistoryFor(playerFullName(player))) {
+  for (const real of realSeasonHistoryFor(player.realFullName ?? playerFullName(player))) {
     if (real.year >= CURRENT_SEASON_YEAR || real.games === 0) continue;
     rows.push({ year: real.year, totals: realEntryToSeasonTotals(player.PlayerID, real), isReal: true });
   }

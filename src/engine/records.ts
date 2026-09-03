@@ -1,6 +1,6 @@
 import type { Player } from "../types/player.ts";
 import { playerFullName } from "../types/player.ts";
-import { getPlayerById, getPlayerByFullName } from "../data/loadPlayers.ts";
+import { getPlayerById, getPlayerByRealFullName } from "../data/loadPlayers.ts";
 import { realWorldRecordsFor, type RealWorldRecordEntry, type RecordCategory } from "../data/realWorldRecords.ts";
 import { debutYearFor } from "../data/realDebutDates.ts";
 import { allTimePlayerTotals, seasonPlayerTotals, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
@@ -287,7 +287,7 @@ export function simCareerSpan(player: Player, seasonArchives: SeasonArchiveEntry
   }
   years.sort((a, b) => a - b);
   const simStartYear = years[0] ?? currentYear;
-  const realDebutYear = debutYearFor(playerFullName(player));
+  const realDebutYear = debutYearFor(player.realFullName ?? playerFullName(player));
   const startYear = realDebutYear !== undefined ? Math.min(realDebutYear, simStartYear) : simStartYear;
   const endYear = years[years.length - 1] ?? currentYear;
   return { startYear, endYear, stillActive };
@@ -407,14 +407,20 @@ function seasonFinalsAppearances(season: Season): Map<number, number> {
  * data's own scrape) produced TWO unrelated rows once he'd played any simulated minutes — his frozen
  * real total, and a separate `source: "sim"` row starting from 0 — which is exactly what Tyler
  * flagged: "If I play a game with Scott Pendlebury, will the number of disposals he achieves... be
- * added to the 11,169 disposals? If not, it should." Now, `getPlayerByFullName` checks whether each
- * real entry's name resolves to a currently-loaded player; if it does AND that player has a nonzero
- * sim total for this category, the two are merged into ONE row (`value = real + sim`, `simContribution`
- * records the save-specific portion — see `RecordRow`'s own doc comment for why that split is kept
- * rather than hidden), and that player is excluded from the separate sim-only loop below so they're
- * never double-counted as two rows. A player who hasn't touched this category in the save yet (no sim
- * minutes) still renders exactly as before — a bare real row — so a fresh save looks unchanged until
- * something has actually happened to merge in.
+ * added to the 11,169 disposals? If not, it should." Now, `getPlayerByRealFullName` checks whether
+ * each real entry's name resolves to a currently-loaded player; if it does AND that player has a
+ * nonzero sim total for this category, the two are merged into ONE row (`value = real + sim`,
+ * `simContribution` records the save-specific portion — see `RecordRow`'s own doc comment for why
+ * that split is kept rather than hidden), and that player is excluded from the separate sim-only
+ * loop below so they're never double-counted as two rows. A player who hasn't touched this category
+ * in the save yet (no sim minutes) still renders exactly as before — a bare real row — so a fresh
+ * save looks unchanged until something has actually happened to merge in.
+ *
+ * Round 68 — this lookup used to be `getPlayerByFullName` (matches a player's LIVE, possibly-renamed
+ * display name). Switched to `getPlayerByRealFullName` (matches the frozen `Player.realFullName`
+ * instead) so a future fictional-name pass can't silently break this merge — `entry.name` is a real
+ * legend's real name and will never itself be "renamed," so the player-side lookup has to stay just
+ * as frozen. See `Player.realFullName`'s own doc comment for the full reasoning.
  */
 /**
  * Reads `category`'s own value off a `SeasonPlayerTotals` — shared by every non-`finalsAppearances`
@@ -446,7 +452,7 @@ function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEn
 
   const consumedPlayerIds = new Set<number>();
   for (const entry of realEntries) {
-    const linkedPlayer = getPlayerByFullName(entry.name);
+    const linkedPlayer = getPlayerByRealFullName(entry.name);
     const simContribution = linkedPlayer ? simValueFor(linkedPlayer.PlayerID) : 0;
     if (linkedPlayer && simContribution > 0) {
       consumedPlayerIds.add(linkedPlayer.PlayerID);

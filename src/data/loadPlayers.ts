@@ -88,6 +88,28 @@ export function getPlayerByFullName(name: string): Player | undefined {
   return ALL_PLAYERS.find((p) => playerFullName(p) === name);
 }
 
+/**
+ * Round 68 — the real-data-safe sibling of `getPlayerByFullName` above.
+ * Matches a player's FROZEN real-world identity (`Player.realFullName`, see
+ * that field's own doc comment) instead of their current, possibly-renamed
+ * `fname`/`lname`. Every lookup that joins a real-world data file to a
+ * currently-loaded player — `draftHistoryFor`/`realSeasonHistoryFor`
+ * (`data/realDraftHistory.ts`/`realSeasonHistory.ts`), and
+ * `engine/records.ts`'s real+sim career-continuation merge — should call
+ * this one, not `getPlayerByFullName`, so a future fictional-name rename
+ * can never silently sever that link.
+ *
+ * Falls back to `playerFullName(p)` for any player missing `realFullName`
+ * (a save from before round 68) — before fictionalization ships, the two
+ * are identical for every player, so the fallback is always correct today.
+ * Same "search the full pool, not delisted-excluded" reasoning as
+ * `getPlayerByFullName` — a delisted or renamed player's real-world history
+ * still belongs to them.
+ */
+export function getPlayerByRealFullName(name: string): Player | undefined {
+  return ALL_PLAYERS.find((p) => (p.realFullName ?? playerFullName(p)) === name);
+}
+
 export function averageOvr(players: readonly Player[]): number {
   if (players.length === 0) return 0;
   return players.reduce((sum, p) => sum + p.OVR, 0) / players.length;

@@ -435,7 +435,7 @@ export const REAL_SEASON_HISTORY: RealSeasonEntry[] = Object.entries(RAW).flatMa
   rows.map((r) => toEntry(player, r)),
 );
 
-/** Every real season on record for this player, oldest first — `[]` if they're not part of this round's NMFC-roster backfill (see this file's own doc comment for scope). */
+/** Every real season on record for this player, oldest first — `[]` if they're not part of this round's NMFC-roster backfill (see this file's own doc comment for scope). Round 68: pass `Player.realFullName` (falling back to `playerFullName(player)` only for a pre-round-68 save), NOT the live display name — see `Player.realFullName`'s own doc comment for why. */
 export function realSeasonHistoryFor(fullName: string): RealSeasonEntry[] {
   return REAL_SEASON_HISTORY.filter((e) => e.player === fullName).sort((a, b) => a.year - b.year);
 }

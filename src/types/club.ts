@@ -1,6 +1,29 @@
 /**
  * Club identity — see `../../Club Database.md`. `ClubID` matches
  * `Player.ClubID` and the id table in `../../Player Database/Schema.md`.
+ *
+ * Round 68 — a name-stability audit found ~30 call sites across the app
+ * (`getPlayersByClub`, `clubByName`, `ClubBadgeByName`, and direct
+ * `Player.Team === clubName` comparisons in Contracts/Trade/Draft/Season/
+ * Dashboard/etc.) that key off `Club.name`/`Player.Team` as plain strings
+ * rather than `ClubID`. Unlike the player-name case (`Player.realFullName`,
+ * this round), this is NOT currently broken and does NOT need the same
+ * frozen-field treatment: nothing here joins against a FROZEN, externally-
+ * scraped file the way `realDraftHistory.ts`/`realSeasonHistory.ts` do for
+ * players — every one of these ~30 sites compares two LIVE fields against
+ * each other, so they stay consistent under a coordinated rename.
+ *
+ * The one real invariant a future club-fictionalization pass MUST honour:
+ * rename by pivoting through `ClubID`, updating `CLUBS[i].name` and every
+ * matching `Player.Team`/`OriginClub` string in the SAME atomic pass — never
+ * a blind find-replace of the old name, and never renaming `CLUBS[i].name`
+ * without updating `Player.Team` in lockstep. Do that, and every `.Team ===`
+ * / `clubByName(...)` call site above keeps working unchanged, with zero
+ * refactor needed. `DraftHistoryEntry.club` (`data/realDraftHistory.ts`) is
+ * a different, already-safe case: it's real historical fact ("Adelaide"
+ * drafted this player in 2011) frozen the same way `Player.realFullName` is,
+ * and correctly stays un-renamed even after "Adelaide" the live club becomes
+ * something fictional.
  */
 export interface Club {
   ClubID: number;

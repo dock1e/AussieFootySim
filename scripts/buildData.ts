@@ -60,6 +60,10 @@ function coerceRow(raw: Record<string, string>): Player {
       out[key] = n;
     }
   }
+  // Round 68 — frozen real-world identity, snapshotted here (generation time) and never touched
+  // again. See Player.realFullName's own doc comment for why this exists and what depends on it.
+  out.realFullName = `${out.fname} ${out.lname}`;
+
   return out as unknown as Player;
 }
 

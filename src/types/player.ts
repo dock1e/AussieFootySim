@@ -68,6 +68,36 @@ export interface Player extends ImprovementRates, DeclineRates {
   ClubID: number;
   fname: string;
   lname: string;
+  /**
+   * Round 68 — the player's real-world "First Last" name, snapshotted ONCE
+   * by `scripts/buildData.ts` at generation time and never touched again.
+   * `fname`/`lname` above are the LIVE display pair — free to be overwritten
+   * by a future fictionalization pass (Tyler's own stated plan: "replace all
+   * the player names with fake names... in the future"). This field is not.
+   *
+   * Every real-world data join — `draftHistoryFor`/`realSeasonHistoryFor`
+   * (`data/realDraftHistory.ts`/`realSeasonHistory.ts`) and
+   * `engine/records.ts`'s real+sim career-continuation merge — must match
+   * against THIS field via `loadPlayers.ts`'s `getPlayerByRealFullName`, not
+   * `getPlayerByFullName`/`playerFullName(player)`. Those real-data files are
+   * frozen historical facts (e.g. "Clayton Oliver" really was drafted in
+   * 2016) that will never themselves be renamed — so the join key on the
+   * player side must stay just as frozen, or a future rename silently
+   * severs the link (empty Draft & Honours, empty Career & Season Stats real
+   * rows, a real legend's sim minutes no longer merging onto their career
+   * total) with no error, just quietly missing data. See ROADMAP.md's round
+   * 68 section for the full incident this fixes (found via a database
+   * architecture review, not a live bug report).
+   *
+   * Optional because saves created before this round don't have it yet —
+   * `getPlayerByRealFullName` falls back to `playerFullName(p)` when absent,
+   * which is always correct for any save that predates fictionalization
+   * (live name === real name for every player until that ships). New games
+   * always get it from `buildData.ts`; `SAVE_SCHEMA_VERSION` deliberately not
+   * bumped for this, same treatment as every other optional field added this
+   * way (see `engine/saveGame.ts`).
+   */
+  realFullName?: string;
   homeState: string;
   height: number; // cm
   weight: number; // kg

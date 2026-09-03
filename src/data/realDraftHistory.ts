@@ -4,7 +4,7 @@
  * design note, the data-model research, and Tyler's own steer on the three open forks (Aug 2026,
  * round 65): full 18-year capture (this file — COMPLETE, see below), extend the existing
  * real-player system (this file is consumed the same way `realWorldRecords.ts` is — see
- * `engine/records.ts`'s `getPlayerByFullName` merge pattern), and — separately, NOT built here —
+ * `engine/records.ts`'s `getPlayerByRealFullName` merge pattern, round 68), and — separately, NOT built here —
  * feed the real 2026/2027 prospect pool into `engine/draft.ts`'s procedural generator.
  *
  * Games/Goals/CoachesVotes/BrownlowVotes are presented by draftguru as career-to-date cumulative
@@ -41,7 +41,7 @@ export interface DraftHistoryEntry {
   /** Pick number within that draftType for that year, where draftguru records one (null for FA/Trade/most Post-Draft rows, which aren't numbered picks). */
   pickNumber: number | null;
   club: string;
-  /** "First Last", matched against `loadPlayers.ts`'s `playerFullName`/`getPlayerByFullName` for a currently-loaded real+sim player. */
+  /** "First Last", matched against `loadPlayers.ts`'s `getPlayerByRealFullName` (round 68 — `Player.realFullName`, NOT the live display name) for a currently-loaded real+sim player. */
   player: string;
   /** null for the rare row where draftguru itself has no recorded age (e.g. Amua Parika, 2009 Pre-Draft). */
   ageAtEntry: number | null;
@@ -3146,7 +3146,7 @@ export const REAL_DRAFT_HISTORY_2009: DraftHistoryEntry[] = RAW_2009.map(toEntry
 export const REAL_DRAFT_HISTORY_2008: DraftHistoryEntry[] = RAW_2008.map(toEntry);
 export const REAL_DRAFT_HISTORY: DraftHistoryEntry[] = [...REAL_DRAFT_HISTORY_2025, ...REAL_DRAFT_HISTORY_2024, ...REAL_DRAFT_HISTORY_2023, ...REAL_DRAFT_HISTORY_2022, ...REAL_DRAFT_HISTORY_2021, ...REAL_DRAFT_HISTORY_2020, ...REAL_DRAFT_HISTORY_2019, ...REAL_DRAFT_HISTORY_2018, ...REAL_DRAFT_HISTORY_2017, ...REAL_DRAFT_HISTORY_2016, ...REAL_DRAFT_HISTORY_2015, ...REAL_DRAFT_HISTORY_2014, ...REAL_DRAFT_HISTORY_2013, ...REAL_DRAFT_HISTORY_2012, ...REAL_DRAFT_HISTORY_2011, ...REAL_DRAFT_HISTORY_2010, ...REAL_DRAFT_HISTORY_2009, ...REAL_DRAFT_HISTORY_2008];
 
-/** All draft/trade entries for a given "First Last" player name (usually 0 or 1, occasionally 2+ for a player drafted, delisted, and re-rookied, or drafted then later traded). */
+/** All draft/trade entries for a given "First Last" player name (usually 0 or 1, occasionally 2+ for a player drafted, delisted, and re-rookied, or drafted then later traded). Round 68: pass `Player.realFullName` (falling back to `playerFullName(player)` only for a pre-round-68 save), NOT the live display name — see `Player.realFullName`'s own doc comment for why. */
 export function draftHistoryFor(fullName: string): DraftHistoryEntry[] {
   return REAL_DRAFT_HISTORY.filter((e) => e.player === fullName);
 }

@@ -439,8 +439,48 @@ export function applyMoraleImpact(players: readonly Player[], clubName: string, 
 // AI-vs-AI background trading — "the league feels alive" (Engine.md, confirmed live)
 // ---------------------------------------------------------------------------
 
+/**
+ * Round 72 calibration, same "guess, empirically check, disclose the
+ * correction" playbook as round 69's tier floors and round 70's Plays Like
+ * thresholds — this time against real data Tyler supplied rather than a
+ * live-sampled distribution of this app's own output. `data/
+ * realDraftYearMetrics.ts` (round 71, Tyler-sourced, 1998-2025) puts real
+ * AFL's league-wide trade volume at an average of 24.82/year; scaled to this
+ * function's own 17-rival-club scope (it deliberately excludes `myClub` —
+ * the user's own trades are a separate, manual action, not simulated here)
+ * that's ~23.44. A throwaway diagnostic (`diagnose_trade_volume_scratch3.ts`,
+ * kept out of the shipped tree) ran `simulateLeagueTrades` across a full
+ * nominal 10-day Trade Period (`TradePeriod.tsx`'s own "Trade Day X/10"),
+ * 150 independent trials varying both `myClub` and seed, all held at Tyler's
+ * actual live save year (2026) — **not** swept forward across many years,
+ * after an earlier version of this same diagnostic that DID sweep years hit
+ * a misleading hard cliff to zero trades from 2033 onward and briefly looked
+ * like a real engine bug: `isTradeEligible` requires `p.expired_year >=
+ * currentYear`, and the live dataset's contracts top out at `expired_year:
+ * 2032` (generated relative to a 2026 baseline) — sweeping `year` alone with
+ * no season/Contracts-renewal engine run in between (unlike real play, where
+ * re-signings keep expiries current every year) eventually makes 100% of the
+ * pool trade-ineligible. A diagnostic-harness artifact, not a finding about
+ * the trade engine — the corrected diagnostic holds `year` fixed at 2026 and
+ * varies the trial/seed instead.
+ *
+ * Original values (5 / 0.25) produced an average of just 14.55 trades per
+ * 10-day window against that ~23.44 target — real, noticeably low, but not
+ * degenerate. `MAX_AI_TRADES_PER_DAY` (5) was NOT the bottleneck (actual
+ * volume averaged ~1.5/day, well under the cap) so raising it alone would
+ * have done nothing; the real constraint was upstream, in how few candidate
+ * pairs ever clear `findComplementaryLines` + the value-match gate below.
+ * `AI_TRADE_VALUE_TOLERANCE` alone plateaued around 21/window even pushed to
+ * 0.50 (diminishing returns past ~0.40 — the surplus gate below was the
+ * deeper bottleneck), while `MIN_RELATIVE_SURPLUS` alone was a much stronger,
+ * coarser lever (dropping from 3 to 2 overshot to ~31/window). Landed on
+ * 0.35 / 2.5 together — a smaller move on each of two levers rather than a
+ * large move on one — which the same 150-trial diagnostic put at 23.40/window
+ * average (min 16, p25 21, median 23, p75 26, max 32), a near-exact match to
+ * the 23.44 target with a spread that isn't degenerate at either end.
+ */
 const MAX_AI_TRADES_PER_DAY = 5;
-const AI_TRADE_VALUE_TOLERANCE = 0.25;
+const AI_TRADE_VALUE_TOLERANCE = 0.35;
 
 function fisherYatesShuffle<T>(items: readonly T[], rng: () => number): T[] {
   const arr = [...items];
@@ -473,8 +513,14 @@ function pickTradeCandidate(linePlayers: readonly Player[]): Player | null {
  * tested. Comparing each pair of clubs directly against each other fixes
  * this — it doesn't matter that everyone's Defence reads weak league-wide,
  * only that this specific partner has relatively more of it to spare.
+ *
+ * Threshold value (originally 3, now 2.5) is round 72's trade-volume
+ * calibration against real historical data — see the doc comment on
+ * `MAX_AI_TRADES_PER_DAY`/`AI_TRADE_VALUE_TOLERANCE` above for the full
+ * methodology; this constant and that one were tuned together, not
+ * independently.
  */
-const MIN_RELATIVE_SURPLUS = 3;
+const MIN_RELATIVE_SURPLUS = 2.5;
 /** Don't let the heuristic trade a line down to a bare 1-2 players. */
 const MIN_LINE_SIZE_TO_TRADE_FROM = 3;
 
@@ -600,7 +646,12 @@ const MAX_INBOUND_OFFERS_PER_DAY = 2;
  * pairwise-relative heuristic as `simulateLeagueTrades` above, but one-sided
  * (every candidate club checked against `myClub` specifically) and
  * *constructs* offer objects rather than executing them — the user still
- * has to Accept/Reject.
+ * has to Accept/Reject. Inherits round 72's `AI_TRADE_VALUE_TOLERANCE`/
+ * `MIN_RELATIVE_SURPLUS` calibration automatically (same module-level
+ * constants, not re-tuned separately) — `MAX_INBOUND_OFFERS_PER_DAY` below
+ * is a distinct, untouched constant, an inbox-pacing cap rather than a
+ * completed-trade-volume one, since these are proposals the user must still
+ * act on, not trades that have happened.
  */
 export function generateInboundOffers(players: readonly Player[], myClub: string, currentYear: number, day: number, seed: number, strategies: ReadonlyMap<string, ClubStrategy>): TradeOffer[] {
   const rng = mulberry32(seed + 1); // offset from simulateLeagueTrades' own seed space so a caller running both the same day doesn't correlate them

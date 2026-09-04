@@ -489,7 +489,7 @@ function ProspectProfile({
       <div>
         <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Scouting report</div>
         {scouted ? (
-          <p className="whitespace-pre-line text-sm leading-relaxed text-slate-300">{scoutingReportFor(prospect)}</p>
+          <p className="whitespace-pre-line text-sm leading-relaxed text-slate-300">{scoutingReportFor(prospect, tier)}</p>
         ) : (
           <p className="text-sm text-slate-500">Scout at least one attribute to unlock this prospect's scouting report.</p>
         )}

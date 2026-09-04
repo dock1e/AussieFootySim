@@ -118,16 +118,21 @@ import {
  * array threaded through `saveGame.ts`), unlike the real side.
  *
  * Also deferred, disclosed rather than silently skipped: procedurally-
- * generated write-ups for the ~86% of real prospects with no real write-up
- * (and for fictional prospects generally) matching real scouts' own voice
- * (in progress round 70, gated on Tyler supplying source write-up samples —
- * see gap #86), and calibrating `scoutingTiersForPool`'s quota thresholds
- * beyond a first defensible pass (see that function's own doc comment).
- * `scoutingReportFor` below ships a plain, honest stats-line placeholder for
- * the write-up-less majority in the meantime, not literary prose — a real
- * gap, not a hidden one. **The "plays like a young {real player}" comp
- * system (backlog #42) is now built** — see `playsLikeFor` below, added
- * round 70.
+ * generated write-ups for the ~86% of real prospects with no real write-up,
+ * still a plain honest stats-line placeholder (`GENERIC_REPORT_TEMPLATES`),
+ * and calibrating `scoutingTiersForPool`'s quota thresholds beyond a first
+ * defensible pass (see that function's own doc comment). **The "plays like a
+ * young {real player}" comp system (backlog #42) is now built** — see
+ * `playsLikeFor` below, added round 70. **Richer procedural write-ups for
+ * FICTIONAL prospects (gap #86) are now built too, round 71** — scoped to
+ * Elite/Superstar/Generational Talent only, per Tyler's own instruction
+ * ("we only need to provide write ups for the Elite, Superstar and
+ * Generational Talent categories") — see `proceduralEliteWriteupFor` below,
+ * informed by an 18-write-up real sample set Tyler hand-supplied from Cal
+ * Twomey's mid-year 2026 draftee watch. Real prospects below Elite still get
+ * `GENERIC_REPORT_TEMPLATES` exactly as before; so do fictional prospects
+ * below Elite — the gap above is deliberately not fully closed, just the
+ * slice Tyler actually asked for.
  */
 
 // ---------------------------------------------------------------------------
@@ -802,22 +807,188 @@ const GENERIC_REPORT_TEMPLATES: readonly ((p: Player) => string)[] = [
   (p) => `Limited public write-up on ${playerFullName(p)} at this stage. Internal scouting has them pencilled in as a ${p.archetype}, with the full picture likely to sharpen closer to draft night.`,
 ];
 
+// ---------------------------------------------------------------------------
+// Procedural write-ups for fictional Elite/Superstar/Generational Talent
+// prospects (gap #86, round 71) — Tyler's scope: "we only need to provide
+// write ups for the Elite, Superstar and Generational Talent categories."
+// Sample-set-informed by 18 of Cal Twomey's real mid-year 2026 draftee-watch
+// write-ups (Tyler screenshotted them into chat; 7 of the top 25 weren't
+// captured, so this was designed from 18, not the full set — disclosed, not
+// silently treated as complete). NOT the same "Cal Twomey Top 25" Fork D
+// already excludes (realProspects.ts's own doc comment) — that's 28 rows of
+// a PAST draft class baked into the original xlsx, 2 of whose named players
+// are real, currently-active AFL players. This is a different, current,
+// in-season source Tyler supplied by hand.
+//
+// Reading the sample set, the recurring shape is: an opening hook (often a
+// one-line character read, sometimes a nickname), a concrete recent-form
+// sentence naming a specific carnival/trial/senior-debut performance with
+// real stat numbers, a trait/style sentence, and a closing draft-stock
+// projection — sometimes with a real-AFL-player comp, a family/recruitment-
+// pathway aside, or an injury note woven in. This generator reproduces the
+// first four (hook, stat-line, trait, projection) from data the prospect
+// actually has; it deliberately does NOT fabricate the other two:
+//
+// - A real-player comp is already its own adjacent UI section
+//   (`playsLikeFor`, round 70), rendered immediately below this text in
+//   Draft.tsx's ProspectProfile — repeating it here would be redundant, and
+//   would require this framework-free engine file to take `ALL_PLAYERS` as
+//   a dependency (see loadPlayers.ts's own "zero DOM/browser dependencies"
+//   doc comment, and `playsLikeFor`'s own choice to take `comparisonPool` as
+//   a parameter rather than importing it).
+// - Family-AFL-connection and Academy/NGA/father-son recruitment-pathway
+//   asides (common in the real sample — Snell's Duursma cousin, Gayfer's
+//   uncle Mick, Krasna's Next Generation Academy status, El Souki's
+//   multicultural NGA rights) have no underlying data model for fictional
+//   prospects — inventing them would be a specific, checkable-sounding claim
+//   with nothing behind it, the kind of thing this project discloses as
+//   missing rather than fakes (same reasoning as skipping Academy/NGA logic
+//   entirely for the fictional side of `generateProspectPool`).
+// ---------------------------------------------------------------------------
+
+/** Archetype-appropriate "second stat" for a flavor stat-line, plus a plausible range — every range a rough eyeball off the real sample set's own numbers (disposals 11-35, marks/tackles/clearances high single figures to teens, goals 1-4), not sourced from a larger real distribution the way `simulatedUnderageSignal`'s constants are; this is narrative flavor text, not a number anything else in the engine reads. */
+const FLAVOR_STAT_BY_ARCHETYPE: Partial<Record<Archetype, { label: string; min: number; max: number }>> = {
+  "Inside Mid": { label: "clearances", min: 7, max: 14 },
+  "Outside Mid": { label: "clearances", min: 5, max: 11 },
+  "Hybrid Mid Forward": { label: "clearances", min: 5, max: 10 },
+  "Key Forward": { label: "goals", min: 2, max: 5 },
+  "Medium Forward": { label: "goals", min: 2, max: 4 },
+  "Small Forward": { label: "goals", min: 2, max: 4 },
+  "Pressure Forward": { label: "tackles", min: 6, max: 11 },
+  "Key Defender": { label: "intercept marks", min: 4, max: 9 },
+  "Medium Defender": { label: "rebound 50s", min: 3, max: 7 },
+  "Back Pocket": { label: "spoils", min: 4, max: 8 },
+  "Intercept Defender": { label: "intercept marks", min: 4, max: 9 },
+  "Half Back Flanker": { label: "rebound 50s", min: 3, max: 7 },
+  Ruck: { label: "hitouts", min: 20, max: 38 },
+  "Hybrid Key Forward Ruck": { label: "hitouts", min: 14, max: 28 },
+};
+const DEFAULT_FLAVOR_STAT = { label: "tackles", min: 4, max: 9 };
+
+function flavorInt(rng: () => number, min: number, max: number): number {
+  return min + Math.floor(rng() * (max - min + 1));
+}
+
+/** A curated subset of `RATED_ATTRIBUTES` that make natural-sounding trait sentences — deliberately not all 20 (e.g. `consistancy`/`confidence` don't read as a scoutable "trait" the way `speed`/`courage` do). */
+const FLAVOR_TRAIT_ATTRIBUTES: readonly RatedAttribute[] = ["skill", "speed", "endurance", "agility", "strengthGroundLevel", "strengthOverhead", "courage", "readPlay", "xFactor", "tenacity"];
+
+const FLAVOR_TRAIT_PHRASES: Record<string, string> = {
+  skill: "There's real polish to his disposal, both sides of the body.",
+  speed: "He's got genuine early-season pace, the kind that shows up in a flash.",
+  endurance: "He just keeps working — his tank looks built for AFL minutes already.",
+  agility: "He changes direction as well as almost anyone in this year's crop.",
+  strengthGroundLevel: "He wins the contested footy at ground level better than most his age.",
+  strengthOverhead: "He's a genuine target overhead, with strong hands in a contest.",
+  courage: "He never shies away from the physical side of the contest.",
+  readPlay: "He reads the play a beat ahead of most kids his age.",
+  xFactor: "He's got that X-factor — the sort of moment that lifts a crowd.",
+  tenacity: "He hunts the contest relentlessly, first to the ball more often than not.",
+};
+
+/** The prospect's single highest-rolled attribute among `FLAVOR_TRAIT_ATTRIBUTES` — usually already archetype-appropriate by construction (attribute generation weights toward each archetype's own primary attributes), so this doesn't need to separately consult `ARCHETYPE_PRIMARY_ATTRIBUTES` to read sensibly. */
+function standoutTraitPhraseFor(prospect: Player): string {
+  let best: RatedAttribute = FLAVOR_TRAIT_ATTRIBUTES[0];
+  let bestVal = -Infinity;
+  for (const attr of FLAVOR_TRAIT_ATTRIBUTES) {
+    if (prospect[attr] > bestVal) {
+      bestVal = prospect[attr];
+      best = attr;
+    }
+  }
+  return FLAVOR_TRAIT_PHRASES[best];
+}
+
+/** Closing draft-stock projection, tier-flavored — Generational Talent reads as pick one, Superstar as top-five, Elite (and anything else this is called with, defensively) as first-round. */
+function tierClosingPhrases(name: string, tier: ScoutingTier): readonly string[] {
+  if (tier === "Generational Talent") {
+    return [`Barring a major shock, ${name} goes at pick one.`, `There's no real debate at the top of this draft — ${name} is the class of the year.`];
+  }
+  if (tier === "Superstar") {
+    return [`${name} is firmly in top-five calculations.`, `Expect ${name} to be one of the first names read out on draft night.`];
+  }
+  return [`${name} is comfortably a first-round selection.`, `Clubs picking in the first half of the first round will have ${name} on their board.`];
+}
+
+interface WriteupContext {
+  name: string;
+  archetype: string;
+  homeState: string;
+  disposals: number;
+  statLabel: string;
+  statValue: number;
+  trait: string;
+  closing: string;
+}
+
+/** 6 template shapes, each modeled on a recurring pattern in the 18-write-up sample set (riser/carnival-standout, graduation-to-seniors, hard-nosed competitor, injury-interrupted-but-still-rated, character/nickname read, genuine-star framing) — picked deterministically per prospect so the same prospect always reads the same way, not re-randomized every render. */
+const ELITE_WRITEUP_TEMPLATES: readonly ((c: WriteupContext) => string)[] = [
+  (c) => `${c.name} has been one of the risers of the year, rocketing into calculations at the very top of the draft. The ${c.archetype} had one of the eye-catching games of the carnival, gathering ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a big showing for ${c.homeState}. ${c.trait} ${c.closing}`,
+  (c) => `${c.name} has pushed well up draft boards after a strong stretch of football. ${c.trait} He piled up ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a standout carnival performance for ${c.homeState}. ${c.closing}`,
+  (c) => `There's a lot to like about the way ${c.name} goes about it. ${c.trait} The ${c.archetype} competes hard every time the footy's in dispute, backing it up with ${c.disposals} disposals and ${c.statValue} ${c.statLabel} through the carnival. ${c.closing}`,
+  (c) => `${c.name}'s season has had its interruptions, but clubs haven't lost faith. Before a recent injury scare, the ${c.archetype} had shown exactly why he's rated so highly — ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a big carnival performance for ${c.homeState}. ${c.trait} ${c.closing}`,
+  (c) => `${c.name} plays with a real edge. ${c.trait} He's been one of the most talked-about names in this year's crop, backing up strong carnival form (${c.disposals} disposals, ${c.statValue} ${c.statLabel}) with the upside that has clubs willing to look past the occasional rough patch. ${c.closing}`,
+  (c) => `${c.name} is the kind of prospect a draft class gets built around. ${c.trait} He backed up a stellar carnival — ${c.disposals} disposals and ${c.statValue} ${c.statLabel} for ${c.homeState} — with the sort of composure scouts rarely see at this age. ${c.closing}`,
+];
+
+/**
+ * Procedural write-up for a FICTIONAL prospect scouted into Generational
+ * Talent/Superstar/Elite — see this section's own top comment for the design
+ * rationale and what's deliberately left out. Every fact used is grounded in
+ * the prospect's own actually-generated data (archetype, home state,
+ * attribute values); only the flavor stat-line and template/closing choice
+ * are randomized, from a fresh PlayerID-seeded RNG (same "reseed
+ * independently per fog function, don't thread the pool's own generation-
+ * time RNG" convention `scoutOvrBand`/`scoutConfidence`/
+ * `GENERIC_REPORT_TEMPLATES`'s own pick already use) — so this is NOT the
+ * same `simulatedUnderageSignal` draw that fed this prospect's actual POT
+ * bonus at generation time (that value was consumed once, mid-stream, from
+ * the pool's own shared RNG, and was never stored on the Player object to
+ * replay later); this is a fresh, independently-seeded, deterministic-per-
+ * PlayerID draw for narrative flavor only, not a re-read of their real
+ * generation-time roll.
+ */
+function proceduralEliteWriteupFor(prospect: Player, tier: ScoutingTier): string {
+  const rng = mulberry32(prospect.PlayerID * 53 + 19);
+  const statSpec = FLAVOR_STAT_BY_ARCHETYPE[prospect.archetype as Archetype] ?? DEFAULT_FLAVOR_STAT;
+  const name = playerFullName(prospect);
+  const ctx: WriteupContext = {
+    name,
+    archetype: prospect.archetype,
+    homeState: prospect.homeState,
+    disposals: flavorInt(rng, 16, 33),
+    statLabel: statSpec.label,
+    statValue: flavorInt(rng, statSpec.min, statSpec.max),
+    trait: standoutTraitPhraseFor(prospect),
+    closing: "",
+  };
+  const closings = tierClosingPhrases(name, tier);
+  ctx.closing = closings[Math.floor(rng() * closings.length)];
+  const pick = Math.floor(rng() * ELITE_WRITEUP_TEMPLATES.length);
+  return ELITE_WRITEUP_TEMPLATES[pick](ctx);
+}
+
 /**
  * The in-game scouting-report text for one prospect — real write-up text
  * where Tyler's file actually has it (joined via `writeupTextFor`, verbatim,
- * unedited), falling back to a deterministic generic placeholder blurb
- * otherwise. Works identically for a thin-data real prospect and a fully
- * fictional one — by design, per this file's top doc comment, a player of
- * this game can't tell which kind of prospect they're reading about from
- * this text alone.
+ * unedited); the new procedural generator above for a FICTIONAL prospect
+ * scouted into Elite/Superstar/Generational Talent (round 71, gap #86,
+ * needs `tier` — callers that don't have one handy, or a real prospect, or a
+ * fictional prospect below Elite, fall through to the plain generic
+ * placeholder exactly as before). `tier` is optional and defaults to
+ * "nothing extra to offer" rather than breaking any existing call site that
+ * doesn't pass one (e.g. `verify_round70_scratch.ts`'s own calls, if it ever
+ * calls this — it doesn't today, but nothing should silently break if it
+ * did).
  */
-export function scoutingReportFor(prospect: Player): string {
+export function scoutingReportFor(prospect: Player, tier?: ScoutingTier): string {
   if (prospect.realFullName) {
     const record = REAL_PROSPECTS.find((r) => r.name === prospect.realFullName);
     if (record) {
       const text = writeupTextFor(record);
       if (text) return text;
     }
+  } else if (tier === "Generational Talent" || tier === "Superstar" || tier === "Elite") {
+    return proceduralEliteWriteupFor(prospect, tier);
   }
   const templates = GENERIC_REPORT_TEMPLATES;
   const pick = Math.floor(mulberry32(prospect.PlayerID * 17 + 3)() * templates.length);

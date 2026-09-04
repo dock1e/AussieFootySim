@@ -14,14 +14,17 @@ import {
   likelyNeedForClub,
   SCOUT_HEADLINE_ATTRIBUTES,
   DRAFT_ROUNDS,
+  scoutingTiersForPool,
+  scoutingReportFor,
   type MockOutlet,
+  type ScoutingTier,
 } from "../engine/draft";
 import type { DraftWindow } from "../engine/saveGame";
 import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
 import type { Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
-import { StatusPill } from "./StatusPill";
+import { StatusPill, type PillTone } from "./StatusPill";
 
 /**
  * National Draft — Phase 4 Slice 5 (ROADMAP.md). User Interface.md's Draft
@@ -114,6 +117,13 @@ export function Draft() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const playersByClub = useMemo(() => buildLeaguePlayersByClub(), [poolVersion]);
+
+  // Sep 2026 — real prospect pool round. Computed once per draft night
+  // (`window_.pool` is fixed for the whole night, see DraftWindow's own doc
+  // comment), not once per rendered board row — matches
+  // `scoutingTiersForPool`'s own doc comment on why it's a whole-pool
+  // function rather than a per-prospect one.
+  const tierByPlayerId = useMemo(() => (window_ ? scoutingTiersForPool(window_.pool) : new Map<number, ScoutingTier>()), [window_]);
 
   if (!window_) {
     return (
@@ -221,6 +231,7 @@ export function Draft() {
                     <th className="py-1.5 pr-2">Archetype</th>
                     <th className="py-1.5 pr-2 text-right">Scout OVR</th>
                     <th className="py-1.5 pr-2 text-right">Pot.</th>
+                    <th className="py-1.5 pr-2">Scouting tier</th>
                     <th className="py-1.5 pr-2 text-right">Conf</th>
                   </tr>
                 </thead>
@@ -248,6 +259,9 @@ export function Draft() {
                           {band.low}-{band.high}
                         </td>
                         <td className="py-1.5 pr-2 text-right tabular-nums">{revealed.length === 0 ? "?" : potentialLetterGrade(p.POT)}</td>
+                        <td className="py-1.5 pr-2">
+                          {revealed.length === 0 ? <span className="text-slate-500">?</span> : <ScoutingTierLabel tier={tierByPlayerId.get(p.PlayerID)} />}
+                        </td>
                         <td className="py-1.5 pr-2 text-right tabular-nums">{conf}%</td>
                       </tr>
                     );
@@ -262,6 +276,7 @@ export function Draft() {
               <ProspectProfile
                 prospect={selected}
                 pool={window_.pool}
+                tier={tierByPlayerId.get(selected.PlayerID)}
                 revealedAttrs={revealedFor(window_, selected.PlayerID)}
                 budgetRemaining={window_.scoutingBudgetRemaining}
                 onScout={(attr) => scoutAttribute(selected.PlayerID, attr)}
@@ -346,9 +361,27 @@ export function Draft() {
   );
 }
 
+/** Sep 2026 — real prospect pool round. Maps a `ScoutingTier` to `StatusPill`'s existing tone language rather than inventing new colours; Generational Talent/Superstar render `solid` so the two tiers Tyler explicitly said are worth "really going for" visually pop more than the rest. */
+const TIER_TONE: Record<ScoutingTier, PillTone> = {
+  "Generational Talent": "good",
+  Superstar: "good",
+  Elite: "good",
+  Great: "info",
+  Good: "info",
+  Average: "warn",
+  "Sub-par": "bad",
+};
+
+function ScoutingTierLabel({ tier }: { tier: ScoutingTier | undefined }) {
+  if (!tier) return <span className="text-slate-500">?</span>;
+  const solid = tier === "Generational Talent" || tier === "Superstar";
+  return <StatusPill label={tier} tone={TIER_TONE[tier]} variant={solid ? "solid" : "soft"} />;
+}
+
 function ProspectProfile({
   prospect,
   pool,
+  tier,
   revealedAttrs,
   budgetRemaining,
   onScout,
@@ -356,6 +389,7 @@ function ProspectProfile({
 }: {
   prospect: Player;
   pool: Player[];
+  tier: ScoutingTier | undefined;
   revealedAttrs: RatedAttribute[];
   budgetRemaining: number;
   onScout: (attr: RatedAttribute) => void;
@@ -364,6 +398,7 @@ function ProspectProfile({
   const band = scoutOvrBand(prospect, revealedAttrs.length);
   const conf = scoutConfidence(prospect, revealedAttrs.length);
   const width = Math.round((band.high - band.low) / 2);
+  const scouted = revealedAttrs.length > 0;
 
   return (
     <div className="space-y-4">
@@ -375,6 +410,11 @@ function ProspectProfile({
         <div className="mt-1 text-xs text-accent-light">
           ±{width} OVR read · {conf}% scouting confidence
         </div>
+      </div>
+
+      <div>
+        <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Scouting tier</div>
+        {scouted ? <ScoutingTierLabel tier={tier} /> : <span className="text-sm text-slate-500">Unknown until scouted</span>}
       </div>
 
       <div className="grid grid-cols-2 gap-3 text-center text-sm">
@@ -418,6 +458,15 @@ function ProspectProfile({
             );
           })}
         </div>
+      </div>
+
+      <div>
+        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Scouting report</div>
+        {scouted ? (
+          <p className="whitespace-pre-line text-sm leading-relaxed text-slate-300">{scoutingReportFor(prospect)}</p>
+        ) : (
+          <p className="text-sm text-slate-500">Scout at least one attribute to unlock this prospect's scouting report.</p>
+        )}
       </div>
 
       <div>

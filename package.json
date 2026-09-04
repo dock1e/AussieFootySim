@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build:data": "node --experimental-strip-types scripts/buildData.ts",
+    "build:prospects": "node --experimental-strip-types scripts/buildRealProspects.ts",
     "simulate": "node --experimental-strip-types scripts/simulate.ts"
   },
   "dependencies": {

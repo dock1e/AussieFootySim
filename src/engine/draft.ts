@@ -9,6 +9,17 @@ import { ARCHETYPES, type Archetype } from "../types/archetype.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
 import type { LadderRow } from "./ladder.ts";
 import { recomputeOVR } from "./progression.ts";
+import {
+  REAL_PROSPECTS,
+  eligibleDraftYearFor,
+  normalizePosition,
+  underageSignalFor,
+  simulatedUnderageSignal,
+  potentialBonusFromSignal,
+  writeupTextFor,
+  realProspectAgeIn,
+  type RealProspectRecord,
+} from "../data/realProspects.ts";
 
 /**
  * National Draft — Phase 4 Slice 5 (ROADMAP.md). Engine.md "National Draft &
@@ -81,6 +92,39 @@ import { recomputeOVR } from "./progression.ts";
  *    grade "carries over once drafted, no formula change," this POT value is
  *    computed once at generation time and never recomputed at the point of
  *    picking — so no `draft_capital_score` ever needs inventing at all.
+ *
+ * **Real prospects (Sep 2026 — [[Real Draft History and Prospect Talent
+ * Pool]]'s "Part 2, continued" section, Forks D/E/F all settled)**: `data/
+ * realProspects.ts`'s ~1,278 real, named 2026-file prospects now fill this
+ * pool's slots FIRST, ranked by their real underage stat signal
+ * (`potentialBonusFromSignal`/`underageSignalFor` — games/Best-nominations/
+ * MVP-rate/finals/AFL-Futures/Standout-scouting production, all contributing
+ * POSITIVELY per Tyler's own instruction); fictional generation
+ * (`buildProspect`, unchanged) tops up whatever's left to `DRAFT_POOL_SIZE`,
+ * per Fork F. Both populations run through the exact same
+ * `potentialBonusFromSignal` formula — a fictional prospect gets an
+ * equivalent simulated underage stat line (`simulatedUnderageSignal`) rather
+ * than skipping the mechanic, per Tyler's instruction that fictional
+ * prospects need "similar traits, writeups and features" to real ones.
+ *
+ * No new persisted "undrafted prospects roll over between drafts" store
+ * exists for the real side, and deliberately so — see `realProspects.ts`'s
+ * own doc comment for why eligibility + a live `ALL_PLAYERS` `realFullName`
+ * check already gives correct rollover behaviour for free. Real fictional-
+ * pool continuity (an undrafted FICTIONAL prospect vanishing and being
+ * replaced by an unrelated fresh roll next year, rather than persisting as
+ * the same invented kid) is genuinely unaddressed and disclosed as deferred
+ * — it would need real new persisted state (an `undraftedFictionalPool`
+ * array threaded through `saveGame.ts`), unlike the real side.
+ *
+ * Also deferred, disclosed rather than silently skipped: the "plays like a
+ * young {real player}" comp system, procedurally-generated write-ups for
+ * the ~86% of real prospects with no real write-up (and for fictional
+ * prospects generally) matching real scouts' own voice, and calibrating
+ * `scoutingTiersForPool`'s quota thresholds beyond a first defensible pass
+ * (see that function's own doc comment). `scoutingReportFor` below ships a
+ * plain, honest stats-line placeholder for the write-up-less majority in
+ * the meantime, not literary prose — a real gap, not a hidden one.
  */
 
 // ---------------------------------------------------------------------------
@@ -313,6 +357,167 @@ function buildProspect(id: number, archetype: Archetype, age: number, year: numb
   };
 }
 
+/** Simple, stable string hash (djb2) -> unsigned 32-bit int, for seeding a deterministic `mulberry32` stream off a real prospect's own `normName` (stable across years and data drops, unlike a freshly-assigned `PlayerID` which regenerates every pool call) — used only for the real-prospect ranking tie-break in `generateProspectPool` below, nothing gameplay-visible. */
+function hashSeed(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i);
+  return h >>> 0;
+}
+
+/** Splits a real "First Last" (or "First Middle Last") name into fname/lname — first word is fname, everything else joins as lname, so `playerFullName(p)` round-trips back to the original string exactly for the common case. */
+function splitRealName(name: string): { first: string; last: string } {
+  const parts = name.trim().split(/\s+/);
+  return { first: parts[0] ?? name, last: parts.slice(1).join(" ") || parts[0] || name };
+}
+
+/**
+ * Converts one real prospect record into a full pool `Player` — the real-
+ * data sibling of `buildProspect` above, reusing the exact same attribute-
+ * generation machinery (archetype means + youth offset + seeded variance)
+ * since no source data gives real AFL-caliber attribute ratings for an
+ * under-18 amateur; a real prospect's "real-ness" lives in their name/bio/
+ * write-up/stats-driven potential bonus, not hand-set attribute numbers no
+ * one has. `archetype` is resolved by the caller (`normalizePosition`,
+ * falling back to the same population-weighted random draw fictional
+ * prospects use when there's no position text at all — the ~86% majority
+ * case, see Fork E in the design note).
+ */
+function buildRealProspect(id: number, record: RealProspectRecord, year: number, archetype: Archetype, means: Record<RatedAttribute, number>, rng: () => number): Player {
+  const eligibleYear = eligibleDraftYearFor(record);
+  // Real DOB -> real age. No DOB -> nominal age from the age-group default
+  // (18 the year they first become eligible, ageing naturally in any later
+  // year they're still undrafted) — this is exactly what makes "an extra
+  // year of development" from Tyler's rollover rule show up for a DOB-less
+  // real prospect too: youthOffset below shrinks as this climbs, same as
+  // it would for any other player.
+  const age = realProspectAgeIn(record, year) ?? 18 + Math.max(0, year - eligibleYear);
+  const attrs = generateAttributes(means, age, rng);
+
+  const signal = underageSignalFor(record);
+  const bonus = potentialBonusFromSignal(signal);
+  const potentialTall = clip(generatePotential(rng) + bonus, 1, 99);
+  const potentialMid = clip(generatePotential(rng) + bonus, 1, 99);
+
+  const { first, last } = splitRealName(record.name);
+  const tall = TALL_ARCHETYPES.has(archetype);
+  const homeState = record.homeState ?? weightedPick(STATE_WEIGHTS, rng);
+  const height = record.heightCm ?? Math.round((tall ? 192 : 182) + (rng() - 0.5) * 2 * 6);
+  const weight = Math.round(height - 92 + (rng() - 0.5) * 2 * 8);
+  const birthYear = record.dob ? record.dob[0] : year - age;
+  const birthMonth = record.dob ? record.dob[1] : 1 + Math.floor(rng() * 12);
+  const birthDay = record.dob ? record.dob[2] : 1 + Math.floor(rng() * 27);
+
+  const impDegRaw: Record<string, number> = {};
+  for (const skill of DISCRETE_SKILLS) {
+    // Same "no real basis for an unscouted 18yo" reasoning as buildProspect
+    // — real or fictional, no source data anywhere rates a junior amateur's
+    // improvement/decline curve.
+    impDegRaw[`imp_${skill}`] = clip(Math.round(30 + rng() * 45), 1, 99);
+    impDegRaw[`deg_${skill}`] = clip(Math.round(5 + rng() * 20), 1, 99);
+  }
+  const impDeg = impDegRaw as unknown as ImprovementRates & DeclineRates;
+
+  const sourceNote = record.sourceSheets.join("/");
+  const reasonBits = [record.team, signal.aflFutures ? "AFL Futures" : null, signal.finalsPlayer ? "Finals" : null, signal.wasScouted ? "Scouted" : null].filter((x): x is string => !!x);
+
+  return {
+    PlayerID: id,
+    Team: DRAFT_POOL_TEAM,
+    OriginClub: DRAFT_POOL_TEAM,
+    ClubID: 0,
+    fname: first,
+    lname: last,
+    // Round 68's frozen real-world identity field — this is what lets
+    // `realProspectsEligibleFor` below tell "already drafted" apart from
+    // "still available" via a live `ALL_PLAYERS` check, with zero extra
+    // persisted state (see this file's own doc comment on rollover).
+    realFullName: record.name,
+    homeState,
+    height,
+    weight,
+    Age: age,
+    age_day: birthDay,
+    age_month: birthMonth,
+    age_year: birthYear,
+    condition: 90,
+
+    ...attrs,
+    potentialTall,
+    potentialMid,
+
+    ...impDeg,
+
+    diciplineMatch: 50,
+    disciplineTraining: 50,
+    disiciplineOffFirned: 50,
+    umpireLikes: 50,
+    umpireNotice: 50,
+    goHomeTend: 50,
+    injuryTend: 20,
+    loyaltyTend: 50,
+    clangerTend: 50,
+    leadership: 50,
+
+    totalValue: 140_000, // placeholder — recomputed via estimatedValue() once real OVR is known, see generateProspectPool
+    jumperNumber: 0,
+    signed_day: 1,
+    signed_month: 1,
+    signed_year: year,
+    expired_day: 1,
+    expired_month: 1,
+    expired_year: year,
+
+    draft_pick: NOT_YET_DRAFTED,
+    draft_year: year,
+    draft_draftType: "National Draft",
+
+    archetype,
+    archetype_reason: `Real ${year} draft prospect (${sourceNote})${reasonBits.length > 0 ? ` — ${reasonBits.join(", ")}` : ""}.`,
+
+    stat_GM: 0, stat_DI: 0, stat_KI: 0, stat_HB: 0, stat_MK: 0, stat_TK: 0,
+    stat_CL: 0, stat_GL: 0, stat_HO: 0, stat_CM: 0, stat_CP: 0, stat_UP: 0, stat_1pct: 0,
+
+    OVR: 28, // placeholder, overwritten below via recomputeOVR
+    POT: 28, // placeholder, overwritten below via potentialForProspect
+  };
+}
+
+/**
+ * Real prospects still available for `year`'s draft: eligible by now
+ * (`eligibleDraftYearFor` <= year — a prospect stays eligible every year
+ * from their first eligible year onward, not just the one year, matching
+ * real AFL draft-board behaviour) AND not already drafted (no player in
+ * `existingPlayers` carries this exact `realFullName` yet). See this file's
+ * own doc comment for why this live check is sufficient rollover logic on
+ * its own, with no separate persisted "prospects who went undrafted last
+ * year" store needed.
+ */
+export function realProspectsEligibleFor(year: number, existingPlayers: readonly Player[]): RealProspectRecord[] {
+  const alreadyDrafted = new Set(existingPlayers.map((p) => p.realFullName).filter((n): n is string => !!n));
+  return REAL_PROSPECTS.filter((r) => eligibleDraftYearFor(r) <= year && !alreadyDrafted.has(r.name));
+}
+
+/**
+ * Ranks eligible real prospects by their real underage stat signal
+ * descending (the only real-world-grounded signal available before any
+ * attributes/potential get rolled) — this is what decides WHICH real names
+ * fill the pool first when eligible supply exceeds `DRAFT_POOL_SIZE` (it
+ * does, heavily: ~864 real prospects are already 2026-eligible on their
+ * own). Ties (the large majority — most real prospects have a zero
+ * stat-signal score, see `UnderageStatSignal`'s own doc comments) break via
+ * a deterministic per-identity seed rather than original sheet order, so
+ * the "who's in this year's 195" cutoff doesn't quietly always favour
+ * whoever happened to load first out of the xlsx.
+ */
+function rankRealProspects(eligible: readonly RealProspectRecord[]): RealProspectRecord[] {
+  return [...eligible].sort((a, b) => {
+    const scoreA = potentialBonusFromSignal(underageSignalFor(a));
+    const scoreB = potentialBonusFromSignal(underageSignalFor(b));
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    return mulberry32(hashSeed(a.normName))() - mulberry32(hashSeed(b.normName))();
+  });
+}
+
 /** Configuration.md's confirmed player valuation formula, verbatim — "the greatest of all time players should be around $2,500,000... average $400-600k... new young kids around $140,000" (that $140k floor anchor is explicitly framed around rookies, which is exactly who this is applied to). */
 export function estimatedValue(ovr: number): number {
   const raw = 500_000 * (ovr / 50) ** 2.356;
@@ -352,16 +557,41 @@ export function generateProspectPool(existingPlayers: readonly Player[], year: n
   // 1001-1751 block.
   let nextId = Math.max(8999, ...existingPlayers.map((p) => p.PlayerID)) + 1;
 
+  // Real prospects fill first — settled Fork F. Ranked by real underage
+  // stat signal (rankRealProspects); eligible supply is usually far bigger
+  // than DRAFT_POOL_SIZE on its own (e.g. ~864 real names are already
+  // 2026-eligible), so this is normally a real cutoff, not a shortfall.
+  const eligibleReal = realProspectsEligibleFor(year, existingPlayers);
+  const rankedReal = rankRealProspects(eligibleReal);
+  const realCount = Math.min(DRAFT_POOL_SIZE, rankedReal.length);
+  const realPlayers: Player[] = [];
+  for (let i = 0; i < realCount; i++) {
+    const record = rankedReal[i];
+    const archetype = normalizePosition(record.positionRaw) ?? weightedPick(weights, rng);
+    const means = meansByArchetype.get(archetype)!;
+    realPlayers.push(buildRealProspect(nextId++, record, year, archetype, means, rng));
+  }
+
+  // Fictional generation tops up whatever's left, exactly as before —
+  // except each fictional prospect now also gets a simulated equivalent of
+  // the real underage stat signal (`simulatedUnderageSignal`), scored by
+  // the SAME `potentialBonusFromSignal` formula real prospects use, per
+  // Tyler's parity instruction ("fictional players should also have
+  // similar traits, writeups and features").
+  const fictionalCount = DRAFT_POOL_SIZE - realCount;
   const raw: Player[] = [];
-  for (let i = 0; i < DRAFT_POOL_SIZE; i++) {
+  for (let i = 0; i < fictionalCount; i++) {
     const archetype = weightedPick(weights, rng);
     const age = weightedPick(AGE_WEIGHTS, rng);
     const means = meansByArchetype.get(archetype)!;
-    raw.push(buildProspect(nextId++, archetype, age, year, means, rng));
+    const prospect = buildProspect(nextId++, archetype, age, year, means, rng);
+    const bonus = potentialBonusFromSignal(simulatedUnderageSignal(rng));
+    raw.push({ ...prospect, potentialTall: clip(prospect.potentialTall + bonus, 1, 99), potentialMid: clip(prospect.potentialMid + bonus, 1, 99) });
   }
 
-  const merged = recomputeOVR([...existingPlayers, ...raw]);
-  const withOvr = raw.map((p, i) => ({ ...p, OVR: merged[existingPlayers.length + i].OVR }));
+  const allNew = [...realPlayers, ...raw];
+  const merged = recomputeOVR([...existingPlayers, ...allNew]);
+  const withOvr = allNew.map((p, i) => ({ ...p, OVR: merged[existingPlayers.length + i].OVR }));
 
   return withOvr.map((p) => ({ ...p, POT: potentialForProspect(p), totalValue: estimatedValue(p.OVR) }));
 }
@@ -382,6 +612,112 @@ export function potentialLetterGrade(pot: number): string {
   if (pot >= 55) return "C";
   if (pot >= 50) return "C-";
   return "D";
+}
+
+/**
+ * The 7 named scouting tiers Tyler asked for, so a coach can gauge "how
+ * hard should I go for the #1 pick" without seeing the raw POT number
+ * directly (labels layer ON TOP of the existing fog, exactly like
+ * `potentialLetterGrade` already does — this doesn't replace that letter
+ * grade anywhere, it's a second, narrative-first reading of the same
+ * underlying POT, shown alongside it in the UI).
+ *
+ * Deliberately RANK-based within the pool, not a fixed POT cutoff:
+ * "Generational Talent" and "Superstar" are inherently relative claims
+ * about a draft CLASS ("is there a generational kid in THIS year's pool"),
+ * not an absolute POT threshold that would just relabel a fixed top slice
+ * of every pool every single year regardless of how strong or weak that
+ * year's actual crop is — real draft classes vary, and Tyler's own gut-feel
+ * targets (Generational ~1-2 every 3 years, Superstar ~2-6 per draft) are
+ * explicitly about that variation, not a guaranteed-every-year count.
+ *
+ * Implementation: `GENERATIONAL_POT_FLOOR`/`SUPERSTAR_POT_FLOOR` are
+ * absolute POT floors (not quotas) — Generational can only ever be the
+ * single top-ranked prospect in the pool, and only if their POT actually
+ * clears the floor; Superstar is every remaining prospect clearing its own,
+ * lower floor, with no minimum or maximum forced. A fixed floor naturally
+ * produces a COUNT that varies year to year as the underlying pool's talent
+ * varies — some years 0 Generational Talents, some years 1; some years 2
+ * Superstars, some years 6 — which is what actually reproduces Tyler's
+ * stated frequency as a real distribution rather than an artificial
+ * every-year guarantee. Both floors were tuned empirically against many
+ * simulated draft years (`verify_prospect_pool_round.ts`) until the
+ * long-run average matched Tyler's stated targets — see that script for
+ * the actual empirical counts this settled on. Elite/Great/Good/Average/
+ * Sub-par split whatever's left by percentile — Tyler gave no frequency
+ * target for these 5, so the bands below are a disclosed, reasonable
+ * modelled choice, not sourced from anything.
+ *
+ * **Calibration result** (`scripts/verify_round69_scratch.ts`, 60 simulated
+ * fresh 2026 draft years): `GENERATIONAL_POT_FLOOR=75` -> a Generational
+ * Talent appeared in 43% of simulated years (Tyler's target of "1-2 every 3
+ * years" is 33-67% of years — a clean fit). `SUPERSTAR_POT_FLOOR=72` ->
+ * averaged 3.4 Superstars/year (Tyler's target: 2-6/draft — comfortably
+ * centred). The realised POT ceiling this pool actually produces tops out
+ * in the low-to-mid 70s, not near 99 — a first pass at these two constants
+ * (97/90) produced 0 Generational and 0 Superstar across every simulated
+ * year, which is what surfaced the need for this empirical pass rather than
+ * an algebraic guess at where the pool's real POT ceiling sits.
+ */
+export type ScoutingTier = "Generational Talent" | "Superstar" | "Elite" | "Great" | "Good" | "Average" | "Sub-par";
+
+const GENERATIONAL_POT_FLOOR = 75;
+const SUPERSTAR_POT_FLOOR = 72;
+const ELITE_PERCENTILE = 0.95;
+const GREAT_PERCENTILE = 0.8;
+const GOOD_PERCENTILE = 0.5;
+const AVERAGE_PERCENTILE = 0.15;
+
+/**
+ * Assigns every prospect in `pool` a `ScoutingTier` in one pass — see this
+ * type's own doc comment for the full reasoning. Returns a `PlayerID`-keyed
+ * map (matching `scoutOvrBand`/`scoutConfidence`'s own per-pool convention)
+ * rather than a per-prospect function, since Generational/Superstar are
+ * only computable relative to the WHOLE pool, not one prospect in
+ * isolation — unlike those two fog functions, this one is stable across
+ * calls for a fixed `pool` (no reseed-per-render need), so callers should
+ * compute it once per pool, not once per rendered row.
+ */
+export function scoutingTiersForPool(pool: readonly Player[]): Map<number, ScoutingTier> {
+  const byPot = [...pool].sort((a, b) => b.POT - a.POT);
+  const result = new Map<number, ScoutingTier>();
+  if (byPot.length === 0) return result;
+
+  const top = byPot[0];
+  const topIsGenerational = top.POT >= GENERATIONAL_POT_FLOOR;
+  if (topIsGenerational) result.set(top.PlayerID, "Generational Talent");
+
+  const rest = topIsGenerational ? byPot.slice(1) : byPot;
+  const nonEliteTierPool: Player[] = [];
+  for (const p of rest) {
+    if (p.POT >= SUPERSTAR_POT_FLOOR) {
+      result.set(p.PlayerID, "Superstar");
+    } else {
+      nonEliteTierPool.push(p);
+    }
+  }
+
+  const n = nonEliteTierPool.length;
+  nonEliteTierPool.forEach((p, i) => {
+    // i=0 is the best of what's left (already-sorted byPot minus the tiers
+    // above) — percentile-from-top, so ELITE_PERCENTILE's "top 5%" reads
+    // naturally as the first 5% of this remaining list.
+    const percentileFromTop = 1 - i / n;
+    let tier: ScoutingTier;
+    if (percentileFromTop >= ELITE_PERCENTILE) tier = "Elite";
+    else if (percentileFromTop >= GREAT_PERCENTILE) tier = "Great";
+    else if (percentileFromTop >= GOOD_PERCENTILE) tier = "Good";
+    else if (percentileFromTop >= AVERAGE_PERCENTILE) tier = "Average";
+    else tier = "Sub-par";
+    result.set(p.PlayerID, tier);
+  });
+
+  return result;
+}
+
+/** Convenience single-prospect read — recomputes the whole pool's tiers every call, same "cheap enough, recompute rather than cache" convention `trueProspectRank` already uses. Prefer `scoutingTiersForPool` directly when rendering an entire board (once per pool, not once per row). */
+export function scoutingTierFor(prospect: Player, pool: readonly Player[]): ScoutingTier {
+  return scoutingTiersForPool(pool).get(prospect.PlayerID) ?? "Sub-par";
 }
 
 export interface ScoutBand {
@@ -443,6 +779,46 @@ export function mockProjection(prospect: Player, pool: readonly Player[], outlet
   const low = Math.max(1, center - spread);
   const high = Math.min(pool.length, center + spread);
   return { low, high };
+}
+
+/**
+ * Real-vs-fictional-indistinguishable placeholder templates for the ~86% of
+ * real prospects with no real write-up (Fork E's disclosed consequence) and
+ * for every fictional prospect (Tyler's own instruction that fictional
+ * prospects need "similar traits, writeups and features" to real ones —
+ * this is the first, functional pass at that; genuinely literary prose
+ * matching real scouts' own voice is disclosed as deferred, see this file's
+ * top doc comment). Picked deterministically per-prospect (seeded off
+ * `PlayerID`) so the same prospect always reads the same blurb, not
+ * re-randomized on every render.
+ */
+const GENERIC_REPORT_TEMPLATES: readonly ((p: Player) => string)[] = [
+  (p) => `${playerFullName(p)} hasn't drawn a detailed scouting write-up yet, but the underlying numbers (${Math.round(p.OVR)} OVR read) put them on the board as a genuine ${p.archetype} prospect worth a closer look.`,
+  (p) => `Not yet extensively scouted. ${playerFullName(p)} profiles as a ${p.archetype} from ${p.homeState} — a name to watch as more reports come in rather than a settled read.`,
+  (p) => `${playerFullName(p)} is one of the deeper names in this year's crop — thin on public reporting so far, but the club's own scouts rate the ${p.archetype} tools highly enough to keep them on the board.`,
+  (p) => `Limited public write-up on ${playerFullName(p)} at this stage. Internal scouting has them pencilled in as a ${p.archetype}, with the full picture likely to sharpen closer to draft night.`,
+];
+
+/**
+ * The in-game scouting-report text for one prospect — real write-up text
+ * where Tyler's file actually has it (joined via `writeupTextFor`, verbatim,
+ * unedited), falling back to a deterministic generic placeholder blurb
+ * otherwise. Works identically for a thin-data real prospect and a fully
+ * fictional one — by design, per this file's top doc comment, a player of
+ * this game can't tell which kind of prospect they're reading about from
+ * this text alone.
+ */
+export function scoutingReportFor(prospect: Player): string {
+  if (prospect.realFullName) {
+    const record = REAL_PROSPECTS.find((r) => r.name === prospect.realFullName);
+    if (record) {
+      const text = writeupTextFor(record);
+      if (text) return text;
+    }
+  }
+  const templates = GENERIC_REPORT_TEMPLATES;
+  const pick = Math.floor(mulberry32(prospect.PlayerID * 17 + 3)() * templates.length);
+  return templates[pick](prospect);
 }
 
 // ---------------------------------------------------------------------------

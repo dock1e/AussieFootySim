@@ -16,6 +16,8 @@ import {
   DRAFT_ROUNDS,
   scoutingTiersForPool,
   scoutingReportFor,
+  playsLikeFor,
+  playsLikeConfidenceLabel,
   type MockOutlet,
   type ScoutingTier,
 } from "../engine/draft";
@@ -23,6 +25,7 @@ import type { DraftWindow } from "../engine/saveGame";
 import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
 import type { Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
+import { ALL_PLAYERS } from "../data/loadPlayers";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
 import { StatusPill, type PillTone } from "./StatusPill";
 
@@ -378,6 +381,29 @@ function ScoutingTierLabel({ tier }: { tier: ScoutingTier | undefined }) {
   return <StatusPill label={tier} tone={TIER_TONE[tier]} variant={solid ? "solid" : "soft"} />;
 }
 
+/**
+ * Round 70 — backlog #42. `ALL_PLAYERS` (the live established/drafted
+ * population, imported directly the same way Contracts.tsx/TradePeriod.tsx
+ * already do for their own real-data reads) is the comp pool, never
+ * `window_.pool` — comping a prospect to another undrafted prospect on the
+ * same board would be nonsensical. `playsLikeFor` is a pure, cheap-enough
+ * O(pool) scan — recomputed on render, same "cheap enough, recompute rather
+ * than cache" convention `trueProspectRank`/`scoutingTierFor` already use,
+ * not memoized separately here.
+ */
+function PlaysLikeLine({ prospect }: { prospect: Player }) {
+  const comp = playsLikeFor(prospect, ALL_PLAYERS);
+  if (!comp) return <p className="text-sm text-slate-500">No comparable real player found yet.</p>;
+  return (
+    <div className="flex items-center justify-between gap-2 text-sm">
+      <span className="font-medium">{playerFullName(comp.player)}</span>
+      <span className="text-xs text-slate-500">
+        {comp.player.archetype} · {playsLikeConfidenceLabel(comp.distance)}
+      </span>
+    </div>
+  );
+}
+
 function ProspectProfile({
   prospect,
   pool,
@@ -467,6 +493,11 @@ function ProspectProfile({
         ) : (
           <p className="text-sm text-slate-500">Scout at least one attribute to unlock this prospect's scouting report.</p>
         )}
+      </div>
+
+      <div>
+        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Plays like</div>
+        {scouted ? <PlaysLikeLine prospect={prospect} /> : <p className="text-sm text-slate-500">Scout at least one attribute to unlock a comp.</p>}
       </div>
 
       <div>

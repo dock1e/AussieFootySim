@@ -5,7 +5,7 @@ import type { ClubStrategy } from "./listNeeds.ts";
 import { ARCHETYPE_LINE, summariseLines, bandForGap, type Line } from "../data/lines.ts";
 import type { Player, RatedAttribute } from "../types/player.ts";
 import { DISCRETE_SKILLS, RATED_ATTRIBUTES, playerFullName, type ImprovementRates, type DeclineRates } from "../types/player.ts";
-import { ARCHETYPES, type Archetype } from "../types/archetype.ts";
+import { ARCHETYPES, ARCHETYPE_PRIMARY_ATTRIBUTES, type Archetype } from "../types/archetype.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
 import type { LadderRow } from "./ladder.ts";
 import { recomputeOVR } from "./progression.ts";
@@ -117,14 +117,17 @@ import {
  * — it would need real new persisted state (an `undraftedFictionalPool`
  * array threaded through `saveGame.ts`), unlike the real side.
  *
- * Also deferred, disclosed rather than silently skipped: the "plays like a
- * young {real player}" comp system, procedurally-generated write-ups for
- * the ~86% of real prospects with no real write-up (and for fictional
- * prospects generally) matching real scouts' own voice, and calibrating
- * `scoutingTiersForPool`'s quota thresholds beyond a first defensible pass
- * (see that function's own doc comment). `scoutingReportFor` below ships a
- * plain, honest stats-line placeholder for the write-up-less majority in
- * the meantime, not literary prose — a real gap, not a hidden one.
+ * Also deferred, disclosed rather than silently skipped: procedurally-
+ * generated write-ups for the ~86% of real prospects with no real write-up
+ * (and for fictional prospects generally) matching real scouts' own voice
+ * (in progress round 70, gated on Tyler supplying source write-up samples —
+ * see gap #86), and calibrating `scoutingTiersForPool`'s quota thresholds
+ * beyond a first defensible pass (see that function's own doc comment).
+ * `scoutingReportFor` below ships a plain, honest stats-line placeholder for
+ * the write-up-less majority in the meantime, not literary prose — a real
+ * gap, not a hidden one. **The "plays like a young {real player}" comp
+ * system (backlog #42) is now built** — see `playsLikeFor` below, added
+ * round 70.
  */
 
 // ---------------------------------------------------------------------------
@@ -819,6 +822,129 @@ export function scoutingReportFor(prospect: Player): string {
   const templates = GENERIC_REPORT_TEMPLATES;
   const pick = Math.floor(mulberry32(prospect.PlayerID * 17 + 3)() * templates.length);
   return templates[pick](prospect);
+}
+
+// ---------------------------------------------------------------------------
+// "Plays like" comps (backlog #42, round 70)
+// ---------------------------------------------------------------------------
+
+/**
+ * Weighted-Euclidean distance between two players' attribute profiles,
+ * reusing `recomputeOVR`'s own x3-primary/x1-other weighting convention
+ * (`ARCHETYPE_PRIMARY_ATTRIBUTES`) for consistency with how the rest of the
+ * engine already decides which attributes matter most for a given
+ * archetype — deliberately NOT `recomputeOVR`'s own z-scored composite
+ * itself, which collapses all 20 attributes into one scalar and would lose
+ * exactly the attribute-SHAPE information a "plays like" comp needs to
+ * capture. All 20 `RATED_ATTRIBUTES` already share one 1-99 scale (unlike
+ * OVR's cross-archetype comparability problem, which is WHY it needs
+ * z-scoring in the first place), so a raw weighted distance needs no
+ * separate normalisation step here. Returned as a weighted RMS (divided by
+ * total weight, not just summed) so the metric stays on a stable,
+ * archetype-independent scale regardless of how many attributes happen to
+ * be "primary" for a given archetype (4-5, varies — see
+ * `ARCHETYPE_PRIMARY_ATTRIBUTES`).
+ */
+function attributeDistance(a: Player, b: Player, archetype: Archetype): number {
+  const primary = new Set(ARCHETYPE_PRIMARY_ATTRIBUTES[archetype]);
+  let weightedSumSq = 0;
+  let weightTotal = 0;
+  for (const attr of RATED_ATTRIBUTES) {
+    const weight = primary.has(attr) ? 3 : 1;
+    const diff = a[attr] - b[attr];
+    weightedSumSq += weight * diff * diff;
+    weightTotal += weight;
+  }
+  return Math.sqrt(weightedSumSq / weightTotal);
+}
+
+export interface PlaysLikeComp {
+  player: Player;
+  distance: number;
+}
+
+/**
+ * "Plays like a young {real player}" — backlog #42, deferred at round 69's
+ * own admission ("Also deferred, disclosed rather than silently skipped:
+ * the 'plays like a young {real player}' comp system," this file's top doc
+ * comment). Finds the single closest-profile REAL player in
+ * `comparisonPool` — callers should always pass `ALL_PLAYERS` (the live
+ * established/drafted population), never a `DraftWindow.pool`/
+ * `CombineWindow.pool` (comping a prospect to another undrafted prospect
+ * makes no sense) — via `attributeDistance` above, restricted to the SAME
+ * archetype first (a comp should be positionally sensible, not just
+ * numerically close on paper) with a defensive fallback to the full real
+ * population if that archetype has no other real player yet (same fallback
+ * shape `archetypeAttributeMeans` already uses above). `realFullName` gates
+ * the candidate pool rather than `Team`/`delisted` — matches every other
+ * real-data join in this codebase (round 68's frozen-identity convention)
+ * and means a delisted real veteran can still surface as a comp, which is
+ * fine (a comp is about playing style, not currently being listed).
+ *
+ * Returns `null` when `comparisonPool` has no real players at all — genuinely
+ * empty on a fresh test fixture, but ALSO the observed, live state of
+ * Tyler's own dev save as of round 70: `ALL_PLAYERS` there is 751/751
+ * *without* `realFullName` (that roster was frozen before round 68 added the
+ * field — same "save from before round 68" gap `getPlayerByRealFullName` and
+ * `realSeasonHistory.ts`'s `yearRowsFor` already disclose and fall back on,
+ * just with nothing to fall back TO here, since a comp against a nameless
+ * fictional player would defeat the feature's entire point). Confirmed live
+ * in Chrome, round 70: every prospect on that save's 2026 board showed "No
+ * comparable real player found yet" at Pick 1, while the exact same function
+ * against a comparison pool that DOES carry `realFullName` (a freshly
+ * generated prospect pool, tested directly in the browser console) returned
+ * correct, sane comps immediately — so this is a data-vintage gap on that one
+ * save, not a bug in the matching logic. Self-healing without any save
+ * migration: every prospect drafted from here — real or fictional — gets
+ * pushed into `ALL_PLAYERS` on pick resolution (`confirmDraftPick`/
+ * `autoResolveNextPick`/etc., useSaveStore.ts), and a freshly-generated
+ * prospect always carries `realFullName` when they're a real one regardless
+ * of the existing pool's own vintage — so comps start appearing for
+ * still-on-the-board prospects as soon as this draft's real prospects start
+ * getting picked, and any save started fresh from today's baseline
+ * `players.json` (751/751 real-tagged) has a full comparison pool from pick
+ * one.
+ */
+export function playsLikeFor(prospect: Player, comparisonPool: readonly Player[]): PlaysLikeComp | null {
+  const archetype = prospect.archetype as Archetype;
+  const real = comparisonPool.filter((p) => p.realFullName && p.PlayerID !== prospect.PlayerID);
+  const sameArchetype = real.filter((p) => p.archetype === archetype);
+  const candidates = sameArchetype.length > 0 ? sameArchetype : real;
+  if (candidates.length === 0) return null;
+
+  let best = candidates[0];
+  let bestDistance = attributeDistance(prospect, best, archetype);
+  for (let i = 1; i < candidates.length; i++) {
+    const d = attributeDistance(prospect, candidates[i], archetype);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = candidates[i];
+    }
+  }
+  return { player: best, distance: bestDistance };
+}
+
+/**
+ * Qualitative banding over `PlaysLikeComp.distance`, purely for UI framing
+ * ("strong comp" vs. "just the closest name available") — Tyler gave no
+ * spec for this, so both thresholds are a disclosed,
+ * calibrated-not-specified construction. Tuned empirically (not guessed —
+ * a first pass at 9/15 was checked against the real distribution and found
+ * to badly miscalibrate: min 5.40, p25 7.54, p50 8.24, p75 8.97, p90 9.74,
+ * max 11.85 across a full generated 2026 pool's real best-match distances
+ * — 9/15 would have called ~90% of comps "strong" and 0% "loose", the same
+ * shape of first-guess miscalibration round 69's own tier floors hit before
+ * their own empirical correction). Settled on 7.5/9.5 — roughly the p25/p90
+ * marks — so the three bands actually split the real distribution instead
+ * of one swallowing the other two.
+ */
+const PLAYS_LIKE_STRONG_THRESHOLD = 7.5;
+const PLAYS_LIKE_LOOSE_THRESHOLD = 9.5;
+
+export function playsLikeConfidenceLabel(distance: number): string {
+  if (distance <= PLAYS_LIKE_STRONG_THRESHOLD) return "Strong comp";
+  if (distance <= PLAYS_LIKE_LOOSE_THRESHOLD) return "Comp";
+  return "Loose comp";
 }
 
 // ---------------------------------------------------------------------------

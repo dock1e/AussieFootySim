@@ -306,3 +306,214 @@ export function potentialBonusFromSignal(signal: UnderageStatSignal): number {
 export function writeupTextFor(record: RealProspectRecord): string {
   return record.writeups.join("\n\n");
 }
+
+// ---------------------------------------------------------------------------
+// Write-up-derived scouting tier signal (round 77) — Tyler's own instruction:
+// "take much more credence from the official scouting report write ups for
+// which players are superstars, which ones are elite potential, which ones
+// are great or steady role players." Everything above this point in the file
+// (`potentialBonusFromSignal`) rewards STATS (disposals/goals/tackles/
+// nominations) — a real scout's PROSE can say something stats alone can't:
+// a kid can post modest numbers and still be the one a scout calls a
+// "freakish talent," and a kid who racks up a monster stat-line in one game
+// (round 77's own Josh Jarrad — 8 goals as a bottom-ager, see
+// `data/real_prospects_master.json`) doesn't necessarily get called a
+// superstar in the write-up itself. The two signals are deliberately kept
+// separate and additive, not merged into one: a huge stat outburst with
+// plain-language prose still only earns the (capped) stats bonus above, not
+// a write-up-driven POT floor the actual TEXT didn't earn.
+//
+// **Explicitly disclosed as an approximation, not a solved NLP problem.** A
+// keyword/phrase-bank match over free text cannot perfectly tell a genuine
+// "this kid is a top-of-the-draft talent" claim from a narrower "elite AT
+// ONE SKILL" compliment (e.g. "elite forward craft" praises a specific tool,
+// not the player's overall grade — `writeupTextFor`'s own text doesn't
+// distinguish the two). Calibration leans toward precision (missing a real
+// superlative) over recall (mistaking skill-specific praise for an
+// overall-grade claim), because a floor that fires too eagerly would cheapen
+// exactly the signal Tyler asked this mechanic to trust MORE, not less.
+//
+// Every phrase below was checked with a one-off grep across every write-up
+// currently in `data/real_prospects_master.json` (210 records, 1,297 total)
+// before being added — most have at least one confirmed real hit; a handful
+// of standard AFL scouting-vocabulary terms ("superstar," "franchise,"
+// "x-factor," "highly rated," "among the best") are included at zero current
+// hits, disclosed as such, because they're standard real scouting language
+// this specific snapshot just hasn't happened to use yet, not invented
+// phrasing — re-run that same grep against future data drops before adding
+// MORE new phrases, rather than guessing at ones that sound plausible but
+// have never actually occurred.
+// ---------------------------------------------------------------------------
+
+export type ScoutingProseTier = "generational" | "superstar" | "elite" | "great" | "none";
+
+export interface ScoutingProseSignal {
+  tier: ScoutingProseTier;
+  /** Verbatim substring(s) of the write-up that matched — surfaced so Draft.tsx / a future verify script can show its work rather than asserting a tier with no visible evidence. Empty when tier is "none". */
+  matchedPhrases: readonly string[];
+}
+
+/**
+ * Ordered strongest-first — Tyler's own words from the round 77 request
+ * ("those one in a generation... players"). 0 confirmed hits in the current
+ * corpus (expected — no routine carnival/match write-up calls a Talent
+ * League kid "generational"), kept for the rare future case and because it's
+ * Tyler's own literal phrase.
+ */
+const GENERATIONAL_PHRASES: readonly RegExp[] = [/generational/i, /once in a generation/i, /one[- ]in[- ]a[- ]generation/i, /consensus (no\.?\s?1|number one|#1)/i];
+
+/**
+ * Explicit, unambiguous claims about a player's overall standing or draft
+ * stock — a named superlative noun ("superstar," "freak"), an objective
+ * external honour ("All-Australian," "National Academy"), or a concrete
+ * draft-stock movement claim ("rocketed up the order," "top-10
+ * calculations") — never a skill-specific compliment. Confirmed real hits:
+ * freakish (2), rare talent (1), game-breaker (1), rocketed/pushed up the
+ * order or board (2), top-N calculations (1), first-round selection (1),
+ * lofty standards (1), All-Australian (2), National Academy (1).
+ */
+const SUPERSTAR_PHRASES: readonly RegExp[] = [
+  /superstar/i,
+  /franchise (player|talent|type)/i,
+  /freakish/i,
+  /\bfreak\b/i,
+  /rare talent/i,
+  /special talent/i,
+  /x-?factor/i,
+  /game-?breaker/i,
+  /rocketed up (the )?(order|board)/i,
+  /pushed (well )?up (the )?(order|board)/i,
+  /top[- ]?\d+ calculations/i,
+  /(potential |genuine )?first-round selection/i,
+  /lofty standards/i,
+  /all-?australian/i,
+  /national academy/i,
+];
+
+/**
+ * Strong general-excellence language — one notch below an explicit
+ * draft-stock claim, and where a bare "elite" (often skill-qualified, e.g.
+ * "elite foot skills") lives. Confirmed real hits: elite (3), rated so
+ * highly (1), one of the best (2), one of the most talented/watchable/
+ * damaging/destructive (2), genuinely outstanding (1), outstanding (5),
+ * brilliant (2).
+ */
+const ELITE_PHRASES: readonly RegExp[] = [
+  /\belite\b/i,
+  /rated so highly/i,
+  /highly rated/i,
+  /one of the best/i,
+  /among the best/i,
+  /one of the most (talented|watchable|damaging|destructive)/i,
+  /genuinely outstanding/i,
+  /\boutstanding\b/i,
+  /\bbrilliant\b/i,
+  /\bexceptional\b/i,
+];
+
+/**
+ * "Great or steady role player" language, Tyler's own phrase — the most
+ * common real hit rate by far (this is what most competent, unspectacular
+ * write-ups actually sound like): classy (16), reliable (10), clean hands
+ * (11+1), impressive (12), prime mover (2), trusted user (1), terrific
+ * season (1), consistent (1).
+ *
+ * Deliberately does NOT include "couldn't be stopped" despite one real hit —
+ * checking that record by hand (round 77's own Josh Jarrad, 8 goals as a
+ * bottom-ager) showed the phrase describing a STATISTICAL outburst ("Jarrad
+ * couldn't be stopped inside Glenelg's forward 50... a mammoth haul of eight
+ * goals"), not a qualitative judgment about his overall grade or steadiness
+ * — exactly the stats-vs-prose conflation this whole mechanism exists to
+ * keep separate (see this section's own top comment). A phrase this close to
+ * restating the box score stays out of the bank even with a confirmed hit.
+ */
+const GREAT_PHRASES: readonly RegExp[] = [
+  /\bclassy\b/i,
+  /\bconsistent\b/i,
+  /\breliable\b/i,
+  /clean with (his|her) hands/i,
+  /\bclean hands\b/i,
+  /prime mover/i,
+  /trusted user/i,
+  /terrific season/i,
+  /strong season/i,
+  /\bimpressive\b/i,
+];
+
+function allMatches(text: string, phrases: readonly RegExp[]): string[] {
+  const hits: string[] = [];
+  for (const p of phrases) {
+    const m = text.match(p);
+    if (m) hits.push(m[0]);
+  }
+  return hits;
+}
+
+/**
+ * Reads a real prospect's actual write-up PROSE (not their stats — see this
+ * section's top comment) for scouting-superlative language, tiered
+ * strongest-to-weakest: the write-up's single strongest claim decides its
+ * tier, rather than summing multiple weaker phrases into a tier they didn't
+ * individually earn. Returns `{ tier: "none", matchedPhrases: [] }` for the
+ * ~84% of real prospects with no write-up at all, or whose write-up simply
+ * doesn't use any of this bank's language — the large majority, by design
+ * (see the phrase banks' own precision-over-recall note above).
+ */
+export function scoutingProseSignalFor(record: RealProspectRecord): ScoutingProseSignal {
+  const text = writeupTextFor(record);
+  if (!text) return { tier: "none", matchedPhrases: [] };
+  const banks: readonly (readonly [ScoutingProseTier, readonly RegExp[]])[] = [
+    ["generational", GENERATIONAL_PHRASES],
+    ["superstar", SUPERSTAR_PHRASES],
+    ["elite", ELITE_PHRASES],
+    ["great", GREAT_PHRASES],
+  ];
+  for (const [tier, phrases] of banks) {
+    const hits = allMatches(text, phrases);
+    if (hits.length > 0) return { tier, matchedPhrases: hits };
+  }
+  return { tier: "none", matchedPhrases: [] };
+}
+
+/**
+ * Maps a prose tier to a POT FLOOR — applied downstream of the normal
+ * attribute-driven `potentialForProspect` calculation in
+ * `generateProspectPool` (draft.ts), not blended into the ceiling-only
+ * `potentialBonusFromSignal` bonus above. This is a genuinely separate
+ * mechanism, not a re-tuning of that one: `potentialBonusFromSignal` adds
+ * onto `potentialTall`/`potentialMid` (the CEILING), but final displayed POT
+ * is `OVR + upside(ceiling)*ageFactor` (`potentialForProspect`) — and OVR is
+ * driven entirely by randomly-generated attributes, completely independent
+ * of any write-up or stats bonus. Maxing out the ceiling-side bonus therefore
+ * cannot reliably push a "superstar"-worded prospect's final POT above
+ * `draft.ts`'s `SUPERSTAR_POT_FLOOR`/`GENERATIONAL_POT_FLOOR` (72/75) if
+ * their OVR roll happens to be mediocre — which is exactly what this floor
+ * fixes, by overriding final POT directly rather than hoping a bigger
+ * ceiling bonus eventually gets there.
+ *
+ * Magnitudes are set just above those same two floors (72/75) so a
+ * "superstar"/"generational" PROSE claim reliably lands in that SAME named
+ * tier — the entire point of this mechanic — with headroom for the small
+ * per-prospect jitter `generateProspectPool` adds on top so several
+ * floor-tagged prospects in one pool don't all tie on the exact same
+ * integer. "elite"/"great" floors are a first defensible pass, NOT
+ * independently re-verified against the pool's actual resulting tier
+ * percentiles the way 72/75 were in round 69 —
+ * `verify_round77_scratch.ts` checks this empirically; revise these two
+ * constants there if the resulting tier distribution doesn't land where the
+ * name implies.
+ */
+export function potentialFloorFromProse(tier: ScoutingProseTier): number {
+  switch (tier) {
+    case "generational":
+      return 77;
+    case "superstar":
+      return 73;
+    case "elite":
+      return 69;
+    case "great":
+      return 63;
+    case "none":
+      return 0;
+  }
+}

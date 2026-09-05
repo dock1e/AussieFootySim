@@ -36111,19 +36111,713 @@
   {
     "name": "Tony Marrone",
     "normName": "tony marrone",
-    "team": "Central/District Virginia",
-    "positionRaw": null,
-    "heightCm": null,
-    "dob": null,
-    "writeups": [],
-    "standoutSourceEvents": [],
-    "standoutStats": null,
-    "gamesInStandout": 0,
+    "team": "Central District",
+    "positionRaw": "Midfielder",
+    "heightCm": 177,
+    "dob": [
+      2009,
+      1,
+      23
+    ],
+    "writeups": [
+      "Starting on the pine despite being the league’s top disposal winner this season, Marrone took some time to make his mark on the contest. He hunted the ball at ground level and showed good poise when delivering it off either foot, doing much of his work facing forward. The bottom-ager’s ability to drive his legs and break clear of congestion came to the fore in the final term where he began to get his hands on the ball through the middle before launching it inside 50 on the fly."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 20,
+      "marks": 3,
+      "clearances": 3,
+      "inside50s": 4,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
     "seasonStats": null,
     "aflFutures": true,
     "ageGroupSheet": "U18",
     "sourceSheets": [
-      "AFLFuturesBoys"
+      "AFLFuturesBoys",
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Angus Pringle",
+    "normName": "angus pringle",
+    "team": "Central District",
+    "positionRaw": "Midfielder",
+    "heightCm": 181,
+    "dob": [
+      2008,
+      2,
+      24
+    ],
+    "writeups": [
+      "Pringle had claims on being the Bulldogs’ best and most consistent player on Saturday, holding up his end of the bargain in midfield. The no-frills ball winner was clean at the coalface, both extracting and distributing the ball effectively. He hardly fumbled throughout the day and was able to find possessions on the outside, although can continue to work on becoming more damaging on his favoured left foot. His inside work allowed the lines of Marrone to shine."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 27,
+      "marks": 5,
+      "clearances": 8,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 5,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Jake Eime",
+    "normName": "jake eime",
+    "team": "Central District",
+    "positionRaw": "Defender/Wing",
+    "heightCm": 182,
+    "dob": [
+      2008,
+      7,
+      29
+    ],
+    "writeups": [
+      "One of the most destructive players afield at his best, Eime’s transitional running set him apart despite the team result. He pounced on turnovers, kickstarting counterattacks with his raw leg speed and daring rebound runs. The top-ager was deadly with open grass ahead of him, breezing past opponents and biting off kicks others wouldn’t dare to. Those kinds of instincts, along with glimpses of his competitiveness, are exactly why he is rated so highly. He matched up on Ben Copping across half-back and played him relatively loosely before a late move up to the wing."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 17,
+      "marks": 3,
+      "clearances": 0,
+      "inside50s": 3,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Jack Gordon",
+    "normName": "jack gordon",
+    "team": "Central District",
+    "positionRaw": "Midfielder/Defender",
+    "heightCm": 185,
+    "dob": [
+      2008,
+      1,
+      5
+    ],
+    "writeups": [
+      "It was a relatively low-volume game from Gordon, who returned to the Under 18 level on the back of two League appearances. He got to show some of his strengths around the contest, proving robust over the ground ball and capable of extracting it cleanly. Gordon perhaps lacked the explosive pace to be fully damaging out of the packs, but was able to find more space as the game wore on, picking up uncontested marks. He ended up taking the Patterson matchup with a move to defence and was strong in one-on-one duels. His best moment was a classy running goal in the third term."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 13,
+      "marks": 5,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 1,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Billy Nicholls",
+    "normName": "billy nicholls",
+    "team": "Central District",
+    "positionRaw": "Defender",
+    "heightCm": 190,
+    "dob": [
+      2009,
+      2,
+      10
+    ],
+    "writeups": [
+      "Nicholls certainly had his hands full in a besieged Centrals defence, but did all he could to repel the frequent danger. He positioned high to intercept and mop up loose Glenelg kicks, doing well to impact both in the air and at ground level. Nicholls was often the player to clear the ball quickly upon turnover, alleviating pressure by surging forward and dumping it out of harm’s way."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 20,
+      "marks": 2,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 4,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Brayden Whimpress",
+    "normName": "brayden whimpress",
+    "team": "Central District",
+    "positionRaw": "Key Forward/Ruck",
+    "heightCm": 194,
+    "dob": [
+      2009,
+      4,
+      14
+    ],
+    "writeups": [
+      "While the scorecard shows he ended up with 2.1, Whimpress had his chances to land a major haul of goals. He provided a terrific focal point inside 50, displaying his athleticism with spring-heeled leaps and by gaining separation on the lead. The raw bottom-ager dropped a couple of straightforward marks and sprayed some of his kicks, but also rose for several impressive aerial grabs and slotted goals in the first and final quarters. He briefly rotated through the ruck and certainly has the tools to be an exciting tall forward, albeit with a bit of size to add to his frame."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 12,
+      "marks": 6,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 2,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Gabriel Patterson",
+    "normName": "gabriel patterson",
+    "team": "Glenelg",
+    "positionRaw": "Forward/Midfielder",
+    "heightCm": 184,
+    "dob": [
+      2008,
+      3,
+      26
+    ],
+    "writeups": [
+      "Patterson set the tone for Glenelg’s victory with an electric opening quarter. He bagged both of his goals in that time along with an unselfish assist, using all his speed and freakish talent to apply scoreboard pressure. Patterson looked lively from the outset, connecting up the ground with relentless leads and a strong set of hands. He also got a run in midfield where his quick distribution and turn of foot proved just as effective. His attacking instincts and opportunism consistently posed a threat to Central District in what was his highest-volume game of the season."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 27,
+      "marks": 7,
+      "clearances": 5,
+      "inside50s": 0,
+      "goals": 2,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Jacob McNicol",
+    "normName": "jacob mcnicol",
+    "team": "Glenelg",
+    "positionRaw": "Midfielder/Forward",
+    "heightCm": 178,
+    "dob": [
+      2008,
+      6,
+      28
+    ],
+    "writeups": [
+      "McNicol made a bright start as Glenelg’s go-to at the centre ball-ups, although was tested as Central District put early heat on the ball. His roving became cleaner as the game wore on, with the classy midfielder even crumbing a goal in the second term. He also worked hard around the ground to accumulate and further dictate play between the arcs. Usually a productive and attacking runner, he tended to engage in more kick-mark play on Saturday."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 22,
+      "marks": 0,
+      "clearances": 6,
+      "inside50s": 0,
+      "goals": 1,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Harvey Croker",
+    "normName": "harvey croker",
+    "team": "Glenelg",
+    "positionRaw": "Midfielder",
+    "heightCm": 184,
+    "dob": [
+      2008,
+      8,
+      15
+    ],
+    "writeups": [
+      "Having cut his teeth on the wing for much of the year, Croker had the opportunity to show his wares in the centre on Saturday. He was at his best when able to receive second possession, face forward and use his slick left-foot kicking. While some of his passes fell short with a lack of power, his stylish ball use and quick hands set him apart at times. Croker’s handling and hard pressure acts earned big ticks considering his outside-leaning traits. He laid a game-high eight tackles."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 27,
+      "marks": 0,
+      "clearances": 5,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 8,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Jimmy Hele",
+    "normName": "jimmy hele",
+    "team": "Glenelg",
+    "positionRaw": "Midfielder/Forward",
+    "heightCm": 185,
+    "dob": [
+      2008,
+      10,
+      28
+    ],
+    "writeups": [
+      "Hele has had a terrific season for Glenelg and that continued come finals time. He was a prime mover in midfield, straight-lining the ball and distributing it with class. Some of his kicking on the move was exquisite, albeit inconsistent, as he craftily brought his team into attack. He also rotated forward and worked hard to connect up the ground, competing well with his strong frame in both roles."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 27,
+      "marks": 0,
+      "clearances": 7,
+      "inside50s": 4,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Josh Jarrad",
+    "normName": "josh jarrad",
+    "team": "Glenelg",
+    "positionRaw": "Key Forward",
+    "heightCm": 191,
+    "dob": [
+      2009,
+      6,
+      11
+    ],
+    "writeups": [
+      "Jarrad couldn’t be stopped inside Glenelg’s forward 50, registering 11 scoring shots and a mammoth haul of eight goals – his second for the season. The bottom-ager played a simple game, reeling in several strong marks with his vice-like hands and converting them into scores. He presented well on the lead and held his own in one-on-one tussles, also recovering once the ball hit the deck to slot snaps on either foot. Jarrad well and truly filled his boots, thriving off the Bays’ frequent service as their forward focal point. He plays like a genuine key, above his 191cm standing."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 17,
+      "marks": 8,
+      "clearances": 0,
+      "inside50s": 5,
+      "goals": 8,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Jobe Janeway",
+    "normName": "jobe janeway",
+    "team": "Glenelg",
+    "positionRaw": "Ruck",
+    "heightCm": 206,
+    "dob": [
+      2008,
+      1,
+      4
+    ],
+    "writeups": [
+      "While it was a low-volume game from Janeway, he fulfilled his primary duties in the ruck wonderfully well. Using his towering 206cm frame, the state representative showed his craft to win clear hits to advantage which helped drive Glenelg’s centre ball-up dominance. Although, Callan Semmler did a good job to outbody him at stoppages around the ground. Janeway moved well in open play and showed great touch below his knees in his few moments with the ball. His reach was useful when getting a hand in to split marking contests down the line."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 4,
+      "marks": 0,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 2,
+      "hitouts": 18
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Harry Franz",
+    "normName": "harry franz",
+    "team": "Glenelg",
+    "positionRaw": "Key Defender",
+    "heightCm": 193,
+    "dob": [
+      2008,
+      11,
+      27
+    ],
+    "writeups": [
+      "While his side established its dominance early in the piece, Franz still played an immense role down back. While slightly undersized, he thrived aerially with gutsy contested marking and spoils, making most of his contributions through interceptions. His ability to outnumber both in the air and once the ball hit the deck ensured Glenelg created seamless turnovers. Franz was also prepared to venture forward and join the attack, showcasing his sound distributive skills."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Central District vs Glenelg"
+    ],
+    "standoutStats": {
+      "disposals": 15,
+      "marks": 6,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 8,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Lachlan Marshall-Bates",
+    "normName": "lachlan marshall-bates",
+    "team": "Woodville-West Torrens",
+    "positionRaw": null,
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Lachlan Marshall-Bates spearheaded the result with five goals from 19 disposals and nine marks (five contested) as Woodville-West Torrens ended North Adelaide’s season with a 25-point win."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Woodville-West Torrens vs North Adelaide"
+    ],
+    "standoutStats": {
+      "disposals": 19,
+      "marks": 9,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 5,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Jayden Groom",
+    "normName": "jayden groom",
+    "team": "Woodville-West Torrens",
+    "positionRaw": null,
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Jayden Groom led the Eagles’ disposal charts with 29 touches, including 11 rebound 50s, in Woodville-West Torrens’ semi-final win over North Adelaide."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Woodville-West Torrens vs North Adelaide"
+    ],
+    "standoutStats": {
+      "disposals": 29,
+      "marks": 0,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 11,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Romario Clemente",
+    "normName": "romario clemente",
+    "team": "Woodville-West Torrens",
+    "positionRaw": null,
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Romario Clemente found the footy and bagged a goal in Woodville-West Torrens’ semi-final win over North Adelaide, finishing with 22 disposals."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Woodville-West Torrens vs North Adelaide"
+    ],
+    "standoutStats": {
+      "disposals": 22,
+      "marks": 0,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 1,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Will Trengove",
+    "normName": "will trengove",
+    "team": "Woodville-West Torrens",
+    "positionRaw": null,
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Will Trengove found the footy and bagged a goal in Woodville-West Torrens’ semi-final win over North Adelaide, finishing with 21 disposals."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Woodville-West Torrens vs North Adelaide"
+    ],
+    "standoutStats": {
+      "disposals": 21,
+      "marks": 0,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 1,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Sam Tassone",
+    "normName": "sam tassone",
+    "team": "North Adelaide",
+    "positionRaw": null,
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "North Adelaide’s top prospects still managed to show out in the elimination final defeat, headlined by Sam Tassone with 30 disposals and one goal."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Woodville-West Torrens vs North Adelaide"
+    ],
+    "standoutStats": {
+      "disposals": 30,
+      "marks": 0,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 1,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Ethan Herbert",
+    "normName": "ethan herbert",
+    "team": "North Adelaide",
+    "positionRaw": "Ruck",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Ruckman Ethan Herbert stood tall for North Adelaide in the elimination final defeat, racking up 25 disposals, nine marks and 26 hitouts."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Woodville-West Torrens vs North Adelaide"
+    ],
+    "standoutStats": {
+      "disposals": 25,
+      "marks": 9,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 26
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
+    ],
+    "homeState": "SA"
+  },
+  {
+    "name": "Harry Tamblyn",
+    "normName": "harry tamblyn",
+    "team": "North Adelaide",
+    "positionRaw": null,
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Harry Tamblyn moved atop the league’s disposal tally with another 25 touches in North Adelaide’s elimination final defeat to Woodville-West Torrens."
+    ],
+    "standoutSourceEvents": [
+      "Rookie Me Central",
+      "Woodville-West Torrens vs North Adelaide"
+    ],
+    "standoutStats": {
+      "disposals": 25,
+      "marks": 0,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 0,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "RookieMeCentralNotes2026"
     ],
     "homeState": "SA"
   },

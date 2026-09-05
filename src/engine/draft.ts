@@ -18,6 +18,8 @@ import {
   potentialBonusFromSignal,
   writeupTextFor,
   realProspectAgeIn,
+  scoutingProseSignalFor,
+  potentialFloorFromProse,
   type RealProspectRecord,
 } from "../data/realProspects.ts";
 
@@ -410,8 +412,23 @@ function buildRealProspect(id: number, record: RealProspectRecord, year: number,
 
   const signal = underageSignalFor(record);
   const bonus = potentialBonusFromSignal(signal);
-  const potentialTall = clip(generatePotential(rng) + bonus, 1, 99);
-  const potentialMid = clip(generatePotential(rng) + bonus, 1, 99);
+  // Round 77: a SEPARATE, write-up-PROSE-driven floor (not another stats
+  // bonus) — see realProspects.ts's own doc comment on why "superstar"/
+  // "elite" write-up language needs to move the actual CEILING (this
+  // player's future growth headroom, potentialCeilingFor/ageOnePlayer in
+  // progression.ts read potentialTall/potentialMid directly, never the
+  // frozen POT display number), not just the one-time draft-night POT
+  // reading — generateProspectPool below applies the same floor a second
+  // time, downstream, as a safety net on the FINAL blended POT, since even a
+  // maxed-out ceiling has limited leverage over that number (see this file's
+  // own doc comment there). `rng()` here is the pool's own shared generation
+  // stream (same convention every other per-prospect draw in this function
+  // already uses), so two prospects with the same prose tier still don't
+  // clamp to one identical integer.
+  const proseFloorBase = potentialFloorFromProse(scoutingProseSignalFor(record).tier);
+  const jitteredProseFloor = proseFloorBase > 0 ? proseFloorBase + Math.round(rng() * 3) : 0;
+  const potentialTall = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 1, 99);
+  const potentialMid = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 1, 99);
 
   const { first, last } = splitRealName(record.name);
   const tall = TALL_ARCHETYPES.has(archetype);
@@ -553,6 +570,32 @@ export function potentialForProspect(p: Player): number {
 }
 
 /**
+ * The downstream safety-net half of round 77's write-up-prose POT floor —
+ * see `buildRealProspect`'s own doc comment for why the ceiling-side
+ * (`potentialTall`/`potentialMid`) floor applied there ISN'T sufficient on
+ * its own: `potentialForProspect`'s `upsideAttr` term is capped at +19.6 no
+ * matter how high the ceiling goes, so a "superstar"-worded prospect with a
+ * merely-average OVR roll could still land below `SUPERSTAR_POT_FLOOR`
+ * even with a maxed ceiling. This re-derives the SAME prose tier (a cheap
+ * `REAL_PROSPECTS.find` + regex pass over ~1-2 short strings, called once
+ * per real prospect per pool generation — not a hot path) and overrides the
+ * final blended POT directly when it would otherwise fall short. Returns 0
+ * (no floor, `potentialForProspect` alone decides) for a fictional prospect,
+ * a real prospect absent from `REAL_PROSPECTS` (shouldn't happen —
+ * `buildRealProspect` only ever builds from an actual record — defensive
+ * only), or one whose write-up prose matched no phrase bank.
+ */
+function realProspectPotentialFloor(p: Player): number {
+  if (!p.realFullName) return 0;
+  const record = REAL_PROSPECTS.find((r) => r.name === p.realFullName);
+  if (!record) return 0;
+  const base = potentialFloorFromProse(scoutingProseSignalFor(record).tier);
+  if (base <= 0) return 0;
+  const jitter = Math.round(mulberry32(p.PlayerID * 71 + 41)() * 3);
+  return base + jitter;
+}
+
+/**
  * Generates this year's National Draft pool. `existingPlayers` should be the
  * full live pool (`ALL_PLAYERS`) — used both as the archetype-attribute-mean
  * baseline and as the OVR z-score reference population (see this file's doc
@@ -608,7 +651,10 @@ export function generateProspectPool(existingPlayers: readonly Player[], year: n
   const merged = recomputeOVR([...existingPlayers, ...allNew]);
   const withOvr = allNew.map((p, i) => ({ ...p, OVR: merged[existingPlayers.length + i].OVR }));
 
-  return withOvr.map((p) => ({ ...p, POT: potentialForProspect(p), totalValue: estimatedValue(p.OVR) }));
+  return withOvr.map((p) => {
+    const pot = Math.max(potentialForProspect(p), realProspectPotentialFloor(p));
+    return { ...p, POT: pot, totalValue: estimatedValue(p.OVR) };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -770,10 +816,121 @@ export function scoutConfidence(prospect: Player, revealedCount: number): number
   return clip(base + revealedCount * 6, 35, 84);
 }
 
+/** Shared blended talent score behind both `trueProspectRank` and `predictedDraftRange` below — factored out so the two can never silently drift onto two different rankings of the same pool. */
+function talentScore(p: Player): number {
+  return p.OVR * 0.7 + p.POT * 0.3;
+}
+
+function rankedPoolByTalent(pool: readonly Player[]): { id: number; score: number }[] {
+  return pool.map((p) => ({ id: p.PlayerID, score: talentScore(p) })).sort((a, b) => b.score - a.score);
+}
+
 /** True (unfogged) rank within the pool by a blended OVR/POT talent score — the "real" likely draft position every mock outlet jitters around. */
 export function trueProspectRank(pool: readonly Player[], prospect: Player): number {
-  const scored = pool.map((p) => ({ id: p.PlayerID, score: p.OVR * 0.7 + p.POT * 0.3 })).sort((a, b) => b.score - a.score);
-  return scored.findIndex((x) => x.id === prospect.PlayerID) + 1;
+  return rankedPoolByTalent(pool).findIndex((x) => x.id === prospect.PlayerID) + 1;
+}
+
+// ---------------------------------------------------------------------------
+// Predicted draft order (round 77) — Tyler's own request: a single canonical
+// [low, high] range per prospect, the new DEFAULT Draft board sort (rank by
+// its midpoint), narrow at the very top and widening further down the list
+// ("it might be a clear #1 pick, or maybe the top 3 are each 1-3 or one of
+// them even 2-4... then as we get further down the list players should be
+// classified as for example 5-8, 10-14, 12-18. A 3 to 10 draft pick range
+// makes sense"). Deliberately a NEW function, not a repurposing of
+// `mockProjection` above: the 3 mock outlets are independently-jittered
+// PUNDIT guesses that disagree with each other by design (Engine.md's own
+// framing) — this is the single canonical in-house prediction the Draft
+// board sorts and filters by, closer to "our own recruiting department's
+// call" than a mock-draft site's.
+// ---------------------------------------------------------------------------
+
+export interface PredictedDraftRange {
+  low: number;
+  high: number;
+}
+
+/** Total range width never exceeds this — Tyler's own explicit ceiling: "a 3 to 10 draft pick range makes sense." */
+const RANGE_MAX_WIDTH = 10;
+
+/**
+ * Reverse-engineered from Tyler's own illustrative examples (rank ~7 -> "5-8"
+ * [width 3], rank ~12 -> "10-14" [width 4], rank ~15 -> "12-18" [width 6]) —
+ * a simple linear-in-rank growth was enough to land close to all three
+ * "for example" figures at once without needing separate segments; the
+ * `RANGE_MAX_WIDTH` clip handles Tyler's explicit ceiling for anything
+ * deeper in the pool than his examples covered.
+ */
+function baseWidthForRank(rank: number): number {
+  return clip(0.7 + rank * 0.42, 0, RANGE_MAX_WIDTH);
+}
+
+/**
+ * Default "no assistant coach hired yet" scouting accuracy — round 77 builds
+ * this parameter as a disclosed forward-compatibility stub, per Tyler's own
+ * instruction ("I plan to introduce assistant coaches... talent scout will
+ * dictate how accurate we can predict Potential and how accurate we can
+ * predict the draft range too"): no talent-scout data model exists yet
+ * anywhere in this codebase, so every current call site should pass nothing
+ * and get this baseline. When that feature is eventually built, its own code
+ * computes a real 0-1 accuracy from the hired scout's rating and passes it
+ * here instead — this function's signature already supports that with zero
+ * future rework.
+ */
+export const DEFAULT_SCOUT_ACCURACY = 0.5;
+
+/**
+ * The single canonical predicted draft-order range for one prospect — see
+ * this section's own top comment for how this differs from `mockProjection`.
+ *
+ * Two effects stack, both grounded in the pool's ACTUAL talent shape rather
+ * than a fixed formula that reads the same regardless of how strong or
+ * muddled a given year's class is:
+ *
+ * 1. **Base width grows with rank** (`baseWidthForRank`) — vaguer further
+ *    down the board, exactly as real mock drafts get less precise outside
+ *    the top handful of names.
+ * 2. **Top-of-class clarity** (ranks 1-3 only): how much clear air the #1
+ *    prospect has over the #2-#4 chasing pack on this SAME blended talent
+ *    score. A big gap (a real standalone standout — typically round 77's own
+ *    new write-up-prose POT floor is exactly what creates one) narrows even
+ *    rank 1's range toward a near-lock; a muddled top (several prospects
+ *    bunched close together) keeps the fuller "top 3 could each go 1-3"
+ *    width — reproducing Tyler's own "it might be a clear #1 pick, or maybe
+ *    the top 3 are each 1-3" framing as a real read of the class, not a
+ *    coin flip independent of who's actually in it.
+ *
+ * `scoutAccuracy` (0-1, higher = more precise = narrower range) is the
+ * forward-compatibility stub for the not-yet-built assistant-coach talent
+ * scout — see `DEFAULT_SCOUT_ACCURACY`'s own doc comment. A small
+ * per-prospect seeded jitter (not threaded off the pool's own generation-time
+ * rng — same "reseed independently per fog function" convention
+ * `scoutOvrBand`/`scoutConfidence`/`mockProjection` already use) keeps
+ * several same-rank-gap prospects from reading as mechanically identical.
+ */
+export function predictedDraftRange(prospect: Player, pool: readonly Player[], scoutAccuracy: number = DEFAULT_SCOUT_ACCURACY): PredictedDraftRange {
+  const ranked = rankedPoolByTalent(pool);
+  const n = ranked.length;
+  const rank = ranked.findIndex((x) => x.id === prospect.PlayerID) + 1;
+  if (rank === 0) return { low: 1, high: n }; // defensive: prospect not in this pool at all
+
+  const chasePack = ranked.slice(1, 4);
+  const chaseAvg = chasePack.length > 0 ? chasePack.reduce((s, x) => s + x.score, 0) / chasePack.length : ranked[0].score;
+  const topGap = clip(ranked[0].score - chaseAvg, 0, 6);
+  const clarityScale = rank <= 3 ? clip(1 - topGap / 6, 0.08, 1) : 1;
+
+  const scoutMultiplier = 1.5 - clip(scoutAccuracy, 0, 1); // 1.0 at the DEFAULT_SCOUT_ACCURACY baseline, down to 0.5 (narrower) at accuracy 1, up to 1.5 (wider) at accuracy 0
+  const rng = mulberry32(prospect.PlayerID * 47 + 61);
+  const jitter = (rng() - 0.5) * 1.2;
+
+  const rawWidth = baseWidthForRank(rank) * clarityScale * scoutMultiplier + jitter;
+  const width = clip(Math.round(rawWidth), 0, RANGE_MAX_WIDTH);
+  const halfLow = Math.floor(width / 2);
+  const halfHigh = width - halfLow;
+
+  const low = Math.max(1, rank - halfLow);
+  const high = Math.min(n, rank + halfHigh);
+  return { low, high };
 }
 
 /**

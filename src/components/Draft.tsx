@@ -18,8 +18,10 @@ import {
   scoutingReportFor,
   playsLikeFor,
   playsLikeConfidenceLabel,
+  predictedDraftRange,
   type MockOutlet,
   type ScoutingTier,
+  type PredictedDraftRange,
 } from "../engine/draft";
 import type { DraftWindow } from "../engine/saveGame";
 import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
@@ -63,6 +65,16 @@ import { StatusPill, type PillTone } from "./StatusPill";
  * doesn't support trading picks yet, so every pick's provenance is trivially
  * "their own"), and no Academy `MATCH` tags in Recent Picks (Academy bids are
  * cut) — both omissions, not oversights.
+ *
+ * **Round 77**: the board's default sort is now `engine/draft.ts`'s new
+ * `predictedDraftRange` (a "Predicted pick" column, e.g. "5-8"), with an
+ * explicit 3-way toggle (Predicted/Overall/Potential) replacing the old
+ * fixed `scoutOvrBand`-midpoint sort — Tyler's own instruction. "Predicted
+ * pick" is deliberately NOT gated behind the scouting-reveal fog the same
+ * way `mockProjection`'s 3 outlet cards already aren't: it's presented as
+ * external/in-house draft-stock analysis, not something the coach's own
+ * scouting spend reveals, so it (like the mock outlets) is visible for every
+ * prospect regardless of `revealedAttrs`.
  */
 
 const HEADLINE_ATTR_LABELS: Record<RatedAttribute, string> = {
@@ -92,6 +104,9 @@ function revealedFor(window: DraftWindow, playerId: number): RatedAttribute[] {
   return (window.revealed[playerId] ?? []) as RatedAttribute[];
 }
 
+/** Round 77 board sort modes — "predicted" (the new default) sorts by `predictedDraftRange`'s own midpoint; "overall"/"potential" sort by the prospect's true (unfogged) OVR/POT directly, same "sort key is the true value, DISPLAY stays fogged" split the old default sort already used via `scoutOvrBand`. */
+type SortMode = "predicted" | "overall" | "potential";
+
 export function Draft() {
   const myClub = useGameStore((s) => s.myClub);
   const currentYear = useSaveStore((s) => s.year);
@@ -109,6 +124,10 @@ export function Draft() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [lineFilter, setLineFilter] = useState<Line | "All">("All");
   const [combineOnly, setCombineOnly] = useState(false);
+  // Round 77 — Tyler's own instruction: "the default sort should be on their
+  // predicted draft order and players should be able to sort the list by
+  // Overall and Potential too."
+  const [sortMode, setSortMode] = useState<SortMode>("predicted");
 
   // Only meaningful if this year's Combine actually ran — a stale prior-year
   // window (or none at all) just means no prospect gets tagged, same as if
@@ -127,6 +146,17 @@ export function Draft() {
   // `scoutingTiersForPool`'s own doc comment on why it's a whole-pool
   // function rather than a per-prospect one.
   const tierByPlayerId = useMemo(() => (window_ ? scoutingTiersForPool(window_.pool) : new Map<number, ScoutingTier>()), [window_]);
+
+  // Round 77 — same "computed once per draft night off the fixed window_.pool,
+  // not once per rendered row" convention as tierByPlayerId above.
+  // predictedDraftRange internally re-sorts the whole pool per call, so this
+  // is O(n^2 log n) for n≈195 (~ok once per pool, not per keystroke).
+  const predictedRangeByPlayerId = useMemo(() => {
+    const map = new Map<number, PredictedDraftRange>();
+    if (!window_) return map;
+    for (const p of window_.pool) map.set(p.PlayerID, predictedDraftRange(p, window_.pool));
+    return map;
+  }, [window_]);
 
   if (!window_) {
     return (
@@ -154,9 +184,13 @@ export function Draft() {
   const lineFiltered = lineFilter === "All" ? remaining : remaining.filter((p) => ARCHETYPE_LINE[p.archetype as Archetype] === lineFilter);
   const filteredRemaining = combineOnly && combineInvitedIds ? lineFiltered.filter((p) => combineInvitedIds.has(p.PlayerID)) : lineFiltered;
   const sortedRemaining = [...filteredRemaining].sort((a, b) => {
-    const bandB = scoutOvrBand(b, revealedFor(window_, b.PlayerID).length);
-    const bandA = scoutOvrBand(a, revealedFor(window_, a.PlayerID).length);
-    return bandB.high + bandB.low - (bandA.high + bandA.low);
+    if (sortMode === "overall") return b.OVR - a.OVR;
+    if (sortMode === "potential") return b.POT - a.POT;
+    const rangeA = predictedRangeByPlayerId.get(a.PlayerID);
+    const rangeB = predictedRangeByPlayerId.get(b.PlayerID);
+    const midA = rangeA ? (rangeA.low + rangeA.high) / 2 : Number.MAX_SAFE_INTEGER;
+    const midB = rangeB ? (rangeB.low + rangeB.high) / 2 : Number.MAX_SAFE_INTEGER;
+    return midA - midB;
   });
   const selected = selectedId !== null ? (remaining.find((p) => p.PlayerID === selectedId) ?? null) : null;
 
@@ -224,11 +258,30 @@ export function Draft() {
                 ))}
               </div>
             </div>
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs uppercase tracking-wide text-slate-500">Sort:</span>
+              {(
+                [
+                  ["predicted", "Predicted"],
+                  ["overall", "Overall"],
+                  ["potential", "Potential"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  onClick={() => setSortMode(mode)}
+                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${sortMode === mode ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="max-h-[32rem] overflow-auto">
               <table className="w-full text-left text-sm">
                 <thead className="sticky top-0 bg-base-900">
                   <tr className="text-xs uppercase tracking-wide text-slate-500">
                     <th className="py-1.5 pr-2">#</th>
+                    <th className="py-1.5 pr-2">Predicted pick</th>
                     <th className="py-1.5 pr-2">Prospect</th>
                     <th className="py-1.5 pr-2">State</th>
                     <th className="py-1.5 pr-2">Archetype</th>
@@ -250,6 +303,13 @@ export function Draft() {
                         className={`cursor-pointer border-t border-base-700 hover:bg-base-800 ${selectedId === p.PlayerID ? "bg-base-800" : ""}`}
                       >
                         <td className="py-1.5 pr-2 text-slate-500">{i + 1}</td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums text-accent-light">
+                          {(() => {
+                            const range = predictedRangeByPlayerId.get(p.PlayerID);
+                            if (!range) return "—";
+                            return range.low === range.high ? range.low : `${range.low}-${range.high}`;
+                          })()}
+                        </td>
                         <td className="py-1.5 pr-2 font-medium">
                           <span className="inline-flex items-center gap-1.5">
                             {playerFullName(p)}
@@ -498,6 +558,16 @@ function ProspectProfile({
       <div>
         <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Plays like</div>
         {scouted ? <PlaysLikeLine prospect={prospect} /> : <p className="text-sm text-slate-500">Scout at least one attribute to unlock a comp.</p>}
+      </div>
+
+      <div>
+        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Predicted draft range</div>
+        {(() => {
+          const range = predictedDraftRange(prospect, pool);
+          return (
+            <div className="text-lg font-semibold tabular-nums text-accent-light">{range.low === range.high ? `Pick ${range.low}` : `Picks ${range.low}-${range.high}`}</div>
+          );
+        })()}
       </div>
 
       <div>

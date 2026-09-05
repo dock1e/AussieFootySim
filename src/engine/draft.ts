@@ -20,6 +20,8 @@ import {
   realProspectAgeIn,
   scoutingProseSignalFor,
   potentialFloorFromProse,
+  externalConsensusPoolBonus,
+  applyExternalConsensusFloor,
   type RealProspectRecord,
 } from "../data/realProspects.ts";
 
@@ -425,7 +427,14 @@ function buildRealProspect(id: number, record: RealProspectRecord, year: number,
   // stream (same convention every other per-prospect draw in this function
   // already uses), so two prospects with the same prose tier still don't
   // clamp to one identical integer.
-  const proseFloorBase = potentialFloorFromProse(scoutingProseSignalFor(record).tier);
+  // Round 79: `applyExternalConsensusFloor` corroborates (boosts or caps)
+  // this base floor against real recruiter consensus for the small, named
+  // handful of real prospects we have that data for — see its own doc
+  // comment in realProspects.ts for why a pure write-up-phrase floor can't
+  // fix this on its own (Gabe Patterson's report; the Teixeira/Butler/
+  // Ladbrook cases found alongside it). A no-op for every other real
+  // prospect not on that list.
+  const proseFloorBase = applyExternalConsensusFloor(record, potentialFloorFromProse(scoutingProseSignalFor(record).tier));
   const jitteredProseFloor = proseFloorBase > 0 ? proseFloorBase + Math.round(rng() * 3) : 0;
   const potentialTall = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 1, 99);
   const potentialMid = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 1, 99);
@@ -540,11 +549,24 @@ export function realProspectsEligibleFor(year: number, existingPlayers: readonly
  * a deterministic per-identity seed rather than original sheet order, so
  * the "who's in this year's 195" cutoff doesn't quietly always favour
  * whoever happened to load first out of the xlsx.
+ *
+ * **Round 79 addition**: `externalConsensusPoolBonus` adds a large,
+ * dominating bonus for the ~35 real prospects on a real, current recruiter
+ * Top 45 (`data/realDraftPowerRankings.ts`) — found necessary this round
+ * when investigating Tyler's Gabe Patterson report: Gus Teixeira (real rank
+ * 4 of 45) and Arki Butler (real rank 2 of 45) were BOTH missing from a real
+ * generated 2026 pool entirely, because their own recorded underage stats
+ * (2 games/4 goals; 1 game/0 goals) are too thin to win the ordinary
+ * stats-signal competition for one of 195 slots against ~843 other eligible
+ * real prospects — despite being top-5-in-the-country by real recruiter
+ * consensus. This bonus guarantees any prospect on that list a pool slot
+ * regardless of how thin their specific recorded box-score sample is; it's
+ * a targeted ~35-name fix, not a change to how the other ~800 compete.
  */
 function rankRealProspects(eligible: readonly RealProspectRecord[]): RealProspectRecord[] {
   return [...eligible].sort((a, b) => {
-    const scoreA = potentialBonusFromSignal(underageSignalFor(a));
-    const scoreB = potentialBonusFromSignal(underageSignalFor(b));
+    const scoreA = potentialBonusFromSignal(underageSignalFor(a)) + externalConsensusPoolBonus(a);
+    const scoreB = potentialBonusFromSignal(underageSignalFor(b)) + externalConsensusPoolBonus(b);
     if (scoreB !== scoreA) return scoreB - scoreA;
     return mulberry32(hashSeed(a.normName))() - mulberry32(hashSeed(b.normName))();
   });
@@ -589,7 +611,14 @@ function realProspectPotentialFloor(p: Player): number {
   if (!p.realFullName) return 0;
   const record = REAL_PROSPECTS.find((r) => r.name === p.realFullName);
   if (!record) return 0;
-  const base = potentialFloorFromProse(scoutingProseSignalFor(record).tier);
+  // Round 79: routed through the same `applyExternalConsensusFloor`
+  // corroboration `buildRealProspect` uses above — this function is the
+  // DOMINANT floor in practice (applied last, directly to the final blended
+  // POT), so patching only the ceiling-side floor in `buildRealProspect`
+  // and missing this one was confirmed empirically to leave Teixeira/Butler
+  // undercooked (Great-tier, not Superstar) despite the earlier fix —
+  // caught via `scripts/_scratch_zerohanger_crossref.ts` before commit.
+  const base = applyExternalConsensusFloor(record, potentialFloorFromProse(scoutingProseSignalFor(record).tier));
   if (base <= 0) return 0;
   const jitter = Math.round(mulberry32(p.PlayerID * 71 + 41)() * 3);
   return base + jitter;
@@ -683,31 +712,54 @@ export function potentialLetterGrade(pot: number): string {
  * grade anywhere, it's a second, narrative-first reading of the same
  * underlying POT, shown alongside it in the UI).
  *
- * Deliberately RANK-based within the pool, not a fixed POT cutoff:
+ * Deliberately POT-FLOOR-based, not a fixed top-N slice of the pool:
  * "Generational Talent" and "Superstar" are inherently relative claims
  * about a draft CLASS ("is there a generational kid in THIS year's pool"),
  * not an absolute POT threshold that would just relabel a fixed top slice
  * of every pool every single year regardless of how strong or weak that
  * year's actual crop is — real draft classes vary, and Tyler's own gut-feel
- * targets (Generational ~1-2 every 3 years, Superstar ~2-6 per draft) are
- * explicitly about that variation, not a guaranteed-every-year count.
+ * targets (Generational ~1-2 every 3 years, occasionally 3-4 in a
+ * standout "Super Draft" year; Superstar ~2-6 per draft) are explicitly
+ * about that variation, not a guaranteed-every-year count.
  *
  * Implementation: `GENERATIONAL_POT_FLOOR`/`SUPERSTAR_POT_FLOOR` are
- * absolute POT floors (not quotas) — Generational can only ever be the
- * single top-ranked prospect in the pool, and only if their POT actually
- * clears the floor; Superstar is every remaining prospect clearing its own,
- * lower floor, with no minimum or maximum forced. A fixed floor naturally
- * produces a COUNT that varies year to year as the underlying pool's talent
- * varies — some years 0 Generational Talents, some years 1; some years 2
- * Superstars, some years 6 — which is what actually reproduces Tyler's
- * stated frequency as a real distribution rather than an artificial
- * every-year guarantee. Both floors were tuned empirically against many
- * simulated draft years (`verify_prospect_pool_round.ts`) until the
- * long-run average matched Tyler's stated targets — see that script for
- * the actual empirical counts this settled on. Elite/Great/Good/Average/
- * Sub-par split whatever's left by percentile — Tyler gave no frequency
- * target for these 5, so the bands below are a disclosed, reasonable
- * modelled choice, not sourced from anything.
+ * absolute POT floors (not quotas) — EVERY prospect clearing a floor gets
+ * that tier, with no minimum or maximum forced and no cap on how many can
+ * qualify in one pool (see round 79 note below — this used to be
+ * rank-1-restricted for Generational specifically; it no longer is). A
+ * fixed floor naturally produces a COUNT that varies year to year as the
+ * underlying pool's talent varies — some years 0 Generational Talents, some
+ * years 1, rare years several; some years 2 Superstars, some years 6 —
+ * which is what actually reproduces Tyler's stated frequency as a real
+ * distribution rather than an artificial every-year guarantee. Both floors
+ * were tuned empirically against many simulated draft years
+ * (`verify_prospect_pool_round.ts`) until the long-run average matched
+ * Tyler's stated targets — see that script for the actual empirical counts
+ * this settled on. Elite/Great/Good/Average/Sub-par split whatever's left
+ * by percentile — Tyler gave no frequency target for these 5, so the bands
+ * below are a disclosed, reasonable modelled choice, not sourced from
+ * anything.
+ *
+ * **Round 79: Generational Talent decoupled from "pool rank 1."** Tyler's
+ * own report: "we can have the occasional year like 2001 where 3 or 4
+ * generational talents come through, that's fine — but it shouldn't be a
+ * default of 1 every year." Round 78 had left `GENERATIONAL_POT_FLOOR`
+ * equal to `SUPERSTAR_POT_FLOOR` (both 75) with a rank-1-only gate as the
+ * ONLY thing distinguishing the two labels — structurally this can NEVER
+ * produce more than 1 Generational Talent no matter how stacked a class is
+ * (only the single top-ranked prospect was ever eligible), and round 78's
+ * own disclosed finding was that this had drifted to appearing in 100% of
+ * simulated years (up from round 69's originally-tuned ~43%) once the real-
+ * prospect population grew enough to reliably clear 75 at the very top of
+ * every pool. Fixed by raising `GENERATIONAL_POT_FLOOR` to a genuinely
+ * rarer bar ABOVE `SUPERSTAR_POT_FLOOR` (see its own doc comment for the
+ * exact value and empirical grounding) and removing the rank-1 restriction
+ * entirely — `scoutingTiersForPool` below now just checks every prospect
+ * against both floors in order, same as Superstar always worked. This is
+ * what actually makes "3-4 in a standout year" possible: a class with
+ * several prospects clustered at a genuinely elite ceiling will now show
+ * all of them, not just whichever one happens to be ranked highest this
+ * particular simulation.
  *
  * **Calibration result** (`scripts/verify_round69_scratch.ts`, 60 simulated
  * fresh 2026 draft years): `GENERATIONAL_POT_FLOOR=75` -> a Generational
@@ -755,19 +807,39 @@ export function potentialLetterGrade(pot: number): string {
  */
 export type ScoutingTier = "Generational Talent" | "Superstar" | "Elite" | "Great" | "Good" | "Average" | "Sub-par";
 
-const GENERATIONAL_POT_FLOOR = 75;
 /**
- * Round 78: raised from 72 to 75 (now equal to `GENERATIONAL_POT_FLOOR`) —
- * see this section's own top doc comment for the full round-78 story. With
- * two equal thresholds, "Superstar" reads as "clears the same POT bar a
- * Generational Talent would," and the ONLY thing that separates the two
- * labels is `scoutingTiersForPool`'s own rank-1-only gate just below: being
- * the single best prospect in the class at that bar earns the rarer
- * "Generational Talent" name, everyone else at the same bar reads
- * "Superstar" — a clean, defensible operationalisation of Tyler's own
- * framing that Generational is inherently a "best OF THIS CLASS" claim,
- * not a separate, lower absolute bar.
+ * Round 79: raised from 75 to 79, and no longer paired with a rank-1-only
+ * gate — see this section's own top doc comment for the full round-79
+ * story (Tyler: "it shouldn't be a default of 1 every year"). Chosen as
+ * `SUPERSTAR_POT_FLOOR` (75) + the "superstar" prose/external-consensus
+ * floor (76, `potentialFloorFromProse`/`applyExternalConsensusFloor` in
+ * realProspects.ts) + a genuine margin — clearing this now means "clearly
+ * a cut above a corroborated Superstar claim," not merely "a Superstar
+ * claim that happened to jitter a couple of points higher."
+ * `scripts/verify_round79_scratch.ts`'s calibration run against the actual
+ * live 2026 real-prospect corpus (post round-79's external-consensus fix,
+ * which itself moved several real prospects' POT up near this range) found
+ * a genuinely sharp cliff at this exact population: `=78` always produces
+ * 3+ Generational Talents this specific year (Arki Butler/Gus Teixeira/
+ * Cody Walker, real recruiter ranks 2/4/3), `=79` produces 1 in the large
+ * majority of runs (usually just Butler, real rank 2, POT 79) with a small
+ * tail of 2-3, and `=80` produces 0 every time. There is currently no
+ * candidate floor that reproduces "usually 0, sometimes 1, rarely 3-4"
+ * purely from resampling THIS year's real data — real prospects' POT is
+ * almost entirely deterministic per identity (not reseeded per draft-pool
+ * generation call the way fictional prospects are), so a single year's
+ * cohort mostly picks one outcome, not a spread. 79 was chosen as the more
+ * principled, defensible reading (a genuine step above Superstar, not "3
+ * every year regardless of the class" which `=78` would just as woodenly
+ * guarantee). The STRUCTURAL fix — see below, no more rank-1 restriction —
+ * is what actually delivers Tyler's ask: as real future draft classes'
+ * data changes year to year (new prospects, aging cohorts, drafted players
+ * leaving the pool), this floor will genuinely show 0 some years and
+ * several in a standout year, rather than being capped at exactly 1 by
+ * construction the way round 78 left it.
  */
+const GENERATIONAL_POT_FLOOR = 79;
+/** Unchanged since round 78 — see this section's own top doc comment. */
 const SUPERSTAR_POT_FLOOR = 75;
 const ELITE_PERCENTILE = 0.95;
 const GREAT_PERCENTILE = 0.8;
@@ -789,14 +861,17 @@ export function scoutingTiersForPool(pool: readonly Player[]): Map<number, Scout
   const result = new Map<number, ScoutingTier>();
   if (byPot.length === 0) return result;
 
-  const top = byPot[0];
-  const topIsGenerational = top.POT >= GENERATIONAL_POT_FLOOR;
-  if (topIsGenerational) result.set(top.PlayerID, "Generational Talent");
-
-  const rest = topIsGenerational ? byPot.slice(1) : byPot;
+  // Round 79: no more rank-1-only gate for Generational — every prospect is
+  // checked against both floors independently, exactly like Superstar
+  // always was. See `GENERATIONAL_POT_FLOOR`'s own doc comment for why this
+  // is what actually lets a stacked class show several Generational
+  // Talents (Tyler's "occasional year like 2001") instead of capping at 1
+  // by construction.
   const nonEliteTierPool: Player[] = [];
-  for (const p of rest) {
-    if (p.POT >= SUPERSTAR_POT_FLOOR) {
+  for (const p of byPot) {
+    if (p.POT >= GENERATIONAL_POT_FLOOR) {
+      result.set(p.PlayerID, "Generational Talent");
+    } else if (p.POT >= SUPERSTAR_POT_FLOOR) {
       result.set(p.PlayerID, "Superstar");
     } else {
       nonEliteTierPool.push(p);

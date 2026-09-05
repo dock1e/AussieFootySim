@@ -1,5 +1,6 @@
 import realProspectsJson from "./generated/realProspects.json" with { type: "json" };
 import type { Archetype } from "../types/archetype";
+import { ZEROHANGER_SEPT_2026_RANKINGS } from "./realDraftPowerRankings.ts";
 
 /**
  * Real 2026/2027 AFL draft prospects — sourced from Tyler's "2026 Draft
@@ -592,4 +593,132 @@ export function potentialFloorFromProse(tier: ScoutingProseTier): number {
     case "none":
       return 0;
   }
+}
+
+// ---------------------------------------------------------------------------
+// External consensus corroboration (round 79) — Tyler's report: "I found
+// [on a real recruiter power-rankings page] Gabe Patterson was ranked 45th.
+// Yet we have him as a Superstar in our talent pool? ... He was also not
+// mentioned at all in Cal Twomeys top 25. What caused Gabe Patterson to be
+// ranked so highly? please review again."
+//
+// **Root cause, confirmed**: Patterson's only ingested write-up describes
+// ONE electric quarter of ONE game ("used his speed and freakish talent" —
+// 2 goals + an assist in an "electric opening quarter... his highest-volume
+// game of the season"). "freakish" is a genuine, unambiguous ceiling
+// superlative — one of the 8 phrases round 78 deliberately KEPT in
+// `SUPERSTAR_PHRASES` (it isn't a junior-honour or stock-movement phrase
+// like the 7 round 78 demoted). The phrase-bank retightening was correct on
+// its own terms; the deeper problem it can't solve is that a single
+// write-up snippet describing an isolated good moment is not the same
+// claim as "this player's SEASON-LONG ceiling is Superstar-or-better" — and
+// this codebase has no other signal to catch the difference, because we
+// only ever ingested the one article. Real recruiters, watching the whole
+// season, explicitly disagree: zerohanger's real, dated, published
+// September 2026 power rankings place him 45th of 45 ("started the season
+// in first-round consideration but has lacked some consistency, which has
+// slid him down some draft boards"), and Tyler independently confirmed his
+// absence from Cal Twomey's real mid-2026 Top 25 too — two independent real
+// sources, same verdict.
+//
+// **A second, related finding, not asked for but directly adjacent**:
+// cross-referencing our EVERY current Superstar/Elite-tier real prospect
+// against that same zerohanger list surfaced the opposite failure mode.
+// Gus Teixeira (real rank 4) and Arki Butler (real rank 2) — two of the
+// exact 7 real prospects round 78's phrase-bank retightening demoted from
+// Superstar to Elite (both write-ups mention "All-Australian", the
+// junior-honour phrase round 78 moved out of `SUPERSTAR_PHRASES`) — are
+// rated by the SAME real, current recruiter source as genuinely elite,
+// top-5-in-the-country prospects. Round 78's demotion was a reasonable,
+// correct AGGREGATE fix (it brought the overall Superstar count from
+// 9-16/year down into Tyler's stated 2-6 target), but a pure phrase-bank
+// approach cannot distinguish "this specific write-up over-claims" from
+// "this specific write-up under-claims" — it can only retune the average.
+// Xavier Ladbrook (real rank 40, still `SUPERSTAR_PHRASES`-tagged via "rare
+// talent") turned out to be a third, independently-discovered case of the
+// SAME Patterson-shaped problem (a genuinely well-written, positive
+// single-game report that real recruiters nonetheless rank in the bottom
+// third of the class) — not something Tyler flagged, found by checking
+// every current Superstar-tier real prospect against the same real source
+// rather than just the one name he asked about.
+//
+// **The fix**: rather than re-tuning the phrase bank a third time (round 78
+// already showed that whack-a-mole doesn't converge — tightening it catches
+// Patterson-shaped false positives but creates Teixeira/Butler-shaped false
+// negatives, and no wording of the bank can see past a single write-up's
+// own snapshot either way), corroborate the write-up-prose floor against
+// REAL external recruiter consensus for the 34 named real prospects we now
+// have that data for (`data/realDraftPowerRankings.ts` — 34 of the source's
+// 45 real names resolve to an existing record here; see that file's own
+// doc comment for exactly which 11 don't and why) — a genuinely independent
+// signal the phrase bank has no access to, in the same established "ground
+// it in real, checkable data" spirit as every other `data/realXxx.ts`
+// source in this codebase. Everyone NOT on that list (the other ~1,800
+// real prospects) is completely unaffected — this is a small, targeted
+// corroboration on top of round 78's mechanism, not a reversal of it.
+// ---------------------------------------------------------------------------
+
+/** Real recruiter rank (1 = best) for this prospect, or null if they don't appear on `ZEROHANGER_SEPT_2026_RANKINGS` (the overwhelming majority — this is a 45-name list against a ~1,800-record DB) or didn't safely resolve to a record (see that file's own doc comment). */
+export function externalConsensusRankFor(record: RealProspectRecord): number | null {
+  const hit = ZEROHANGER_SEPT_2026_RANKINGS.find((r) => r.matchedRecordName === record.name);
+  return hit ? hit.rank : null;
+}
+
+/**
+ * A large, deliberately pool-signal-dominating bonus (`potentialBonusFromSignal`
+ * above is capped at 25) for `rankRealProspects` (draft.ts) — being anywhere
+ * on a real, current, expanded recruiter Top 45 is reason enough to
+ * guarantee this prospect a slot in the simulated draft pool, regardless of
+ * how thin their recorded underage box-score sample happens to be. This
+ * matters concretely: Teixeira's own `seasonStats` is just 2 games/4 goals
+ * and Butler's is 1 game/0 goals — both would lose the ordinary stats-signal
+ * competition for one of the pool's 195 slots against the ~843 other
+ * 2026-eligible real prospects most years, despite being rank 4 and rank 2
+ * in the entire country by real recruiter consensus. Confirmed empirically
+ * this round: both were absent from a real generated 2026 pool before this
+ * fix (`scripts/_scratch_zerohanger_crossref.ts`, deleted before commit).
+ */
+export function externalConsensusPoolBonus(record: RealProspectRecord): number {
+  return externalConsensusRankFor(record) !== null ? 1000 : 0;
+}
+
+/**
+ * Real recruiter rank at/better than this guarantees at least a "superstar"
+ * prose floor, regardless of what the write-up phrase bank alone found —
+ * see this section's own doc comment (Teixeira, Butler). Empirically tuned,
+ * not just picked: an initial top-5 cutoff (also catching Harry Van Hattum,
+ * real rank 5) pushed the pool-wide Superstar count to an average of
+ * 4.95/year with 4/40 simulated years (10%) exceeding Tyler's stated 2-6
+ * range — round 78's own calibration had a stricter <=10%-outlier
+ * tolerance as its bar, so this was right at the edge, not comfortably
+ * inside it. Narrowing to top-4 (dropping Van Hattum from the guaranteed
+ * set — his own prose floor and pool-entry bonus are untouched, he simply
+ * isn't FORCED to Superstar-or-better) still fully covers both of round
+ * 79's concretely-identified cases (Teixeira rank 4, Butler rank 2) and
+ * brought the calibration back to avg 3.42/year, 40/40 simulated years
+ * inside 2-6, 0 outliers — see `scripts/verify_round79_scratch.ts`.
+ */
+const EXTERNAL_CONSENSUS_BOOST_RANK_CUTOFF = 4;
+
+/** Real recruiter rank at/worse than this caps the applied floor at "elite," regardless of what the write-up phrase bank alone found — see this section's own doc comment (Patterson, Ladbrook). "Bottom third of an expanded 45-player list" is a real, independent, current signal that a single enthusiastic write-up snippet does not outweigh. */
+const EXTERNAL_CONSENSUS_CAP_RANK_CUTOFF = 31;
+
+/**
+ * Applies the external-consensus boost/cap on top of the ordinary
+ * write-up-prose floor (`potentialFloorFromProse`) — called from
+ * `buildRealProspect` (draft.ts) in place of using that floor directly. A
+ * prospect absent from `ZEROHANGER_SEPT_2026_RANKINGS` passes through with
+ * ZERO change from round 78's behaviour — this only ever touches the ~35
+ * matched names.
+ */
+export function applyExternalConsensusFloor(record: RealProspectRecord, proseFloorBase: number): number {
+  const rank = externalConsensusRankFor(record);
+  if (rank === null) return proseFloorBase;
+  if (rank <= EXTERNAL_CONSENSUS_BOOST_RANK_CUTOFF) {
+    return Math.max(proseFloorBase, potentialFloorFromProse("superstar"));
+  }
+  if (rank >= EXTERNAL_CONSENSUS_CAP_RANK_CUTOFF) {
+    return Math.min(proseFloorBase, potentialFloorFromProse("elite"));
+  }
+  return proseFloorBase;
 }

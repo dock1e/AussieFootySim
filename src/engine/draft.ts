@@ -719,11 +719,56 @@ export function potentialLetterGrade(pot: number): string {
  * (97/90) produced 0 Generational and 0 Superstar across every simulated
  * year, which is what surfaced the need for this empirical pass rather than
  * an algebraic guess at where the pool's real POT ceiling sits.
+ *
+ * **Round 78 recalibration, disclosed in full.** Tyler flagged the
+ * Superstar-tier COUNT (9-16 per 195-pool draft year) as much too high
+ * against his own stated real-world target of 2-6/year, and asked for the
+ * tier to be grounded in AFL Hall of Fame/Legend-vs-Superstar reality. Two
+ * DISTINCT problems, found via a diagnostic breakdown
+ * (`scripts/verify_round78_scratch.ts`), both fixed:
+ *
+ * 1. **Round 77's write-up-prose POT floor bank was too permissive**
+ *    (`SUPERSTAR_PHRASES` in `realProspects.ts` matched objective-but-common
+ *    junior honours and bare draft-stock-movement claims, not just genuine
+ *    ceiling superlatives) — retightened this round; see that file's own doc
+ *    comment for the full before/after phrase list and reasoning.
+ * 2. **The population this pool draws from has grown substantially since
+ *    round 69's original 72/75 calibration** — 843 real prospects are now
+ *    2026-eligible (up from whatever smaller figure existed when 72 was
+ *    tuned), enough that `generateProspectPool` fills all 195 slots from
+ *    REAL prospects alone every single year now (0 fictional top-up,
+ *    confirmed empirically) — a fundamentally different, more talent-dense
+ *    population than the mixed real+fictional pool 72 was originally tuned
+ *    against. Re-running round 69's own sweep methodology (30 simulated
+ *    fresh 2026 draft years per candidate floor, against TODAY's actual
+ *    real-prospect corpus and the already-retightened phrase bank from fix
+ *    #1) found `SUPERSTAR_POT_FLOOR=72` now averages 5.73/year (22/30 seeds
+ *    only, i.e. 8/30 exceed 6), while `=75` averages 2.63/year with EVERY one
+ *    of 30 simulated years landing inside 2-6. Raised to 75 accordingly (see
+ *    its own doc comment just below for why this being equal to
+ *    `GENERATIONAL_POT_FLOOR` is intentional, not a coincidence to fix).
+ *    `potentialFloorFromProse("superstar")` in `realProspects.ts` was raised
+ *    in lockstep (73->76) so a prose-confirmed Superstar claim still
+ *    RELIABLY clears this new, higher bar — preserving round 77's original
+ *    design invariant that the write-up language and the resulting tier
+ *    label should actually agree.
  */
 export type ScoutingTier = "Generational Talent" | "Superstar" | "Elite" | "Great" | "Good" | "Average" | "Sub-par";
 
 const GENERATIONAL_POT_FLOOR = 75;
-const SUPERSTAR_POT_FLOOR = 72;
+/**
+ * Round 78: raised from 72 to 75 (now equal to `GENERATIONAL_POT_FLOOR`) —
+ * see this section's own top doc comment for the full round-78 story. With
+ * two equal thresholds, "Superstar" reads as "clears the same POT bar a
+ * Generational Talent would," and the ONLY thing that separates the two
+ * labels is `scoutingTiersForPool`'s own rank-1-only gate just below: being
+ * the single best prospect in the class at that bar earns the rarer
+ * "Generational Talent" name, everyone else at the same bar reads
+ * "Superstar" — a clean, defensible operationalisation of Tyler's own
+ * framing that Generational is inherently a "best OF THIS CLASS" claim,
+ * not a separate, lower absolute bar.
+ */
+const SUPERSTAR_POT_FLOOR = 75;
 const ELITE_PERCENTILE = 0.95;
 const GREAT_PERCENTILE = 0.8;
 const GOOD_PERCENTILE = 0.5;

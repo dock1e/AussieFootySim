@@ -343,6 +343,19 @@ export function writeupTextFor(record: RealProspectRecord): string {
 // phrasing — re-run that same grep against future data drops before adding
 // MORE new phrases, rather than guessing at ones that sound plausible but
 // have never actually occurred.
+//
+// **Round 78 addendum**: Tyler measured the resulting Superstar-tier COUNT
+// (9-16 per 195-pool draft year, via `scoutingTiersForPool`) against his own
+// stated real-world target of 2-6/year and asked for it to be grounded in
+// AFL Hall of Fame/Legend-vs-Superstar reality rather than left as a rough
+// first pass. `SUPERSTAR_PHRASES` below was retightened accordingly — see
+// its own doc comment for the full before/after reasoning and the empirical
+// grounding (mining our own `realDraftHistory.ts` Draft Guru data for real
+// draftees' career All-Australian counts, plus researching the 2001 "Super
+// Draft" and the AFL Hall of Fame's Legend tier). `GENERATIONAL_PHRASES`
+// and the Great/Elite tiers otherwise are untouched — Tyler didn't flag
+// Generational's cadence (it was already landing at ~1/year, matching his
+// own "1-2 every 3 years" gut-feel), only Superstar's.
 // ---------------------------------------------------------------------------
 
 export type ScoutingProseTier = "generational" | "superstar" | "elite" | "great" | "none";
@@ -363,14 +376,49 @@ export interface ScoutingProseSignal {
 const GENERATIONAL_PHRASES: readonly RegExp[] = [/generational/i, /once in a generation/i, /one[- ]in[- ]a[- ]generation/i, /consensus (no\.?\s?1|number one|#1)/i];
 
 /**
- * Explicit, unambiguous claims about a player's overall standing or draft
- * stock — a named superlative noun ("superstar," "freak"), an objective
- * external honour ("All-Australian," "National Academy"), or a concrete
- * draft-stock movement claim ("rocketed up the order," "top-10
- * calculations") — never a skill-specific compliment. Confirmed real hits:
- * freakish (2), rare talent (1), game-breaker (1), rocketed/pushed up the
- * order or board (2), top-N calculations (1), first-round selection (1),
- * lofty standards (1), All-Australian (2), National Academy (1).
+ * **Round 78 RETIGHTENED** — now ONLY a direct, unambiguous claim about the
+ * player's own overall CEILING ("superstar," "freak," "rare/special
+ * talent," "game-breaker"). The round-77 original version of this bank also
+ * matched an objective junior honour ("All-Australian," "National Academy")
+ * and bare draft-STOCK-movement claims ("rocketed/pushed up the order,"
+ * "top-N calculations," "first-round selection," "lofty standards") — real,
+ * confirmed corpus phrases, but each one describes something other than "a
+ * Superstar-caliber ceiling":
+ *
+ * - **"All-Australian" in a Talent League write-up is the U18 REPRESENTATIVE
+ *   honour**, not the senior AFL blazer — every state fields a squad, so
+ *   dozens of kids earn one every year nationally; nothing like the rarity
+ *   of an actual career AFL All-Australian selection. Same logic for
+ *   "National Academy" (a state academy intake, not a competitive honour).
+ * - **Improving draft stock isn't a ceiling claim.** A kid who "rocketed up
+ *   the order" or reads as a "first-round selection" has clearly gotten
+ *   better in scouts' eyes, but that says nothing about how HIGH his
+ *   eventual ceiling is — plenty of good, solid first-round picks are never
+ *   Superstars.
+ *
+ * All 7 demoted phrases moved down to `ELITE_PHRASES` below (still a real
+ * positive signal, just not Superstar-specific) rather than being deleted.
+ * This was grounded empirically per Tyler's own instruction to reuse "the
+ * Draft Guru stats we extracted": mining `realDraftHistory.ts` (2008-2025
+ * real AFL draftees) for how many picks per year go on to reach 2+ CAREER
+ * All-Australian selections — a real, checkable proxy that lines up with
+ * Tyler's own named Superstar examples (Petracca 4x AA, Oliver 3x, Merrett
+ * 3x, Curnow 3x; Brayshaw and Luke Jackson only 1x each so far, but both
+ * only very recently decorated with careers still climbing) — averages
+ * ~4.3/year across draft classes old enough to have fully matured
+ * (2008-2016; more recent classes understate the true rate simply because
+ * their careers haven't had time to accumulate selections yet, the same
+ * recency-bias `realDraftYearMetrics.ts` already discloses for its own
+ * `gamesPerPick` field). ~4.3/year sits comfortably inside Tyler's stated
+ * 2-6 target — confirming 2+ career All-Australians is a reasonable
+ * real-world anchor for what "Superstar" should mean, and that the
+ * round-77 bank was simply too permissive about which WRITE-UP LANGUAGE
+ * counts as evidence of that tier, not that the 2-6 target itself was wrong.
+ * Confirmed real hits remaining in this narrowed bank: freakish (2), rare
+ * talent (1), game-breaker (1); superstar, franchise, bare freak, special
+ * talent, and x-factor sit at 0 confirmed hits today (standard scouting
+ * vocabulary this snapshot hasn't used yet — same disclosed reasoning as
+ * round 77's original pass, not invented phrasing).
  */
 const SUPERSTAR_PHRASES: readonly RegExp[] = [
   /superstar/i,
@@ -381,22 +429,22 @@ const SUPERSTAR_PHRASES: readonly RegExp[] = [
   /special talent/i,
   /x-?factor/i,
   /game-?breaker/i,
-  /rocketed up (the )?(order|board)/i,
-  /pushed (well )?up (the )?(order|board)/i,
-  /top[- ]?\d+ calculations/i,
-  /(potential |genuine )?first-round selection/i,
-  /lofty standards/i,
-  /all-?australian/i,
-  /national academy/i,
 ];
 
 /**
- * Strong general-excellence language — one notch below an explicit
- * draft-stock claim, and where a bare "elite" (often skill-qualified, e.g.
- * "elite foot skills") lives. Confirmed real hits: elite (3), rated so
- * highly (1), one of the best (2), one of the most talented/watchable/
- * damaging/destructive (2), genuinely outstanding (1), outstanding (5),
- * brilliant (2).
+ * Strong general-excellence language — one notch below a genuine
+ * Superstar-ceiling claim, and where a bare "elite" (often skill-qualified,
+ * e.g. "elite foot skills") lives. **Round 78** demoted 7 phrases down into
+ * this bank from `SUPERSTAR_PHRASES` (all-Australian through National
+ * Academy, below) — see that bank's own doc comment for the full reasoning;
+ * they're still a genuinely positive signal (comfortably "Elite," a clear
+ * first-round-caliber prospect), just not specific evidence of a
+ * Superstar-or-better ceiling the way the narrower bank above now requires.
+ * Confirmed real hits: elite (3), rated so highly (1), one of the best (2),
+ * one of the most talented/watchable/damaging/destructive (2), genuinely
+ * outstanding (1), outstanding (5), brilliant (2); rocketed/pushed up the
+ * order or board (2), top-N calculations (1), first-round selection (1),
+ * lofty standards (1), All-Australian (2), National Academy (1).
  */
 const ELITE_PHRASES: readonly RegExp[] = [
   /\belite\b/i,
@@ -409,6 +457,13 @@ const ELITE_PHRASES: readonly RegExp[] = [
   /\boutstanding\b/i,
   /\bbrilliant\b/i,
   /\bexceptional\b/i,
+  /rocketed up (the )?(order|board)/i,
+  /pushed (well )?up (the )?(order|board)/i,
+  /top[- ]?\d+ calculations/i,
+  /(potential |genuine )?first-round selection/i,
+  /lofty standards/i,
+  /all-?australian/i,
+  /national academy/i,
 ];
 
 /**
@@ -499,18 +554,39 @@ export function scoutingProseSignalFor(record: RealProspectRecord): ScoutingPros
  * integer. "elite"/"great" floors are a first defensible pass, NOT
  * independently re-verified against the pool's actual resulting tier
  * percentiles the way 72/75 were in round 69 —
- * `verify_round77_scratch.ts` checks this empirically; revise these two
- * constants there if the resulting tier distribution doesn't land where the
- * name implies.
+ * `verify_round77_scratch.ts` (now `verify_round78_scratch.ts`) checks this
+ * empirically; revise these two constants there if the resulting tier
+ * distribution doesn't land where the name implies.
+ *
+ * **Round 78 fixes, two of them**:
+ *
+ * 1. "elite" was 69 — with the same +0..3 jitter every tier gets
+ *    (`buildRealProspect`/`realProspectPotentialFloor`), 69 could round up
+ *    to exactly 72 (roughly 1-in-6 of the time, whenever the jitter rolled
+ *    its max) and collide with `draft.ts`'s then-`SUPERSTAR_POT_FLOOR` (72)
+ *    — silently reclassifying a mere Elite-tier prose match as a
+ *    Superstar-tier final `scoutingTiersForPool` result. Lowered to 68 so
+ *    the max jittered value (68+3=71) stays clear of `SUPERSTAR_POT_FLOOR`
+ *    (now 75, an even bigger margin than originally needed).
+ * 2. "superstar" was 73 — `draft.ts`'s own `SUPERSTAR_POT_FLOOR` was ALSO
+ *    raised this round, from 72 to 75 (see that file's doc comment on why:
+ *    the real-prospect population this pool draws from has grown
+ *    substantially since round 69's original calibration). Raised in
+ *    lockstep to 76 so a prose-confirmed "superstar" claim still RELIABLY
+ *    clears the new, higher bar even at the jitter's minimum (76+0=76>75) —
+ *    preserving round 77's original design invariant that write-up language
+ *    and the resulting tier label actually agree, which a stale 73 would
+ *    have broken roughly half the time (only jitter values of 2-3 would
+ *    have cleared 75; 0-1 would not have).
  */
 export function potentialFloorFromProse(tier: ScoutingProseTier): number {
   switch (tier) {
     case "generational":
       return 77;
     case "superstar":
-      return 73;
+      return 76;
     case "elite":
-      return 69;
+      return 68;
     case "great":
       return 63;
     case "none":

@@ -17,22 +17,40 @@
  * round; the article's own words: "The September list has expanded to 45
  * players."
  *
- * **Coverage, fully disclosed**: only 34 of these 45 real names resolve to
- * an existing `RealProspectRecord` in our DB. `matchedRecordName` is `null`
- * for the other 11 — never guessed at. Two kinds of non-match: genuinely
- * absent from our DB entirely (Dougie Cochrane, Heath Mellody, Leo Steed,
- * Harvey Spawton-Guy, Koby LeCras, Jack Slattery, Memphis Webb — 7 names,
- * consistent with this project's established "disclosed as pending, not
- * invented" posture whenever a real name has no underlying record to attach
- * to), and an unresolvable surname collision with a DIFFERENT, already-
- * existing same-surname player (Mitch Harris, Kodah Edwards, George Gale,
- * Harry Chapman — 4 more Harrises/Edwardses/Gales/Chapmans already exist in
- * the DB under different first names; rather than guess which one, if any,
- * is a first-name variant of the zerohanger name, these stay unmatched).
- * Two matches ARE a confirmed first-name/nickname variant, not a guess:
- * "Gabe Patterson" -> "Gabriel Patterson" (exact write-up cross-match, see
+ * **Coverage, fully disclosed**: 35 of these 45 real names resolve to an
+ * existing `RealProspectRecord` in our DB. `matchedRecordName` is `null` for
+ * the other 10 — never guessed at. Two kinds of non-match: genuinely absent
+ * from our DB entirely (Heath Mellody, Leo Steed, Harvey Spawton-Guy, Koby
+ * LeCras, Jack Slattery, Memphis Webb — 6 names, consistent with this
+ * project's established "disclosed as pending, not invented" posture
+ * whenever a real name has no underlying record to attach to), and an
+ * unresolvable surname collision with a DIFFERENT, already-existing
+ * same-surname player (Mitch Harris, Kodah Edwards, George Gale, Harry
+ * Chapman — 4 more Harrises/Edwardses/Gales/Chapmans already exist in the DB
+ * under different first names; rather than guess which one, if any, is a
+ * first-name variant of the zerohanger name, these stay unmatched). Two
+ * matches ARE a confirmed first-name/nickname variant, not a guess: "Gabe
+ * Patterson" -> "Gabriel Patterson" (exact write-up cross-match, see
  * realProspects.ts), "Khaled El Souki" -> "Khaled El souki" (same name, a
  * lowercase typo in the DB's own stored casing).
+ *
+ * **Round 80 update**: Dougie Cochrane (rank 1) was the single highest-
+ * profile name on this list still unmatched — Tyler flagged it directly
+ * ("We should absolutely add Dougie Cochrane to our database then. We cant
+ * be missing the #1 prospect") and supplied a second real, dated source
+ * (zerohanger's own 14 Jul 2026 "Mid-year draftee watch: Dougie Cochrane"
+ * profile card + write-up) to add him from. New record added to
+ * `data/real_prospects_master.json` / `realProspects.ts`, tagged
+ * `sourceSheets: ["ZerohangerDraftWatch2026"]` to honestly distinguish it
+ * from Tyler's original xlsx-sourced rows — see that file's own doc comment
+ * for the full record. His own write-up independently uses "special talent"
+ * (a confirmed, unmodified `SUPERSTAR_PHRASES` hit), so unlike Patterson
+ * this is a case where the write-up-prose signal and real recruiter
+ * consensus agree from the start — the external-consensus mechanism now
+ * boosts an already-superstar-reading prospect to Generational-eligible
+ * territory (rank 1 <= `EXTERNAL_CONSENSUS_BOOST_RANK_CUTOFF`), rather than
+ * correcting a false positive/negative the way it did for Patterson/
+ * Teixeira/Butler/Ladbrook.
  */
 export interface DraftPowerRanking {
   rank: number;
@@ -43,7 +61,7 @@ export interface DraftPowerRanking {
 }
 
 export const ZEROHANGER_SEPT_2026_RANKINGS: readonly DraftPowerRanking[] = [
-  { rank: 1, name: "Dougie Cochrane", matchedRecordName: null },
+  { rank: 1, name: "Dougie Cochrane", matchedRecordName: "Dougie Cochrane" },
   { rank: 2, name: "Arki Butler", matchedRecordName: "Arki Butler" },
   { rank: 3, name: "Cody Walker", matchedRecordName: "Cody Walker" },
   { rank: 4, name: "Gus Teixeira", matchedRecordName: "Gus Teixeira" },

@@ -551,7 +551,7 @@ export function realProspectsEligibleFor(year: number, existingPlayers: readonly
  * whoever happened to load first out of the xlsx.
  *
  * **Round 79 addition**: `externalConsensusPoolBonus` adds a large,
- * dominating bonus for the ~35 real prospects on a real, current recruiter
+ * dominating bonus for the 35 real prospects on a real, current recruiter
  * Top 45 (`data/realDraftPowerRankings.ts`) — found necessary this round
  * when investigating Tyler's Gabe Patterson report: Gus Teixeira (real rank
  * 4 of 45) and Arki Butler (real rank 2 of 45) were BOTH missing from a real
@@ -561,7 +561,13 @@ export function realProspectsEligibleFor(year: number, existingPlayers: readonly
  * real prospects — despite being top-5-in-the-country by real recruiter
  * consensus. This bonus guarantees any prospect on that list a pool slot
  * regardless of how thin their specific recorded box-score sample is; it's
- * a targeted ~35-name fix, not a change to how the other ~800 compete.
+ * a targeted 35-name fix, not a change to how the other ~800 compete.
+ * **Round 80**: Dougie Cochrane (real rank 1) joined this list once Tyler
+ * supplied a second real source to add him to `REAL_PROSPECTS` from — his
+ * own recorded standout stats (30 disposals/6 tackles/6 marks in one game)
+ * are actually strong, so unlike Teixeira/Butler this bonus isn't rescuing
+ * him from thin stats, just guaranteeing the #1 real prospect in the
+ * country can never be squeezed out by pool-size math in an unlucky year.
  */
 function rankRealProspects(eligible: readonly RealProspectRecord[]): RealProspectRecord[] {
   return [...eligible].sort((a, b) => {

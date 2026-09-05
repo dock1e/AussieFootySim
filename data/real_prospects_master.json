@@ -36934,5 +36934,42 @@
       "AFLFuturesBoys"
     ],
     "homeState": "WA"
+  },
+  {
+    "name": "Dougie Cochrane",
+    "normName": "dougie cochrane",
+    "team": "Port Adelaide",
+    "positionRaw": "Utility",
+    "heightCm": 195,
+    "dob": [
+      2008,
+      5,
+      2
+    ],
+    "writeups": [
+      "After a long wait and recovery from his patella surgery, Cochrane returned to play his first game of the season in late July. The first game was as a forward in Port Adelaide’s struggling SANFL side, but he was shifted back for the next and had 30 disposals with 10 intercept possessions, six tackles and six marks, as well as taking kick outs and being Port’s leading ball-winner in the back half. Cochrane is a special talent – he is 195cm but can play as a midfielder, tall forward or tall defender and his kicking is top notch for his size. The Port Adelaide Next Generation Academy prospect has still got plenty of upside as well and he is the favourite to be the No.1 pick."
+    ],
+    "standoutSourceEvents": [
+      "Zerohanger Draftee Watch (Jul 2026)",
+      "Port Adelaide SANFL"
+    ],
+    "standoutStats": {
+      "disposals": 30,
+      "marks": 6,
+      "clearances": 0,
+      "inside50s": 0,
+      "goals": 0,
+      "rebound50s": 0,
+      "tackles": 6,
+      "hitouts": 0
+    },
+    "gamesInStandout": 1,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": "U18",
+    "sourceSheets": [
+      "ZerohangerDraftWatch2026"
+    ],
+    "homeState": "SA"
   }
 ]

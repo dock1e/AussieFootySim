@@ -647,10 +647,12 @@ export function potentialFloorFromProse(tier: ScoutingProseTier): number {
 // Patterson-shaped false positives but creates Teixeira/Butler-shaped false
 // negatives, and no wording of the bank can see past a single write-up's
 // own snapshot either way), corroborate the write-up-prose floor against
-// REAL external recruiter consensus for the 34 named real prospects we now
-// have that data for (`data/realDraftPowerRankings.ts` — 34 of the source's
-// 45 real names resolve to an existing record here; see that file's own
-// doc comment for exactly which 11 don't and why) — a genuinely independent
+// REAL external recruiter consensus for the 35 named real prospects we now
+// have that data for (`data/realDraftPowerRankings.ts` — 35 of the source's
+// 45 real names resolve to an existing record here, including Dougie
+// Cochrane [real rank 1], added round 80 at Tyler's own direct request
+// after he supplied a second real source for that specific name; see that
+// file's own doc comment for exactly which 10 don't and why) — a genuinely independent
 // signal the phrase bank has no access to, in the same established "ground
 // it in real, checkable data" spirit as every other `data/realXxx.ts`
 // source in this codebase. Everyone NOT on that list (the other ~1,800
@@ -708,7 +710,7 @@ const EXTERNAL_CONSENSUS_CAP_RANK_CUTOFF = 31;
  * write-up-prose floor (`potentialFloorFromProse`) — called from
  * `buildRealProspect` (draft.ts) in place of using that floor directly. A
  * prospect absent from `ZEROHANGER_SEPT_2026_RANKINGS` passes through with
- * ZERO change from round 78's behaviour — this only ever touches the ~35
+ * ZERO change from round 78's behaviour — this only ever touches the 35
  * matched names.
  */
 export function applyExternalConsensusFloor(record: RealProspectRecord, proseFloorBase: number): number {

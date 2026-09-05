@@ -10,6 +10,7 @@ import { runFinalsSeries, type FinalsSeriesResult } from "./finals.ts";
 import type { TeamPlan } from "./tactics.ts";
 import { updateConditionAfterRound } from "./progression.ts";
 import { autoFillLineup, lineupToMatchTeam } from "./selection.ts";
+import { nextDisgruntlementState, type DisgruntlementState } from "./disgruntlement.ts";
 
 /**
  * Season orchestration — ties fixture.ts + match.ts + ladder.ts + finals.ts
@@ -84,6 +85,18 @@ export interface Season {
   premierClubId: number | null;
   /** PlayerID -> in-season condition (see engine/progression.ts). Missing entry = fully fresh (100), same convention match.ts's own condition maps use. See this file's doc comment. */
   condition: Map<number, number>;
+  /**
+   * PlayerID -> live disgruntlement tracking (see engine/disgruntlement.ts).
+   * Missing entry = fully content, never yet touched by the mechanic — same
+   * "missing = neutral default" convention `condition` uses. Advanced one
+   * round at a time by `simulateRound` alongside `condition`, using that
+   * round's real `MatchTeam.positions`/on-ground data before it's discarded
+   * (this `Season` doesn't otherwise retain per-round lineup detail — see
+   * `PlayedMatch`, which only keeps the box score). Deliberately NOT
+   * advanced by `runFinals` — disgruntlement is a "mid-season" mechanic per
+   * Tyler's own framing, see disgruntlement.ts's doc comment.
+   */
+  disgruntlement: Map<number, DisgruntlementState>;
 }
 
 /**
@@ -139,6 +152,7 @@ export function initSeason(seed: number, clubIds: number[] = CLUBS.map((c) => c.
     finals: null,
     premierClubId: null,
     condition: new Map(),
+    disgruntlement: new Map(),
   };
 }
 
@@ -181,7 +195,7 @@ function nextConditionMap(prev: Map<number, number>, teams: Map<number, MatchTea
   return next;
 }
 
-/** Simulates every game in `round` (a no-op if that round's already played) and returns a new Season with the results folded in, the ladder recomputed, and `condition` advanced one round for every player fielded. `plans` (clubId -> TeamPlan) is optional and opt-in — a club absent from it plays with no tactics/game-style plan, same as omitting `homePlan`/`awayPlan` from `simulateMatch` directly. Condition is read from `season.condition` (fatigue accumulated *before* this round) and applied to both sides of every match via the same map — match.ts resolves each player's own entry by PlayerID regardless of which side's slot it's passed into. */
+/** Simulates every game in `round` (a no-op if that round's already played) and returns a new Season with the results folded in, the ladder recomputed, `condition` advanced one round for every player fielded, and `disgruntlement` advanced one round for every non-delisted player at every club in `teams` (see engine/disgruntlement.ts — uses the freshly-recomputed `ladder`, so "is my club struggling" reflects this round's result). `plans` (clubId -> TeamPlan) is optional and opt-in — a club absent from it plays with no tactics/game-style plan, same as omitting `homePlan`/`awayPlan` from `simulateMatch` directly. Condition is read from `season.condition` (fatigue accumulated *before* this round) and applied to both sides of every match via the same map — match.ts resolves each player's own entry by PlayerID regardless of which side's slot it's passed into. */
 export function simulateRound(season: Season, round: number, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>): Season {
   if (isRoundPlayed(season, round)) return season;
   const roundMatches = matchesInRound(season.fixture, round);
@@ -207,7 +221,8 @@ export function simulateRound(season: Season, round: number, teams: Map<number, 
   const played = [...season.played, ...newlyPlayed];
   const ladder = computeLadder(season.clubIds, played.map(toOutcome));
   const condition = nextConditionMap(season.condition, teams);
-  return { ...season, played, ladder, condition };
+  const disgruntlement = nextDisgruntlementState(season.disgruntlement, round, teams, ladder, season.seed);
+  return { ...season, played, ladder, condition, disgruntlement };
 }
 
 /** Runs the full 9-match finals series off the current ladder's top 8. Requires the home-and-away season to be complete; a no-op if finals have already been run. `plans` behaves the same as in `simulateRound`. Every finals match uses whatever `season.condition` was left at h&a-completion — see this file's doc comment for why that's not advanced further across the 4-week bracket. */

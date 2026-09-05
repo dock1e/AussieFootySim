@@ -4,7 +4,8 @@ import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_S
 import type { SeasonArchiveEntry } from "../engine/seasonSummary";
 import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
-import { generateProspectPool, buildDraftOrder, draftPlayer, autoResolvePick, SCOUT_BUDGET_PER_DRAFT } from "../engine/draft";
+import { generateProspectPool, draftPlayer, autoResolvePick, SCOUT_BUDGET_PER_DRAFT, DRAFT_ROUNDS } from "../engine/draft";
+import { resolveDraftOrder, seedDraftPickInventory, type DraftPick } from "../engine/draftPicks";
 import { selectCombineInvitees, computeCombineResults } from "../engine/combine";
 import { applySwitch } from "../engine/positionSwitch";
 import { computeLeagueStrategies, buildLeaguePlayersByClub, type ClubStrategy } from "../engine/listNeeds";
@@ -59,6 +60,8 @@ interface SaveStoreState {
   poolVersion: number;
   /** Aug 2026 round 54 — [[Season Stats and Records]]. Every real off-season's own compact summary, oldest first. Same "doesn't belong to any single sub-store" reasoning as `year` above (this file's own doc comment) — populated by `runOffSeason` below, read directly by Dashboard's `LeaderModal` for its All-Time view modes. */
   seasonArchives: SeasonArchiveEntry[];
+  /** Sep 2026 round 74 — [[Coaching Legacy and Career Personalization]]'s draft-pick inventory (`engine/draftPicks.ts`). Same "doesn't belong to any single sub-store" reasoning as `seasonArchives` — real pick ownership persists across seasons (a pick traded away doesn't come back), so unlike the per-off-season windows it's never cleared in `runOffSeason` below. */
+  draftPickInventory: DraftPick[];
 
   /** Loads the current save from IndexedDB if one exists and hydrates every other store from it; otherwise leaves everything at its already-correct fresh-game defaults. Call once, on app boot, before rendering the main UI. */
   initialize: () => Promise<void>;
@@ -189,7 +192,7 @@ function autoResolveDraftPicks(window: DraftWindow, year: number, opts: { stopWh
   return { window: { ...window, picks, currentPickIndex }, draftedPlayers };
 }
 
-function snapshotSave(year: number, seasonArchives: SeasonArchiveEntry[]): SaveGameData {
+function snapshotSave(year: number, seasonArchives: SeasonArchiveEntry[], draftPickInventory: DraftPick[]): SaveGameData {
   return {
     schemaVersion: SAVE_SCHEMA_VERSION,
     myClub: useGameStore.getState().myClub,
@@ -205,6 +208,7 @@ function snapshotSave(year: number, seasonArchives: SeasonArchiveEntry[]): SaveG
     tradeWindow: useTradeStore.getState().window,
     draftWindow: useDraftStore.getState().window,
     seasonArchives,
+    draftPickInventory,
   };
 }
 
@@ -244,6 +248,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   year: CURRENT_SEASON_YEAR,
   poolVersion: 0,
   seasonArchives: [],
+  draftPickInventory: seedDraftPickInventory(),
 
   initialize: async () => {
     let loaded: SaveGameData | null = null;
@@ -265,9 +270,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       // enough (nothing has changed since the load, so what's on disk still
       // matches this state) and avoids needing to persist a real timestamp
       // inside SaveGameData just for a UI label.
-      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives });
+      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory });
     } else {
-      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [] });
+      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory() });
     }
 
     if (!subscribed) {
@@ -284,7 +289,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   saveNow: async () => {
-    const save = snapshotSave(get().year, get().seasonArchives);
+    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory);
     await writeSaveToDB(serializeSave(save));
     set({ hasSave: true, lastSavedAt: Date.now() });
   },
@@ -293,13 +298,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     resetPoolToGenerated();
     const save = newSaveGame(myClub, ALL_PLAYERS);
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory });
     await clearSaveInDB();
     await get().saveNow();
   },
 
   runOffSeason: async () => {
-    const current = snapshotSave(get().year, get().seasonArchives);
+    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory);
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
@@ -307,16 +312,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
     useDraftStore.getState().clearWindow();
-    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives });
+    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory });
     await get().saveNow();
   },
 
-  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives)), null, 2),
+  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory)), null, 2),
 
   importJSON: async (text) => {
     const save = deserializeSave(JSON.parse(text));
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory });
     await get().saveNow();
   },
 
@@ -560,7 +565,11 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     // matching seed. See CombineWindow's own doc comment.
     const combineWindow = useCombineStore.getState().window;
     const pool = combineWindow && combineWindow.year === year ? combineWindow.pool : generateProspectPool(ALL_PLAYERS, year, seed);
-    const order = buildDraftOrder(useSeasonStore.getState().season?.ladder);
+    // Round 74 — real pick ownership (engine/draftPicks.ts) now decides who's actually on the
+    // clock each slot, superseding the naive "whoever earned this ladder position keeps it"
+    // buildDraftOrder used alone. Falls back to that exact same natural order for any slot the
+    // inventory has no real answer for (an untracked year, or one of the disclosed 2026 gap picks).
+    const order = resolveDraftOrder(get().draftPickInventory, year, useSeasonStore.getState().season?.ladder, DRAFT_ROUNDS);
     const window: DraftWindow = {
       year,
       pool,

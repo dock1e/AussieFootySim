@@ -49,11 +49,18 @@ import {
  * carries the full writeup): this slice builds real prospect generation,
  * fogged scouting, live reverse-ladder pick simulation with a needs-aware AI
  * heuristic, and post-draft roster conversion — the actual National Draft.
+ * `buildDraftOrder` below still produces the NATURAL reverse-ladder order
+ * only — the actual trade-aware order a live save uses is
+ * `engine/draftPicks.ts`'s `resolveDraftOrder` (round 74), which wraps this
+ * function's own `base` list and overrides individual slots wherever the
+ * real pick inventory says that slot changed hands; see that file for why
+ * pick trading itself still isn't reachable from the live Trade Period UI.
  * Cut, all disclosed: **Academy bids** (a full bid/match state-machine,
  * deferred entirely — no academy-pathway data exists anywhere in this
- * codebase to hang it off); **traded-in pick provenance** (`VIA {CLUB}` /
- * `SLIPPED -N` tags — moot, since Trade Period doesn't support trading picks
- * yet, only players); **Rookie/Pre-Season/Mid-Season drafts** (only the
+ * codebase to hang it off); **traded-in pick provenance display** (`VIA
+ * {CLUB}` / `SLIPPED -N` tags on the Draft board itself — the underlying
+ * ownership data now exists in `draftPicks.ts`, just not surfaced as a UI
+ * annotation yet); **Rookie/Pre-Season/Mid-Season drafts** (only the
  * National Draft itself this slice — Configuration.md's "90 picks (National)
  * + rookie supplemental" default is read as 90 *National* picks, the rookie
  * supplemental left for a future slice); **a standalone Combine screen**

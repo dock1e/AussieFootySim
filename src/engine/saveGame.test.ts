@@ -5,6 +5,7 @@ import { defaultTeamPlan } from "./tactics";
 import { makePlayer } from "../testUtils/makePlayer";
 import { CURRENT_SEASON_YEAR } from "../config";
 import type { Season } from "./season";
+import { seedDraftPickInventory } from "./draftPicks";
 
 /**
  * Deliberately synthetic throughout, same isolation match.test.ts/
@@ -35,6 +36,7 @@ function minimalSeason(condition: [number, number][]): Season {
     finals: null,
     premierClubId: null,
     condition: new Map(condition),
+    disgruntlement: new Map(),
   };
 }
 
@@ -188,6 +190,7 @@ describe("serializeSave / deserializeSave", () => {
           playerTotals: [],
         },
       ],
+      draftPickInventory: seedDraftPickInventory(),
     };
   }
 

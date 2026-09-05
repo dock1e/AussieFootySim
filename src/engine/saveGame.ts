@@ -9,6 +9,8 @@ import type { DraftPickRecord } from "./draft.ts";
 import type { CombineTestResult } from "./combine.ts";
 import { runOffSeason } from "./progression.ts";
 import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
+import type { DisgruntlementState } from "./disgruntlement.ts";
+import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 
 /**
@@ -181,6 +183,16 @@ export interface SaveGameData {
    * whichever season is live when this ships, not retroactively.
    */
   seasonArchives: SeasonArchiveEntry[];
+  /**
+   * Sep 2026 round 74 — [[Coaching Legacy and Career Personalization]]'s draft-pick-inventory build
+   * (Tyler: "Yes, we need to build a draft pick inventory"). Real 2026-2028 pick ownership, per
+   * `engine/draftPicks.ts`'s own doc comment — added without bumping `SAVE_SCHEMA_VERSION`, same
+   * treatment as `seasonArchives`/`eligibility`/etc: a pre-round-74 save just has no tracked pick
+   * ownership, which `deserializeSave` below defaults to a freshly reseeded real inventory (NOT an
+   * empty array — unlike those other fields, "no data" here should read as "this save hasn't traded
+   * any picks yet," which the real seed already correctly represents, not "picks don't exist").
+   */
+  draftPickInventory: DraftPick[];
 }
 
 /** A fresh save for a brand-new game — the exact "nothing played yet" state the app already defaults to today, just made explicit and persistable. */
@@ -200,6 +212,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     tradeWindow: null,
     draftWindow: null,
     seasonArchives: [],
+    draftPickInventory: seedDraftPickInventory(),
   };
 }
 
@@ -251,6 +264,10 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     draftWindow: null,
     seasonArchives: finishedSeasonArchive ? [...save.seasonArchives, finishedSeasonArchive] : save.seasonArchives,
     savedAt: new Date().toISOString(),
+    // draftPickInventory deliberately NOT reset here — unlike combineWindow/contractWindow/
+    // tradeWindow/draftWindow (per-off-season sessions that genuinely restart each year), pick
+    // OWNERSHIP is multi-year state: a pick traded away in 2026 for a 2027 future selection must
+    // still read as traded away when 2027 actually arrives. It carries over unchanged.
   };
 }
 
@@ -271,8 +288,10 @@ interface SerializedTeamPlan {
   tactics: [number, PlayerTactic][];
 }
 
-interface SerializedSeason extends Omit<Season, "condition"> {
+interface SerializedSeason extends Omit<Season, "condition" | "disgruntlement"> {
   condition: [number, number][];
+  /** Same Map->entries treatment as `condition` above — see engine/disgruntlement.ts's `DisgruntlementState`. */
+  disgruntlement: [number, DisgruntlementState][];
 }
 
 export interface SerializedSaveGame {
@@ -296,6 +315,8 @@ export interface SerializedSaveGame {
   draftWindow: DraftWindow | null;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `draftWindow`. See `SeasonArchiveEntry`'s own doc comment for why this needed no Map-style special-casing despite summarising `Season` data. */
   seasonArchives: SeasonArchiveEntry[];
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `seasonArchives`. */
+  draftPickInventory: DraftPick[];
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -314,7 +335,9 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     year: save.year,
     savedAt: save.savedAt,
     players: save.players,
-    season: save.season ? { ...save.season, condition: [...save.season.condition.entries()] } : null,
+    season: save.season
+      ? { ...save.season, condition: [...save.season.condition.entries()], disgruntlement: [...save.season.disgruntlement.entries()] }
+      : null,
     lineups: save.lineups,
     eligibility: save.eligibility,
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
@@ -323,6 +346,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     tradeWindow: save.tradeWindow,
     draftWindow: save.draftWindow,
     seasonArchives: save.seasonArchives,
+    draftPickInventory: save.draftPickInventory,
   };
 }
 
@@ -354,7 +378,9 @@ export function deserializeSave(json: unknown): SaveGameData {
     year: typeof s.year === "number" ? s.year : CURRENT_SEASON_YEAR,
     savedAt: typeof s.savedAt === "string" ? s.savedAt : new Date().toISOString(),
     players: s.players,
-    season: s.season ? { ...s.season, condition: new Map(s.season.condition) } : null,
+    season: s.season
+      ? { ...s.season, condition: new Map(s.season.condition), disgruntlement: new Map(s.season.disgruntlement ?? []) }
+      : null,
     lineups: s.lineups ?? {},
     eligibility: s.eligibility ?? {},
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
@@ -363,5 +389,7 @@ export function deserializeSave(json: unknown): SaveGameData {
     tradeWindow: s.tradeWindow ?? null,
     draftWindow: s.draftWindow ?? null,
     seasonArchives: s.seasonArchives ?? [],
+    // Reseeded (not []) for a pre-round-74 save — see this field's own doc comment on SaveGameData.
+    draftPickInventory: s.draftPickInventory ?? seedDraftPickInventory(),
   };
 }

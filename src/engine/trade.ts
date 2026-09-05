@@ -13,12 +13,20 @@ import { ARCHETYPE_LINE, summariseLines, bandForGap, type Line, type LineSummary
  * valuation model" is the source spec; this file implements its confirmed
  * mechanics as closely as the app's current data model allows, with
  * disclosed simplifications noted inline (and summarised in ROADMAP.md's
- * gap list) — most importantly, **player-for-player trades only**: there's
- * no draft-pick inventory anywhere in this app yet (the National Draft
- * itself isn't built), so every pick-related mechanic Engine.md describes
- * (strategy-gated pick valuation, the late-pick floor penalty, the
- * Draft Picks by Club reference grid) is out of scope this slice, same
- * disclosed-cut precedent as Contracts' compensation picks.
+ * gap list) — most importantly, **player-for-player trades only**.
+ * `engine/draftPicks.ts` (round 74) now gives this app a real draft-pick
+ * inventory (real 2026-2028 pick ownership, a DVI value curve, and the
+ * function that resolves who's actually on the clock each pick), so the old
+ * "there's no draft-pick inventory anywhere in this app yet" is no longer
+ * true — but that inventory isn't wired into THIS file yet: a human or AI
+ * club can't offer a pick as part of a `TradeOffer` here, so every pick-
+ * related mechanic Engine.md describes (strategy-gated pick valuation, the
+ * late-pick floor penalty, the Draft Picks by Club reference grid) is still
+ * out of scope this slice. See `draftPicks.ts`'s own doc comment for exactly
+ * why that wiring was deliberately deferred rather than attempted alongside
+ * it (short version: not risking round 72's carefully-calibrated trade-
+ * volume tuning below by reworking this file's value model in the same
+ * pass) — same disclosed-cut precedent as Contracts' compensation picks.
  *
  * Framework-free and deterministic (mulberry32, never Math.random) — the
  * same rule every other engine/*.ts file follows. Reuses

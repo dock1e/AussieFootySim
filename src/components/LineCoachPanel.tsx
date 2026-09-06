@@ -15,11 +15,19 @@ import { focusesFor, type LineCoachFocus } from "../engine/lineCoaching";
  * concern, all shown together at the same pause" layout those two already
  * establish.
  *
- * Coach assignment mirrors `Draft.tsx`'s `TalentScoutPanel` almost exactly
- * (same dropdown-of-84-coaches-sorted-by-role-OVR pattern, same "no coach
- * hired = baseline" framing) — deliberately not a shared component, since
- * this one needs 4 independent role dropdowns plus a live feedback sentence
- * and focus-button row that TalentScoutPanel has no equivalent of.
+ * Sep 2026 round 85 — coach ASSIGNMENT moved out of this panel entirely.
+ * Round 84's own first build let you hire/swap a coach right here mid-match,
+ * but that assignment had no retroactive effect on the match you were
+ * actually playing (effectiveness is resolved once, at kickoff) — a real,
+ * disclosed gap between what the UI let you do and what it actually did.
+ * Tyler's own fix, verbatim: "Coaches should not be able to be hired
+ * mid-match, and if they are they should only apply from the next match
+ * onwards." Hiring/swapping now lives on the Coaching tab's Selection
+ * Committee screen (`SelectionCommittee.tsx`'s own `LineCoachHiringPanel`,
+ * mirroring `Draft.tsx`'s `TalentScoutPanel`) — a standing, between-matches
+ * roster decision, not a quarter-time one. This panel is now read-only for
+ * assignment (see `LineCoachCard` below) and keeps only what genuinely IS
+ * live, in-match state: the feedback sentence and the focus buttons.
  */
 export interface LineCoachPanelProps {
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
@@ -27,30 +35,23 @@ export interface LineCoachPanelProps {
   feedbackFor: (role: MatchDayCoachRole) => string;
   /** This side's current focus per role, already resolved by the caller (`engine/match.ts`'s `getLineFocus`). */
   focusFor: (role: MatchDayCoachRole) => LineCoachFocus;
-  onAssign: (role: MatchDayCoachRole, coachId: number | null) => void;
   onFocusChange: (role: MatchDayCoachRole, focus: LineCoachFocus) => void;
 }
 
-export function LineCoachPanel({ lineCoaches, feedbackFor, focusFor, onAssign, onFocusChange }: LineCoachPanelProps) {
+export function LineCoachPanel({ lineCoaches, feedbackFor, focusFor, onFocusChange }: LineCoachPanelProps) {
   return (
     <div className="card">
       <div className="mb-1 font-display text-xl italic">Line Coach Direction</div>
       <div className="mb-3 text-xs text-slate-400">
         Hear how each line is reading the game so far, then leave them on their default path or direct
         them to a focus for the rest of the match. "Demand They Dig Deeper" lifts every one of a line's
-        stats, but the extra intensity costs more fitness over the rest of the game.
+        stats, but the extra intensity costs more fitness over the rest of the game. Hiring or swapping
+        a line coach is a Selection Committee decision (Coaching tab) that takes effect from your next
+        match — not something you can change here.
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {MATCH_DAY_COACH_ROLES.map((role) => (
-          <LineCoachCard
-            key={role}
-            role={role}
-            feedback={feedbackFor(role)}
-            currentFocus={focusFor(role)}
-            assignedCoachId={lineCoaches[role] ?? null}
-            onAssign={(coachId) => onAssign(role, coachId)}
-            onFocusChange={(focus) => onFocusChange(role, focus)}
-          />
+          <LineCoachCard key={role} role={role} feedback={feedbackFor(role)} currentFocus={focusFor(role)} assignedCoachId={lineCoaches[role] ?? null} onFocusChange={(focus) => onFocusChange(role, focus)} />
         ))}
       </div>
     </div>
@@ -62,38 +63,32 @@ function LineCoachCard({
   feedback,
   currentFocus,
   assignedCoachId,
-  onAssign,
   onFocusChange,
 }: {
   role: MatchDayCoachRole;
   feedback: string;
   currentFocus: LineCoachFocus;
   assignedCoachId: number | null;
-  onAssign: (coachId: number | null) => void;
   onFocusChange: (focus: LineCoachFocus) => void;
 }) {
-  // Sorted once per render by this role's own OVR descending — same reasoning TalentScoutPanel's
-  // own sortedScouts comment gives: the strongest real fits surface first rather than the coach
-  // hunting through 84 names in pool-authoring order.
-  const sortedCoaches = [...ASSISTANT_COACH_POOL].sort((a, b) => b.ratings[role].ovr - a.ratings[role].ovr);
   const assignedCoach = assignedCoachId !== null ? (ASSISTANT_COACH_POOL.find((c) => c.id === assignedCoachId) ?? null) : null;
 
   return (
     <div className="rounded-lg border border-base-600 bg-base-900 p-3">
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-slate-300">{role}</span>
-        <select
-          value={assignedCoachId ?? ""}
-          onChange={(e) => onAssign(e.target.value === "" ? null : Number(e.target.value))}
-          className="rounded-lg bg-base-700 px-2 py-1 text-[11px] font-semibold text-slate-200"
-        >
-          <option value="">No coach hired (baseline)</option>
-          {sortedCoaches.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name} — {gradeForOvr(c.ratings[role].ovr)} ({c.ratings[role].ovr} OVR)
-            </option>
-          ))}
-        </select>
+        {/* Read-only, round 85 — see this file's own top comment. Hiring/swapping lives on the
+            Selection Committee screen now; showing (rather than hiding) who's assigned here still
+            matters, since it's exactly the coach whose feedback sentence is right below. */}
+        <span className="text-[11px] font-semibold text-slate-400" title="Hire or swap this coach from the Coaching tab's Selection Committee — takes effect from your next match, not this one.">
+          {assignedCoach ? (
+            <>
+              {assignedCoach.name} — {gradeForOvr(assignedCoach.ratings[role].ovr)} ({assignedCoach.ratings[role].ovr} OVR)
+            </>
+          ) : (
+            "No coach hired (baseline)"
+          )}
+        </span>
       </div>
       {assignedCoach && <p className="mb-1.5 text-[11px] text-slate-500">{assignedCoach.bio}</p>}
       <p className="mb-2 text-sm italic text-slate-300">&ldquo;{feedback}&rdquo;</p>

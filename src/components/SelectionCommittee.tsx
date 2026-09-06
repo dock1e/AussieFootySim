@@ -9,6 +9,8 @@ import { emptyLineup, isLineupComplete, lineupPlayerIds, lineupToMatchTeam } fro
 import { benchPlayers, pickBest22 } from "../engine/team";
 import { POSITIONS, defaultEligiblePositions, suitabilityFor, type Archetype, type Position } from "../types/archetype";
 import { defaultTeamPlan } from "../engine/tactics";
+import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
+import { gradeForOvr, MATCH_DAY_COACH_ROLES, type Coach, type MatchDayCoachRole } from "../types/coach";
 import { TeamPrep } from "./MatchPreparation";
 import { SelectionGround, GROUND_ROW_POSITIONS } from "./SelectionGround";
 import { SelectionPlayerList } from "./SelectionPlayerList";
@@ -40,6 +42,21 @@ import { PlayerLink } from "./PlayerLink";
  * editor. This is what lets the Season tab's headless round simulation
  * respect tactics at all, since it has no per-match interactive prep step
  * the way the Match tab does.
+ *
+ * Sep 2026, round 85 — also the ONLY place a match-day line coach can be
+ * hired or swapped (see "Line Coaches" section below). Round 84 first let
+ * you hire from `LineCoachPanel.tsx`'s own mid-match quarter-break card, but
+ * that assignment had no retroactive effect on the match already underway
+ * (effectiveness is resolved once, at kickoff) — a real gap between what the
+ * UI let you do and what it actually did. Tyler's own fix, verbatim:
+ * "Coaches should not be able to be hired mid-match, and if they are they
+ * should only apply from the next match onwards." Moving hiring here — a
+ * standing, out-of-match, per-club decision, exactly like the Standing Game
+ * Plan right above it — makes the UI itself enforce that, rather than
+ * relying on a disclosed engine quirk. Mirrors Draft.tsx's own
+ * `TalentScoutPanel` pattern (per-role OVR-sorted dropdown + bio), just
+ * without focus-area buttons, since line-coach focus is a live, per-match,
+ * ephemeral choice (`LineCoachPanel.tsx`), not a standing one.
  */
 export function SelectionCommittee() {
   const myClub = useGameStore((s) => s.myClub);
@@ -85,6 +102,9 @@ export function SelectionCommittee() {
 
   const { planFor, setGameStyle, setTactic } = useTeamPlanStore();
   const plan = planFor(myClub) ?? defaultTeamPlan();
+
+  const lineCoaches = useSaveStore((s) => s.lineCoaches);
+  const assignLineCoach = useSaveStore((s) => s.assignLineCoach);
 
   return (
     <div className="space-y-4">
@@ -174,6 +194,70 @@ export function SelectionCommittee() {
           onUpdateTactic={(playerId, pt) => setTactic(myClub, playerId, pt)}
         />
       </div>
+
+      <div className="space-y-2">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Line Coaches</div>
+        <div className="card text-xs text-slate-400">
+          Hire or swap {myClub}'s Defensive Line, Forward Line, Midfield, and Ruck &amp; Stoppage
+          coaches. A hire here takes effect from your next match — it can't reach back into a match
+          already underway, so mid-match direction (Quarter/Half/Three-Quarter Time) always reviews
+          whoever's assigned right now, not whoever you're about to hire.
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {MATCH_DAY_COACH_ROLES.map((role) => (
+            <LineCoachHiringCard key={role} role={role} assignedCoachId={lineCoaches[role] ?? null} onAssign={(coachId) => assignLineCoach(role, coachId)} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Sep 2026, round 85 — [[Match-Day Line Coach Direction]]. Hiring UI for one
+ * of the 4 match-day line coach roles, mirroring Draft.tsx's own
+ * `TalentScoutPanel`: a dropdown sorted by THIS role's own OVR descending
+ * (so the strongest real fits for this specific role surface first, rather
+ * than the coach hunting through 84 names in pool-authoring order), an
+ * "unassign" baseline option, and bio display. Deliberately has no
+ * focus-area buttons — focus is live, per-match, ephemeral state that lives
+ * in `LineCoachPanel.tsx` instead, not a standing roster decision like the
+ * hire itself.
+ */
+function LineCoachHiringCard({
+  role,
+  assignedCoachId,
+  onAssign,
+}: {
+  role: MatchDayCoachRole;
+  assignedCoachId: number | null;
+  onAssign: (coachId: number | null) => void;
+}) {
+  const sortedCoaches = [...ASSISTANT_COACH_POOL].sort((a, b) => b.ratings[role].ovr - a.ratings[role].ovr);
+  const assignedCoach: Coach | null = assignedCoachId !== null ? (ASSISTANT_COACH_POOL.find((c) => c.id === assignedCoachId) ?? null) : null;
+
+  return (
+    <div className="card">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs uppercase tracking-wide text-slate-400">{role}</span>
+        <select
+          value={assignedCoach?.id ?? ""}
+          onChange={(e) => onAssign(e.target.value === "" ? null : Number(e.target.value))}
+          className="rounded-lg bg-base-700 px-2 py-1 text-xs font-semibold text-slate-200"
+        >
+          <option value="">No coach hired (baseline)</option>
+          {sortedCoaches.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name} — {gradeForOvr(c.ratings[role].ovr)} ({c.ratings[role].ovr} OVR)
+            </option>
+          ))}
+        </select>
+      </div>
+      {assignedCoach ? (
+        <p className="text-xs text-slate-400">{assignedCoach.bio}</p>
+      ) : (
+        <p className="text-xs text-slate-500">Using baseline effectiveness for this line. Hire a coach above to lift it — or, with a poor hire, blunt it.</p>
+      )}
     </div>
   );
 }

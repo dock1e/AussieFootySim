@@ -105,9 +105,14 @@ export function LiveMatch() {
 
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
-  /** Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Same "single-slot, the human coach's own club" shape as `talentScout` — see `SaveGameData.lineCoaches`'s own doc comment. */
+  /**
+   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Same "single-slot, the human coach's own
+   * club" shape as `talentScout` — see `SaveGameData.lineCoaches`'s own doc comment. Round 85 — read
+   * ONLY here now; `assignLineCoach` moved to `SelectionCommittee.tsx`, since a hire made mid-match had
+   * no retroactive effect on the match already in progress. This panel just displays whoever's
+   * currently assigned (frozen at kickoff) alongside their live feedback/focus.
+   */
   const lineCoaches = useSaveStore((s) => s.lineCoaches);
-  const assignLineCoach = useSaveStore((s) => s.assignLineCoach);
   /** [[Interchange Rotation]], round 48 — read broadly (every club, not just myClub) so resolveTeam can thread whichever side's own saved overrides through symmetrically; in practice only the human coach's own club ever has any (see Selection Committee's new eligibility editor). */
   const allEligibility = useSelectionStore((s) => s.eligibility);
 
@@ -428,7 +433,6 @@ export function LiveMatch() {
                 lineCoaches={lineCoaches}
                 feedbackFor={(role) => (matchInProgress ? lineFeedbackFor(matchInProgress.ctx, pendingCoachsCall.side, role) : "")}
                 focusFor={(role) => (matchInProgress ? getLineFocus(matchInProgress, pendingCoachsCall.side, role) : "Default")}
-                onAssign={assignLineCoach}
                 onFocusChange={(role, focus) => handleLineFocusChange(pendingCoachsCall.side, role, focus)}
               />
               <CoachsCall

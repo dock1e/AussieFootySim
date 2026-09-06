@@ -1,11 +1,14 @@
 import { getPlayerById } from "../data/loadPlayers.ts";
+import { realSeasonHistoryFor } from "../data/realSeasonHistory.ts";
+import { CURRENT_SEASON_YEAR } from "../config.ts";
 import type { Archetype } from "../types/archetype.ts";
 import type { Player } from "../types/player.ts";
+import { playerFullName } from "../types/player.ts";
 import { clubById } from "../types/club.ts";
 import type { BoxScoreLine, MatchResult } from "./match.ts";
 import { fantasyPointsFor } from "./ratings.ts";
 import type { Season } from "./season.ts";
-import { toAverageMap, type LeagueStat, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
+import { toAverageMap, LEADERBOARD_STAT_FIELDS, realSeasonEntryToTotals, type LeagueStat, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
 
 /**
  * Round 64 — [[Player Profile and Benchmarking]]. Two genuinely new pieces of
@@ -145,6 +148,55 @@ export function bestSingleGameInYear(playerId: number, stat: LeagueStat, year: n
 }
 
 // --- Percentile Benchmarking --------------------------------------------------
+
+/**
+ * Round 86 — bugfix, reported by Tyler: the Player Profile's "Key Stats & Performance" table
+ * showed an identical Career Avg and Season Avg for every stat (e.g. Zak Butters' Disposals read
+ * 11.2/11.2, when his real+sim combined career average is actually 22.1 — the number his own
+ * "Career & Season Stats" CAREER row, in Average mode, already computes correctly one section
+ * down). Root cause: `benchmarkPlayer`, when called for the career window, was fed straight off
+ * `seasonSummary.ts`'s `allTimePlayerTotals` — which is, BY DESIGN, sim-only (every archived
+ * season's `playerTotals` merged with the live season — see that function's own doc comment). For
+ * a save still in its very first season with nothing archived yet, that map reduces to exactly the
+ * live season's own totals — identical to the season window, for every player in the game, not
+ * just this one.
+ *
+ * `allTimePlayerTotals` itself is deliberately NOT changed — it also feeds the Dashboard, Records
+ * tab, and Statistics leaderboards, and folding real pre-save history into THOSE would be a much
+ * bigger, unrelated decision (mixing 2019-2025 real stats into "this season's leaders," for
+ * instance) that Tyler hasn't asked for — the same disclosed boundary `realSeasonHistory.ts`'s own
+ * doc comment already drew. This function is a narrow, opt-in enrichment used only by
+ * `PlayerProfileModal.tsx`'s own career benchmarking: for every player already in a sim totals
+ * map, it adds their own real pre-save history (`realSeasonHistoryFor`, keyed the same way
+ * `PlayerProfileModal.tsx`'s `yearRowsFor` already resolves it) on top of their sim totals, years
+ * before `CURRENT_SEASON_YEAR` only — the same cutoff `yearRowsFor` uses, so this save's own
+ * current-year row is never double-counted against its real-world twin. Cohort MEMBERSHIP is
+ * unchanged (still exactly whoever the sim map already includes, i.e. has played at least one sim
+ * game ever in this save) — a real player with genuine career history but zero sim games this save
+ * still doesn't enter the cohort, an accepted boundary carried over from the existing map rather
+ * than a new one introduced here.
+ */
+export function withRealCareerHistory(simTotals: Map<number, SeasonPlayerTotals>): Map<number, SeasonPlayerTotals> {
+  const result = new Map<number, SeasonPlayerTotals>();
+  for (const [id, sim] of simTotals) {
+    const player = getPlayerById(id);
+    const realRows = player ? realSeasonHistoryFor(player.realFullName ?? playerFullName(player)) : [];
+    if (realRows.length === 0) {
+      result.set(id, sim);
+      continue;
+    }
+    const merged: SeasonPlayerTotals = { ...sim };
+    for (const entry of realRows) {
+      if (entry.year >= CURRENT_SEASON_YEAR) continue; // this save's own current year already counted via the sim map — avoid double-counting its real-world twin
+      const t = realSeasonEntryToTotals(id, entry);
+      merged.gamesPlayed += t.gamesPlayed;
+      merged.fantasyPoints += t.fantasyPoints;
+      for (const key of LEADERBOARD_STAT_FIELDS) merged[key] += t[key];
+    }
+    result.set(id, merged);
+  }
+  return result;
+}
 
 /** AFL.com.au's own disclosed bands, reused verbatim (see that site's "Benchmarking explained": "Ratings are calculated against other players in the same on-field position. ELITE 1-10% · ABOVE AVG. 11-35% · AVERAGE 36-66% · BELOW AVG. 67-100%"). `percentile` is a fraction where lower = better (0 = the very best in the cohort, 1 = the worst) — i.e. `rank / cohortSize`, not a percentile in the "higher is better" statistical sense. */
 export type BenchmarkTier = "ELITE" | "ABOVE AVG." | "AVERAGE" | "BELOW AVG.";

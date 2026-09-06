@@ -7,6 +7,7 @@ import { roundsForClub, type FixtureMatch } from "./fixture.ts";
 import { isRoundPlayed, type Season, type PlayedMatch } from "./season.ts";
 import type { BoxScoreLine, MatchResult } from "./match.ts";
 import type { FinalsSeriesResult } from "./finals.ts";
+import type { RealSeasonEntry } from "../data/realSeasonHistory.ts";
 
 /**
  * Season-wide (multi-match) summary helpers for the Aug 2026 round 50
@@ -185,6 +186,44 @@ function emptyTotals(playerId: number): SeasonPlayerTotals {
   const base = { playerId, gamesPlayed: 0, fantasyPoints: 0 } as SeasonPlayerTotals;
   for (const key of LEADERBOARD_STAT_FIELDS) base[key] = 0;
   return base;
+}
+
+/**
+ * Converts one afltables-sourced real season (`data/realSeasonHistory.ts`'s `RealSeasonEntry`)
+ * into this file's own `SeasonPlayerTotals` shape, so any consumer that already works in terms of
+ * `SeasonPlayerTotals` (per-year display, per-game averaging, percentile benchmarking) can treat a
+ * real pre-save season identically to a simulated one. `shotsAtGoal` is derived (goals+behinds);
+ * the 5 fields afltables' classic tables don't carry (markLeadWins, hitoutsToAdvantage, spoils,
+ * interceptMarks, interceptPossessions, turnovers) are `0` — see `realSeasonHistory.ts`'s own doc
+ * comment for why that's an honest gap, not a fabricated zero.
+ *
+ * Round 64/67: originally private to `PlayerProfileModal.tsx`, feeding only that screen's
+ * year-by-year "Career & Season Stats" rows. Round 86: moved here (unchanged) and exported, so
+ * `engine/benchmarking.ts`'s own `withRealCareerHistory` can reuse the identical conversion for
+ * "Key Stats & Performance"'s Career Avg/Tier — see that function's own doc comment for why THAT
+ * needed real history too, and exactly what it does and doesn't touch.
+ */
+export function realSeasonEntryToTotals(playerId: number, e: RealSeasonEntry): SeasonPlayerTotals {
+  const totals = { playerId, gamesPlayed: e.games } as SeasonPlayerTotals;
+  for (const key of LEADERBOARD_STAT_FIELDS) totals[key] = 0;
+  totals.kicks = e.kicks;
+  totals.handballs = e.handballs;
+  totals.disposals = e.disposals;
+  totals.marks = e.marks;
+  totals.marksInside50 = e.marksInside50;
+  totals.clearances = e.clearances;
+  totals.tackles = e.tackles;
+  totals.hitouts = e.hitouts;
+  totals.freeKicksFor = e.freeKicksFor;
+  totals.freeKicksAgainst = e.freeKicksAgainst;
+  totals.contestedPoss = e.contestedPoss;
+  totals.uncontestedPoss = e.uncontestedPoss;
+  totals.goals = e.goals;
+  totals.behinds = e.behinds;
+  totals.shotsAtGoal = e.goals + e.behinds;
+  totals.goalAssists = e.goalAssists;
+  totals.fantasyPoints = 3 * e.kicks + 2 * e.handballs + 3 * e.marks + 4 * e.tackles + 1 * e.hitouts + 1 * e.freeKicksFor - 3 * e.freeKicksAgainst + 6 * e.goals + 1 * e.behinds;
+  return totals;
 }
 
 /**

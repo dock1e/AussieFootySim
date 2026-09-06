@@ -8,10 +8,10 @@ import { useSeasonStore } from "../store/useSeasonStore";
 import { Modal } from "./Modal";
 import { ClubBadgeByName } from "./ClubBadge";
 import { PlayerLink } from "./PlayerLink";
-import { seasonPlayerTotals, allTimePlayerTotals, toAverageMap, ALL_LEAGUE_STATS, LEADERBOARD_STAT_FIELDS, type LeagueStat, type SeasonPlayerTotals, type SeasonArchiveEntry } from "../engine/seasonSummary";
+import { seasonPlayerTotals, allTimePlayerTotals, toAverageMap, realSeasonEntryToTotals, ALL_LEAGUE_STATS, LEADERBOARD_STAT_FIELDS, type LeagueStat, type SeasonPlayerTotals, type SeasonArchiveEntry } from "../engine/seasonSummary";
 import { simCareerSpan } from "../engine/records";
 import { draftHistoryFor, type DraftHistoryEntry } from "../data/realDraftHistory";
-import { realSeasonHistoryFor, type RealSeasonEntry } from "../data/realSeasonHistory";
+import { realSeasonHistoryFor } from "../data/realSeasonHistory";
 import { CURRENT_SEASON_YEAR } from "../config";
 import type { Season } from "../engine/season";
 import type { BoxScoreLine } from "../engine/match";
@@ -21,6 +21,7 @@ import {
   bestSingleGameInYear,
   resolveMatchLocator,
   fullBoxScoreFor,
+  withRealCareerHistory,
   type BenchmarkResult,
   type BenchmarkTier,
   type SingleGameHigh,
@@ -81,6 +82,21 @@ import {
  * architecture review, not a bug report: this component's own real-data
  * joins would have silently gone empty the moment a future fictionalization
  * pass renamed a player. See `Player.realFullName`'s own doc comment.
+ *
+ * Round 86 — Tyler-reported bugfix, correcting the round 67 paragraph above. "Key Stats &
+ * Performance"'s Career Avg/Tier used to read straight off `allTimePlayerTotals` (sim-only, per
+ * that function's own doc comment), so for any save still in its first season — nothing archived
+ * yet — Career Avg was silently identical to Season Avg for every player in the game, not a
+ * genuine career-long figure. `careerTotals` below is now wrapped in `engine/benchmarking.ts`'s
+ * new `withRealCareerHistory`, which enriches each cohort member's own sim totals with their real
+ * pre-save history — see that function's own doc comment for the full diagnosis and for why
+ * `allTimePlayerTotals` itself stays untouched (Dashboard/Records/Statistics leaderboards are
+ * deliberately not affected by this fix). The year-by-year "Career & Season Stats" table below was
+ * already correct (that's `combinedCareerTotals`, unrelated to this bug) — this fix brings the
+ * benchmarking table into agreement with it, not the other way around. Also fixed the same round,
+ * unrelated: `FantasyPointsChart`'s tallest bar(s) had their value label clipped against the SVG's
+ * own top edge (the label rendered at a negative y for whichever year hit the chart's max) — see
+ * that component's own comment.
  */
 
 const KEY_STATS: LeagueStat[] = ["disposals", "kicks", "handballs", "marks", "tackles", "clearances", "fantasyPoints"];
@@ -162,7 +178,7 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
 
   const archetype = player.archetype as Archetype;
   const span = useMemo(() => simCareerSpan(player, seasonArchives, season, year), [player, seasonArchives, season, year]);
-  const careerTotals = useMemo(() => allTimePlayerTotals(seasonArchives, season), [seasonArchives, season]);
+  const careerTotals = useMemo(() => withRealCareerHistory(allTimePlayerTotals(seasonArchives, season)), [seasonArchives, season]);
   const seasonTotals = useMemo(() => (season ? seasonPlayerTotals(season) : new Map<number, SeasonPlayerTotals>()), [season]);
 
   const benchmarkRows: BenchmarkRow[] = useMemo(() => {
@@ -386,37 +402,6 @@ interface YearRow {
   isReal: boolean;
 }
 
-/**
- * Converts one afltables-sourced real season into the same `SeasonPlayerTotals` shape this save's
- * own simulated seasons use, so `CareerTable`/`FantasyPointsChart`/`fmtStat` all work unmodified on
- * either kind of row. `shotsAtGoal` is derived (goals+behinds); the 5 fields afltables' classic
- * tables don't carry (markLeadWins, hitoutsToAdvantage, spoils, interceptMarks,
- * interceptPossessions, turnovers) are `0` — see `realSeasonHistory.ts`'s own doc comment for why
- * that's an honest gap, not a fabricated zero.
- */
-function realEntryToSeasonTotals(playerId: number, e: RealSeasonEntry): SeasonPlayerTotals {
-  const totals = { playerId, gamesPlayed: e.games } as SeasonPlayerTotals;
-  for (const key of LEADERBOARD_STAT_FIELDS) totals[key] = 0;
-  totals.kicks = e.kicks;
-  totals.handballs = e.handballs;
-  totals.disposals = e.disposals;
-  totals.marks = e.marks;
-  totals.marksInside50 = e.marksInside50;
-  totals.clearances = e.clearances;
-  totals.tackles = e.tackles;
-  totals.hitouts = e.hitouts;
-  totals.freeKicksFor = e.freeKicksFor;
-  totals.freeKicksAgainst = e.freeKicksAgainst;
-  totals.contestedPoss = e.contestedPoss;
-  totals.uncontestedPoss = e.uncontestedPoss;
-  totals.goals = e.goals;
-  totals.behinds = e.behinds;
-  totals.shotsAtGoal = e.goals + e.behinds;
-  totals.goalAssists = e.goalAssists;
-  totals.fantasyPoints = 3 * e.kicks + 2 * e.handballs + 3 * e.marks + 4 * e.tackles + 1 * e.hitouts + 1 * e.freeKicksFor - 3 * e.freeKicksAgainst + 6 * e.goals + 1 * e.behinds;
-  return totals;
-}
-
 /** Sums a set of `YearRow`s (real and/or sim) into one combined totals object — the CAREER row's own value, always a fresh sum of exactly the rows displayed above it rather than a separately-maintained total that could drift out of sync. `undefined` for an empty list, matching `allTimePlayerTotals`'s existing "no entry = no games" convention. */
 function sumYearRows(playerId: number, rows: YearRow[]): SeasonPlayerTotals | undefined {
   if (rows.length === 0) return undefined;
@@ -492,7 +477,7 @@ function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], seaso
   const rows: YearRow[] = [];
   for (const real of realSeasonHistoryFor(player.realFullName ?? playerFullName(player))) {
     if (real.year >= CURRENT_SEASON_YEAR || real.games === 0) continue;
-    rows.push({ year: real.year, totals: realEntryToSeasonTotals(player.PlayerID, real), isReal: true });
+    rows.push({ year: real.year, totals: realSeasonEntryToTotals(player.PlayerID, real), isReal: true });
   }
   for (const archive of [...seasonArchives].sort((a, b) => a.year - b.year)) {
     const t = archive.playerTotals.find((pt) => pt.playerId === player.PlayerID);
@@ -568,6 +553,18 @@ function CareerTable({ yearRows, careerTotals, mode }: { yearRows: YearRow[]; ca
   );
 }
 
+/**
+ * Round 86 — bugfix, reported by Tyler: the tallest bar(s) each season lost their value label,
+ * cut off against the chart's own top edge. Root cause: the old `viewBox` gave the chart zero
+ * headroom above `chartHeight` — the bar hitting `max` had `h === chartHeight`, so its label sat
+ * at `y = chartHeight - h - 6 = -6`, six pixels ABOVE y=0, outside the SVG's own viewBox (which
+ * clips by default). Every OTHER bar had enough of its own height in hand for the label to land
+ * safely inside the box, so only the tallest column(s) in a given chart were ever affected — easy
+ * to miss without a tall value to trigger it. Fixed by reserving a fixed `topPadding` above the
+ * bars themselves (enough for an 11px label with a few px to spare) and shifting every bar/label
+ * down by that amount — `chartHeight` still means exactly the same "tallest possible bar, in
+ * pixels" it always did, so no bar's relative height changes, only where zero now sits.
+ */
 function FantasyPointsChart({ yearRows, mode }: { yearRows: YearRow[]; mode: "total" | "average" }) {
   if (yearRows.length === 0) {
     return <p className="text-sm text-slate-500">No recorded games yet.</p>;
@@ -577,21 +574,24 @@ function FantasyPointsChart({ yearRows, mode }: { yearRows: YearRow[]; mode: "to
   const barWidth = 44;
   const gap = 16;
   const chartHeight = 140;
+  const topPadding = 18;
+  const bottomPadding = 30;
   const width = yearRows.length * (barWidth + gap) + gap;
 
   return (
-    <svg viewBox={`0 0 ${width} ${chartHeight + 30}`} className="h-auto w-full" style={{ maxWidth: `${width}px` }}>
+    <svg viewBox={`0 0 ${width} ${chartHeight + topPadding + bottomPadding}`} className="h-auto w-full" style={{ maxWidth: `${width}px` }}>
       {yearRows.map((r, i) => {
         const v = values[i];
         const h = max > 0 ? (v / max) * chartHeight : 0;
         const x = gap + i * (barWidth + gap);
+        const barTop = topPadding + (chartHeight - h);
         return (
           <g key={r.year}>
-            <rect x={x} y={chartHeight - h} width={barWidth} height={Math.max(h, 1)} rx={3} className="fill-primary/70" />
-            <text x={x + barWidth / 2} y={chartHeight - h - 6} textAnchor="middle" className="fill-slate-300 text-[11px] tabular-nums">
+            <rect x={x} y={barTop} width={barWidth} height={Math.max(h, 1)} rx={3} className="fill-primary/70" />
+            <text x={x + barWidth / 2} y={barTop - 6} textAnchor="middle" className="fill-slate-300 text-[11px] tabular-nums">
               {v.toFixed(mode === "average" ? 1 : 0)}
             </text>
-            <text x={x + barWidth / 2} y={chartHeight + 18} textAnchor="middle" className="fill-slate-500 text-[11px]">
+            <text x={x + barWidth / 2} y={topPadding + chartHeight + 18} textAnchor="middle" className="fill-slate-500 text-[11px]">
               {r.year}
             </text>
           </g>

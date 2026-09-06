@@ -1,14 +1,19 @@
+import type { Archetype } from "./archetype";
+
 /**
  * Assistant Coaching System — see [[Assistant Coaching System]] (vault root)
  * for the full design note: research sourcing, grading methodology, the
  * stat-to-attribute mapping per role, the grade ladder, and the explicit
  * this-round-vs-next-round scope split.
  *
- * This round ships the data model (this file) and a populated, graded talent
- * pool (`data/assistantCoachPool.ts`) only. None of these types are wired
- * into `progression.ts`'s real growth formula, `draft.ts`'s scouting fog-of-
- * war, or any hiring/roster UI yet — that's deliberately deferred, per the
- * design note's "Not scoped this round" section.
+ * Round 82 shipped the data model (this file) and a populated, graded talent
+ * pool (`data/assistantCoachPool.ts`) only. Round 83 wires the Talent Scout
+ * role (`SCOUT_FOCUS_AREAS` below) into `engine/draft.ts`'s scouting fog-of-
+ * war — see that file's own `scoutAccuracyFor`. Still deliberately deferred:
+ * the other 5 roles' effect on `progression.ts`'s real growth formula, and
+ * any hiring/roster UI (the round-83 Talent Scout assignment lives directly
+ * on `SaveGameData.talentScout`, a minimal hook — not a general coaching
+ * staff/contract system).
  */
 
 /**
@@ -112,3 +117,33 @@ export function gradeForOvr(ovr: number): CoachGrade {
 export function coachGradeIn(coach: Coach, role: CoachRole): CoachGrade {
   return gradeForOvr(coach.ratings[role].ovr);
 }
+
+/**
+ * Round 83 — Tyler's own instruction: "We can guide the talent scout
+ * throughout the year to look at specific areas of interest like Tall/Med
+ * Fwds, Tall/Med Def, Midfielders, Rucks, Small/Pressure Fwds and
+ * Small/tagging defenders." These 6 buckets partition all 14 `ARCHETYPES`
+ * (`types/archetype.ts`) exactly, with no seams and no overlap — verified in
+ * `scripts/verify_round83_scratch.ts`. See `engine/draft.ts`'s
+ * `scoutAccuracyFor` for how a focus area actually changes fog-of-war
+ * accuracy.
+ */
+export const SCOUT_FOCUS_AREAS = [
+  "Tall/Med Forwards",
+  "Tall/Med Defenders",
+  "Midfielders",
+  "Rucks",
+  "Small/Pressure Forwards",
+  "Small/Tagging Defenders",
+] as const;
+
+export type ScoutFocusArea = (typeof SCOUT_FOCUS_AREAS)[number];
+
+export const SCOUT_FOCUS_AREA_ARCHETYPES: Record<ScoutFocusArea, readonly Archetype[]> = {
+  "Tall/Med Forwards": ["Key Forward", "Medium Forward"],
+  "Tall/Med Defenders": ["Key Defender", "Medium Defender", "Intercept Defender"],
+  Midfielders: ["Inside Mid", "Outside Mid", "Hybrid Mid Forward"],
+  Rucks: ["Ruck", "Hybrid Key Forward Ruck"],
+  "Small/Pressure Forwards": ["Small Forward", "Pressure Forward"],
+  "Small/Tagging Defenders": ["Back Pocket", "Half Back Flanker"],
+};

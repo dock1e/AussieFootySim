@@ -7,6 +7,7 @@ import type { Player, RatedAttribute } from "../types/player.ts";
 import { DISCRETE_SKILLS, RATED_ATTRIBUTES, playerFullName, type ImprovementRates, type DeclineRates } from "../types/player.ts";
 import { ARCHETYPES, ARCHETYPE_PRIMARY_ATTRIBUTES, type Archetype } from "../types/archetype.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
+import { SCOUT_FOCUS_AREA_ARCHETYPES, type Coach, type ScoutFocusArea } from "../types/coach.ts";
 import type { LadderRow } from "./ladder.ts";
 import { recomputeOVR } from "./progression.ts";
 import {
@@ -917,6 +918,32 @@ export const FOG_SHRINK_PER_REVEAL = 0.9;
 export const FOG_WIDTH_FLOOR = 2;
 
 /**
+ * Default "no assistant coach hired yet" scouting accuracy — round 77 built
+ * this as a disclosed forward-compatibility stub, per Tyler's own
+ * instruction ("I plan to introduce assistant coaches... talent scout will
+ * dictate how accurate we can predict Potential and how accurate we can
+ * predict the draft range too"). Round 83 is the feature this was built for
+ * — see `scoutAccuracyFor` below, which is now what actually computes a real
+ * 0-1 accuracy from the club's assigned Talent Scout and passes it into
+ * `scoutOvrBand`/`scoutConfidence`/`predictedDraftRange`, falling back to
+ * this exact constant whenever no scout is assigned.
+ */
+export const DEFAULT_SCOUT_ACCURACY = 0.5;
+
+/**
+ * Shared "how much better/worse than baseline" multiplier — 1.0 (unchanged
+ * from every pre-round-83 behaviour) at `DEFAULT_SCOUT_ACCURACY`, shrinking
+ * to 0.5 (narrowest/most confident) at accuracy 1, growing to 1.5
+ * (widest/least confident) at accuracy 0. Used identically by
+ * `scoutOvrBand`, `scoutConfidence`, and `predictedDraftRange` so a hired
+ * Talent Scout's effect reads consistently across every fog-of-war surface
+ * rather than three independently-tuned curves.
+ */
+function scoutWidthMultiplier(scoutAccuracy: number): number {
+  return 1.5 - clip(scoutAccuracy, 0, 1);
+}
+
+/**
  * A scouted OVR range around the true value — Engine.md's "SCOUT OVR" band.
  * Deterministic per-prospect (seeded off `PlayerID`, not the true OVR
  * itself) so the same prospect always shows the same band across renders/
@@ -924,22 +951,83 @@ export const FOG_WIDTH_FLOOR = 2;
  * of the 8 headline attributes have been scouted on this prospect) climbs,
  * down to a floor that never fully closes to the exact number — real
  * scouting is never 100% certain even fully worked-up.
+ *
+ * `scoutAccuracy` (round 83, default `DEFAULT_SCOUT_ACCURACY`) scales the
+ * whole computed width via `scoutWidthMultiplier` — a genuinely great Talent
+ * Scout narrows this band meaningfully tighter than the old fixed floor, a
+ * poor one leaves it wider even fully revealed. The final `Math.max(1, ...)`
+ * is a hard floor of its own: even an A+ scout with every attribute revealed
+ * never collapses the band to a single exact number.
  */
-export function scoutOvrBand(prospect: Player, revealedCount: number): ScoutBand {
+export function scoutOvrBand(prospect: Player, revealedCount: number, scoutAccuracy: number = DEFAULT_SCOUT_ACCURACY): ScoutBand {
   const rng = mulberry32(prospect.PlayerID * 7 + 13);
   const shrink = Math.min(revealedCount, SCOUT_HEADLINE_ATTRIBUTES.length) * FOG_SHRINK_PER_REVEAL;
-  const width = Math.max(FOG_WIDTH_FLOOR, FOG_WIDTH_BASE - shrink);
+  const baseWidth = Math.max(FOG_WIDTH_FLOOR, FOG_WIDTH_BASE - shrink);
+  const width = Math.max(1, Math.round(baseWidth * scoutWidthMultiplier(scoutAccuracy)));
   const skew = Math.round((rng() - 0.5) * 4);
   const low = clip(Math.round(prospect.OVR - width + skew), 1, 99);
   const high = clip(Math.round(prospect.OVR + width + skew), 1, 99);
   return { low: Math.min(low, high), high: Math.max(low, high) };
 }
 
-/** Engine.md observes CONF% in a 35-84% range — matched here by construction: a seeded 35-50% base climbs +6 per revealed headline attribute, capping at 84% with all 8 revealed (35 + 8*6 = 83, just under the ceiling). */
-export function scoutConfidence(prospect: Player, revealedCount: number): number {
+/**
+ * Engine.md observes CONF% in a 35-84% range — matched here by construction:
+ * a seeded 35-50% base climbs +6 per revealed headline attribute at the
+ * `DEFAULT_SCOUT_ACCURACY` baseline, capping at 84% with all 8 revealed (35
+ * + 8*6 = 83, just under the ceiling), exactly as before round 83.
+ *
+ * `scoutAccuracy` scales that per-reveal gain via the same
+ * `scoutWidthMultiplier` `scoutOvrBand` uses (inverted: a smaller multiplier
+ * = a better scout = a BIGGER confidence gain per reveal). A great Talent
+ * Scout (accuracy 1, multiplier 0.5) doubles the gain to +12/reveal, hitting
+ * the 84% ceiling after just 4-5 reveals instead of 8. A poor one (accuracy
+ * near 0, multiplier 1.5) drops to +4/reveal and never reaches 84% even
+ * fully revealed (35 + 8*4 = 67) — a bad hire genuinely caps out below full
+ * confidence, not just a slower climb to the same place. The documented
+ * 35-84% range itself is unchanged, deliberately: this only changes how fast
+ * a coach's confidence approaches it, not Engine.md's own stated ceiling.
+ */
+export function scoutConfidence(prospect: Player, revealedCount: number, scoutAccuracy: number = DEFAULT_SCOUT_ACCURACY): number {
   const rng = mulberry32(prospect.PlayerID * 11 + 29);
   const base = 35 + Math.floor(rng() * 15);
-  return clip(base + revealedCount * 6, 35, 84);
+  const gainPerReveal = 6 / scoutWidthMultiplier(scoutAccuracy);
+  return clip(Math.round(base + revealedCount * gainPerReveal), 35, 84);
+}
+
+/**
+ * Resolves a real 0-1 scouting accuracy for one prospect from the club's
+ * actually-assigned Talent Scout — the round-83 build of the [[Assistant
+ * Coaching System]] design note's "Talent Scout — how it plugs into the
+ * existing draft engine" section. No scout assigned (`scout` is `null`,
+ * `SaveGameData.talentScout` is `null`) -> `DEFAULT_SCOUT_ACCURACY`,
+ * byte-identical to every round-77-through-82 behaviour — an existing save
+ * with no scout hired is completely unaffected by this round.
+ *
+ * A scout IS assigned: their own Talent Scout `CoachRoleRating.ovr` (0-99)
+ * maps linearly onto the 0-1 domain (`ovr / 99`). If `focusArea` is also
+ * set, that mapped accuracy applies ONLY to prospects whose archetype falls
+ * inside the focused bucket (`SCOUT_FOCUS_AREA_ARCHETYPES`) — every other
+ * archetype falls back to `DEFAULT_SCOUT_ACCURACY`. This is a genuine
+ * trade-off, not a strict improvement: directing a scout's attention
+ * somewhere concentrates their edge there at the cost of their general
+ * usefulness elsewhere, matching Tyler's own "guide the talent scout... to
+ * look at specific areas of interest" framing. No focus set at all: the
+ * scout's own accuracy applies league-wide instead.
+ *
+ * Deliberately NOT floored at `DEFAULT_SCOUT_ACCURACY` — hiring a genuinely
+ * low-graded Talent Scout (D/C grade, OVR well under ~49) can read as WORSE
+ * than having no dedicated scout at all. That's an intentional, disclosed
+ * design choice, not an oversight: the "no scout" baseline already
+ * represents a competent generalist recruiting effort, so installing a poor
+ * specialist in charge of it is a real downside risk, same as a bad hire in
+ * real football, not a free action with only upside.
+ */
+export function scoutAccuracyFor(prospect: Player, scout: Coach | null, focusArea: ScoutFocusArea | null): number {
+  if (!scout) return DEFAULT_SCOUT_ACCURACY;
+  const ownAccuracy = scout.ratings["Talent Scout"].ovr / 99;
+  if (!focusArea) return ownAccuracy;
+  const inFocus = (SCOUT_FOCUS_AREA_ARCHETYPES[focusArea] as readonly string[]).includes(prospect.archetype);
+  return inFocus ? ownAccuracy : DEFAULT_SCOUT_ACCURACY;
 }
 
 /** Shared blended talent score behind both `trueProspectRank` and `predictedDraftRange` below — factored out so the two can never silently drift onto two different rankings of the same pool. */
@@ -992,20 +1080,6 @@ function baseWidthForRank(rank: number): number {
 }
 
 /**
- * Default "no assistant coach hired yet" scouting accuracy — round 77 builds
- * this parameter as a disclosed forward-compatibility stub, per Tyler's own
- * instruction ("I plan to introduce assistant coaches... talent scout will
- * dictate how accurate we can predict Potential and how accurate we can
- * predict the draft range too"): no talent-scout data model exists yet
- * anywhere in this codebase, so every current call site should pass nothing
- * and get this baseline. When that feature is eventually built, its own code
- * computes a real 0-1 accuracy from the hired scout's rating and passes it
- * here instead — this function's signature already supports that with zero
- * future rework.
- */
-export const DEFAULT_SCOUT_ACCURACY = 0.5;
-
-/**
  * The single canonical predicted draft-order range for one prospect — see
  * this section's own top comment for how this differs from `mockProjection`.
  *
@@ -1045,7 +1119,7 @@ export function predictedDraftRange(prospect: Player, pool: readonly Player[], s
   const topGap = clip(ranked[0].score - chaseAvg, 0, 6);
   const clarityScale = rank <= 3 ? clip(1 - topGap / 6, 0.08, 1) : 1;
 
-  const scoutMultiplier = 1.5 - clip(scoutAccuracy, 0, 1); // 1.0 at the DEFAULT_SCOUT_ACCURACY baseline, down to 0.5 (narrower) at accuracy 1, up to 1.5 (wider) at accuracy 0
+  const scoutMultiplier = scoutWidthMultiplier(scoutAccuracy); // 1.0 at the DEFAULT_SCOUT_ACCURACY baseline, down to 0.5 (narrower) at accuracy 1, up to 1.5 (wider) at accuracy 0 — shared with scoutOvrBand/scoutConfidence, round 83
   const rng = mulberry32(prospect.PlayerID * 47 + 61);
   const jitter = (rng() - 0.5) * 1.2;
 

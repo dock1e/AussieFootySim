@@ -9,6 +9,7 @@ import {
   potentialLetterGrade,
   scoutOvrBand,
   scoutConfidence,
+  scoutAccuracyFor,
   mockProjection,
   MOCK_OUTLETS,
   likelyNeedForClub,
@@ -28,6 +29,8 @@ import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
 import type { Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
 import { ALL_PLAYERS } from "../data/loadPlayers";
+import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
+import { gradeForOvr, SCOUT_FOCUS_AREAS, type Coach, type ScoutFocusArea } from "../types/coach";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
 import { StatusPill, type PillTone } from "./StatusPill";
 
@@ -75,6 +78,17 @@ import { StatusPill, type PillTone } from "./StatusPill";
  * external/in-house draft-stock analysis, not something the coach's own
  * scouting spend reveals, so it (like the mock outlets) is visible for every
  * prospect regardless of `revealedAttrs`.
+ *
+ * **Round 83**: the Talent Scout half of [[Assistant Coaching System]] is now
+ * live — `TalentScoutPanel` (new this round) lets the coach assign anyone
+ * from `data/assistantCoachPool.ts` as their club's Talent Scout and
+ * optionally direct them at one of the 6 `SCOUT_FOCUS_AREAS`. The resolved
+ * per-prospect accuracy (`engine/draft.ts`'s `scoutAccuracyFor`) now feeds
+ * every fog-of-war surface on this screen — the board's Scout OVR/Conf
+ * columns, the Prospect Profile panel's own band/confidence/predicted range,
+ * and the `predictedRangeByPlayerId` sort map — replacing the flat
+ * `DEFAULT_SCOUT_ACCURACY` every one of those call sites used through round
+ * 82. No scout assigned still reads byte-identical to every prior round.
  */
 
 const HEADLINE_ATTR_LABELS: Record<RatedAttribute, string> = {
@@ -117,6 +131,9 @@ export function Draft() {
   const skipToMyPick = useSaveStore((s) => s.skipToMyPick);
   const finishDraft = useSaveStore((s) => s.finishDraft);
   const scoutAttribute = useSaveStore((s) => s.scoutAttribute);
+  const talentScout = useSaveStore((s) => s.talentScout);
+  const assignTalentScout = useSaveStore((s) => s.assignTalentScout);
+  const setScoutFocusArea = useSaveStore((s) => s.setScoutFocusArea);
   const window_ = useDraftStore((s) => s.window);
   const combineWindow_ = useCombineStore((s) => s.window);
   const ladder = useSeasonStore((s) => s.season?.ladder);
@@ -128,6 +145,15 @@ export function Draft() {
   // predicted draft order and players should be able to sort the list by
   // Overall and Potential too."
   const [sortMode, setSortMode] = useState<SortMode>("predicted");
+
+  // Round 83 — [[Assistant Coaching System]]'s Talent Scout integration.
+  // `assignedScout`/`focusArea` are resolved once here and threaded into
+  // every scoutOvrBand/scoutConfidence/predictedDraftRange call below via
+  // `accuracyFor`, rather than each call site re-deriving them.
+  const assignedScout: Coach | null = talentScout ? (ASSISTANT_COACH_POOL.find((c) => c.id === talentScout.coachId) ?? null) : null;
+  const focusArea: ScoutFocusArea | null = talentScout?.focusArea ?? null;
+  const accuracyFor = (p: Player) => scoutAccuracyFor(p, assignedScout, focusArea);
+  const scoutPanel = <TalentScoutPanel assignedScout={assignedScout} focusArea={focusArea} onAssign={assignTalentScout} onFocus={setScoutFocusArea} />;
 
   // Only meaningful if this year's Combine actually ran — a stale prior-year
   // window (or none at all) just means no prospect gets tagged, same as if
@@ -151,25 +177,31 @@ export function Draft() {
   // not once per rendered row" convention as tierByPlayerId above.
   // predictedDraftRange internally re-sorts the whole pool per call, so this
   // is O(n^2 log n) for n≈195 (~ok once per pool, not per keystroke).
+  // Round 83 — depends on assignedScout/focusArea too now, so a scout
+  // (re)assignment or focus change recomputes every prospect's range.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const predictedRangeByPlayerId = useMemo(() => {
     const map = new Map<number, PredictedDraftRange>();
     if (!window_) return map;
-    for (const p of window_.pool) map.set(p.PlayerID, predictedDraftRange(p, window_.pool));
+    for (const p of window_.pool) map.set(p.PlayerID, predictedDraftRange(p, window_.pool, accuracyFor(p)));
     return map;
-  }, [window_]);
+  }, [window_, assignedScout, focusArea]);
 
   if (!window_) {
     return (
-      <div className="card text-center">
-        <div className="mb-2 font-display text-xl italic">The {currentYear} National Draft hasn&rsquo;t started yet.</div>
-        <p className="mx-auto mb-4 max-w-md text-sm text-slate-400">
-          {ladder && ladder.length > 0
-            ? "Draft order is set from this season's final ladder — last place picks first, 5 rounds, 90 picks total."
-            : "No season's been completed yet, so draft order falls back to a fixed club order for now — play a season first if you want a real reverse-ladder order."}
-        </p>
-        <button onClick={startDraft} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
-          Start the {currentYear} National Draft
-        </button>
+      <div className="space-y-6">
+        {scoutPanel}
+        <div className="card text-center">
+          <div className="mb-2 font-display text-xl italic">The {currentYear} National Draft hasn&rsquo;t started yet.</div>
+          <p className="mx-auto mb-4 max-w-md text-sm text-slate-400">
+            {ladder && ladder.length > 0
+              ? "Draft order is set from this season's final ladder — last place picks first, 5 rounds, 90 picks total."
+              : "No season's been completed yet, so draft order falls back to a fixed club order for now — play a season first if you want a real reverse-ladder order."}
+          </p>
+          <button onClick={startDraft} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
+            Start the {currentYear} National Draft
+          </button>
+        </div>
       </div>
     );
   }
@@ -199,6 +231,7 @@ export function Draft() {
 
   return (
     <div className="space-y-6">
+      {scoutPanel}
       <div className="card flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-xs uppercase tracking-wide text-slate-400">
@@ -294,8 +327,9 @@ export function Draft() {
                 <tbody>
                   {sortedRemaining.map((p, i) => {
                     const revealed = revealedFor(window_, p.PlayerID);
-                    const band = scoutOvrBand(p, revealed.length);
-                    const conf = scoutConfidence(p, revealed.length);
+                    const accuracy = accuracyFor(p);
+                    const band = scoutOvrBand(p, revealed.length, accuracy);
+                    const conf = scoutConfidence(p, revealed.length, accuracy);
                     return (
                       <tr
                         key={p.PlayerID}
@@ -342,6 +376,7 @@ export function Draft() {
                 tier={tierByPlayerId.get(selected.PlayerID)}
                 revealedAttrs={revealedFor(window_, selected.PlayerID)}
                 budgetRemaining={window_.scoutingBudgetRemaining}
+                scoutAccuracy={accuracyFor(selected)}
                 onScout={(attr) => scoutAttribute(selected.PlayerID, attr)}
                 onDraft={
                   isMyTurn
@@ -470,6 +505,7 @@ function ProspectProfile({
   tier,
   revealedAttrs,
   budgetRemaining,
+  scoutAccuracy,
   onScout,
   onDraft,
 }: {
@@ -478,11 +514,13 @@ function ProspectProfile({
   tier: ScoutingTier | undefined;
   revealedAttrs: RatedAttribute[];
   budgetRemaining: number;
+  /** Round 83 — resolved by the caller via `scoutAccuracyFor` against the club's assigned Talent Scout (or `DEFAULT_SCOUT_ACCURACY` if none). */
+  scoutAccuracy: number;
   onScout: (attr: RatedAttribute) => void;
   onDraft?: () => void;
 }) {
-  const band = scoutOvrBand(prospect, revealedAttrs.length);
-  const conf = scoutConfidence(prospect, revealedAttrs.length);
+  const band = scoutOvrBand(prospect, revealedAttrs.length, scoutAccuracy);
+  const conf = scoutConfidence(prospect, revealedAttrs.length, scoutAccuracy);
   const width = Math.round((band.high - band.low) / 2);
   const scouted = revealedAttrs.length > 0;
 
@@ -563,7 +601,7 @@ function ProspectProfile({
       <div>
         <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Predicted draft range</div>
         {(() => {
-          const range = predictedDraftRange(prospect, pool);
+          const range = predictedDraftRange(prospect, pool, scoutAccuracy);
           return (
             <div className="text-lg font-semibold tabular-nums text-accent-light">{range.low === range.high ? `Pick ${range.low}` : `Picks ${range.low}-${range.high}`}</div>
           );
@@ -591,6 +629,88 @@ function ProspectProfile({
         <button onClick={onDraft} className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
           Draft {playerFullName(prospect)}
         </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Round 83 — [[Assistant Coaching System]]'s Talent Scout integration. Lets
+ * the coach assign anyone from the full `ASSISTANT_COACH_POOL` (84 coaches —
+ * every one of them has SOME Talent Scout rating, not just the 3 whose
+ * primary role is Talent Scout, per that pool's own "every role gets a
+ * rating" design) as the club's Talent Scout, and optionally direct them at
+ * one of the 6 `SCOUT_FOCUS_AREAS`. Deliberately a standalone panel here
+ * rather than part of a general coaching-staff screen — no such screen
+ * exists yet (the other 5 coaching roles have no gameplay hook at all this
+ * round), so this is scoped to exactly the one save-state field
+ * (`SaveGameData.talentScout`) round 83 actually adds.
+ */
+function TalentScoutPanel({
+  assignedScout,
+  focusArea,
+  onAssign,
+  onFocus,
+}: {
+  assignedScout: Coach | null;
+  focusArea: ScoutFocusArea | null;
+  onAssign: (coachId: number | null) => void;
+  onFocus: (focusArea: ScoutFocusArea | null) => void;
+}) {
+  // Sorted once per render by Talent Scout OVR descending, purely so the
+  // strongest real fits (Andy Collins, Murray Davis, Toby Windsor — the 3
+  // with Talent Scout as their primary role — and any other well-graded
+  // generalist) surface at the top of the dropdown rather than the coach
+  // hunting through 84 names in pool-authoring order.
+  const sortedScouts = [...ASSISTANT_COACH_POOL].sort((a, b) => b.ratings["Talent Scout"].ovr - a.ratings["Talent Scout"].ovr);
+  const accuracyPct = assignedScout ? Math.round((assignedScout.ratings["Talent Scout"].ovr / 99) * 100) : null;
+
+  return (
+    <div className="card">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs uppercase tracking-wide text-slate-400">Talent Scout</span>
+        <select
+          value={assignedScout?.id ?? ""}
+          onChange={(e) => onAssign(e.target.value === "" ? null : Number(e.target.value))}
+          className="rounded-lg bg-base-700 px-2 py-1 text-xs font-semibold text-slate-200"
+        >
+          <option value="">No scout hired (baseline accuracy)</option>
+          {sortedScouts.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name} — {gradeForOvr(c.ratings["Talent Scout"].ovr)} ({c.ratings["Talent Scout"].ovr} OVR)
+            </option>
+          ))}
+        </select>
+      </div>
+      {assignedScout ? (
+        <>
+          <p className="mb-2 text-xs text-slate-400">{assignedScout.bio}</p>
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs uppercase tracking-wide text-slate-500">Focus:</span>
+            <button
+              onClick={() => onFocus(null)}
+              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${focusArea === null ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+            >
+              General (league-wide)
+            </button>
+            {SCOUT_FOCUS_AREAS.map((area) => (
+              <button
+                key={area}
+                onClick={() => onFocus(area)}
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${focusArea === area ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+              >
+                {area}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">
+            {focusArea
+              ? `Full ${accuracyPct}% accuracy applies to ${focusArea} prospects only — every other archetype falls back to baseline accuracy.`
+              : `Full ${accuracyPct}% accuracy applies league-wide (no focus set). Setting a focus concentrates it into one area at the cost of the rest.`}
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-slate-500">Using your club&rsquo;s baseline recruiting accuracy. Hire a Talent Scout above to sharpen your scouting reads — or, with a poor hire, blunt them.</p>
       )}
     </div>
   );

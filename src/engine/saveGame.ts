@@ -12,6 +12,7 @@ import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
 import type { DisgruntlementState } from "./disgruntlement.ts";
 import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
+import type { ScoutFocusArea } from "../types/coach.ts";
 
 /**
  * The save-game data model — closes ROADMAP.md gap #24/#29: "nothing in
@@ -193,6 +194,32 @@ export interface SaveGameData {
    * any picks yet," which the real seed already correctly represents, not "picks don't exist").
    */
   draftPickInventory: DraftPick[];
+  /**
+   * Sep 2026 round 83 — [[Assistant Coaching System]]'s Talent Scout
+   * integration. Which `data/assistantCoachPool.ts` `Coach.id` the coach's
+   * club has assigned as Talent Scout, and which of the 6 `SCOUT_FOCUS_AREAS`
+   * (if any) they're currently directed at — see `engine/draft.ts`'s
+   * `scoutAccuracyFor`. `null` means no scout assigned at all (the
+   * pre-round-83 default — `scoutAccuracyFor` falls back to
+   * `DEFAULT_SCOUT_ACCURACY` exactly as every draft screen already did).
+   * Added without bumping `SAVE_SCHEMA_VERSION`, same treatment as
+   * `draftPickInventory`/`seasonArchives`/etc — a pre-round-83 save just has
+   * no scout assigned, which `deserializeSave` below defaults to `null`.
+   * Multi-year state, NOT reset by `runOffSeasonOnSave` below (unlike
+   * `draftWindow`/`combineWindow`/etc, which restart fresh each off-season) —
+   * a real assistant coach's appointment doesn't expire every year the way a
+   * single draft night's scouting budget does. Deliberately the ONLY piece
+   * of "hiring" state this round adds; the other 5 coaching roles (and any
+   * contract/salary mechanic) remain fully unbuilt, per the design note's
+   * own disclosed scope split.
+   */
+  talentScout: TalentScoutAssignment | null;
+}
+
+/** See `SaveGameData.talentScout`'s own doc comment. */
+export interface TalentScoutAssignment {
+  coachId: number;
+  focusArea: ScoutFocusArea | null;
 }
 
 /** A fresh save for a brand-new game — the exact "nothing played yet" state the app already defaults to today, just made explicit and persistable. */
@@ -213,6 +240,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     draftWindow: null,
     seasonArchives: [],
     draftPickInventory: seedDraftPickInventory(),
+    talentScout: null,
   };
 }
 
@@ -317,6 +345,8 @@ export interface SerializedSaveGame {
   seasonArchives: SeasonArchiveEntry[];
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `seasonArchives`. */
   draftPickInventory: DraftPick[];
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `draftPickInventory`. See `SaveGameData.talentScout`'s own doc comment. */
+  talentScout: TalentScoutAssignment | null;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -347,6 +377,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     draftWindow: save.draftWindow,
     seasonArchives: save.seasonArchives,
     draftPickInventory: save.draftPickInventory,
+    talentScout: save.talentScout,
   };
 }
 
@@ -391,5 +422,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     seasonArchives: s.seasonArchives ?? [],
     // Reseeded (not []) for a pre-round-74 save — see this field's own doc comment on SaveGameData.
     draftPickInventory: s.draftPickInventory ?? seedDraftPickInventory(),
+    talentScout: s.talentScout ?? null,
   };
 }

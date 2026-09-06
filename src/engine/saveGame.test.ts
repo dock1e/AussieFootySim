@@ -191,6 +191,10 @@ describe("serializeSave / deserializeSave", () => {
         },
       ],
       draftPickInventory: seedDraftPickInventory(),
+      // Sep 2026 round 83 — [[Assistant Coaching System]]'s Talent Scout integration. A real
+      // non-null value here (not null), same "prove JSON round-tripping" ethos as the rest of this
+      // fixture — `coachId`/`focusArea` are plain number/string-union fields, no Map/Set involved.
+      talentScout: { coachId: 42, focusArea: "Midfielders" },
     };
   }
 

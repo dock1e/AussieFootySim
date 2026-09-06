@@ -12,7 +12,7 @@ import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
 import type { DisgruntlementState } from "./disgruntlement.ts";
 import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
-import type { ScoutFocusArea } from "../types/coach.ts";
+import type { ScoutFocusArea, MatchDayCoachRole } from "../types/coach.ts";
 
 /**
  * The save-game data model — closes ROADMAP.md gap #24/#29: "nothing in
@@ -214,6 +214,27 @@ export interface SaveGameData {
    * own disclosed scope split.
    */
   talentScout: TalentScoutAssignment | null;
+  /**
+   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Keyed by
+   * `MatchDayCoachRole` (Defensive Line/Forward Line/Midfield/Ruck and
+   * Stoppage — Development and Talent Scout deliberately excluded, see
+   * `MATCH_DAY_COACH_ROLES`'s own doc comment), value is a
+   * `data/assistantCoachPool.ts` `Coach.id`. A role absent from this record
+   * means unassigned — `lineCoaching.ts`'s `lineCoachEffectivenessFor` falls
+   * back to `DEFAULT_LINE_COACH_EFFECTIVENESS` exactly the same way
+   * `scoutAccuracyFor` already does for an unassigned Talent Scout. Added
+   * without bumping `SAVE_SCHEMA_VERSION`, same treatment as `talentScout`
+   * — a pre-round-84 save just has no line coaches assigned, which
+   * `deserializeSave` below defaults to `{}`. Multi-year state, NOT reset by
+   * `runOffSeasonOnSave` below, same reasoning as `talentScout`: a real
+   * assistant coach's appointment doesn't expire every off-season. Unlike
+   * `TalentScoutAssignment`, there is no persisted focus area here — which
+   * focus each line is directed to (Default/one of 3 named focuses/Demand
+   * They Dig Deeper) is live, per-match, in-`Ctx` state
+   * (`engine/match.ts`'s `homeLineFocus`/`awayLineFocus`), not a standing
+   * appointment, so it never reaches this save file at all.
+   */
+  lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
 }
 
 /** See `SaveGameData.talentScout`'s own doc comment. */
@@ -241,6 +262,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     seasonArchives: [],
     draftPickInventory: seedDraftPickInventory(),
     talentScout: null,
+    lineCoaches: {},
   };
 }
 
@@ -347,6 +369,8 @@ export interface SerializedSaveGame {
   draftPickInventory: DraftPick[];
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `draftPickInventory`. See `SaveGameData.talentScout`'s own doc comment. */
   talentScout: TalentScoutAssignment | null;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `talentScout`. See `SaveGameData.lineCoaches`'s own doc comment. */
+  lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -378,6 +402,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     seasonArchives: save.seasonArchives,
     draftPickInventory: save.draftPickInventory,
     talentScout: save.talentScout,
+    lineCoaches: save.lineCoaches,
   };
 }
 
@@ -423,5 +448,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     // Reseeded (not []) for a pre-round-74 save — see this field's own doc comment on SaveGameData.
     draftPickInventory: s.draftPickInventory ?? seedDraftPickInventory(),
     talentScout: s.talentScout ?? null,
+    lineCoaches: s.lineCoaches ?? {},
   };
 }

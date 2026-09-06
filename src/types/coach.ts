@@ -45,6 +45,23 @@ export const DEVELOPMENT_COACH_ROLES: readonly CoachRole[] = COACH_ROLES.filter(
 );
 
 /**
+ * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. The 4 roles that
+ * actually contribute live, in-match tactical direction at Quarter/Half/
+ * Three-Quarter Time — `DEVELOPMENT_COACH_ROLES` minus "Development" itself.
+ * Tyler's own instruction: "I dont think we should have our development
+ * coach as a match day contributor, the development coach is primarily for
+ * training... and development across the season" — Development keeps its
+ * existing (still fully unbuilt) season-long training role and gets no
+ * match-day say. Talent Scout was already excluded via
+ * `DEVELOPMENT_COACH_ROLES`.
+ */
+export const MATCH_DAY_COACH_ROLES: readonly MatchDayCoachRole[] = DEVELOPMENT_COACH_ROLES.filter(
+  (r): r is MatchDayCoachRole => r !== "Development",
+);
+
+export type MatchDayCoachRole = Exclude<CoachRole, "Development" | "Talent Scout">;
+
+/**
  * 7-grade ladder. B/B+/A/A+ are Tyler's own exact anchors (verbatim from his
  * ask); D/C/C+ are this round's disclosed extrapolation below B, continuing
  * the same arithmetic pattern Tyler set (each grade down widens the

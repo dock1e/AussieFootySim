@@ -34,6 +34,32 @@ import {
   type GameStyle,
 } from "./tactics.ts";
 import { conditionRatingMultiplier } from "./progression.ts";
+import { MATCH_DAY_COACH_ROLES, type MatchDayCoachRole } from "../types/coach.ts";
+import {
+  matchDayRoleForTacticGroup,
+  lineCoachEffectivenessFor,
+  defaultLineFocusFor,
+  defensiveLineContestMultiplier,
+  defensiveLineCleanMarkBias,
+  defensiveLineTackleMultiplier,
+  effectiveCleanMarkProbability,
+  forwardLineMarkLeadMultiplier,
+  forwardLineMarkContestedMultiplier,
+  forwardLineForwardPressureTackleMultiplier,
+  midfieldClearanceMultiplier,
+  midfieldContestedPossessionMultiplier,
+  midfieldDisposalMultiplier,
+  ruckHitoutFocusMultiplier,
+  ruckTapExecutionMultiplier,
+  ruckAerialFocusMultiplier,
+  digDeeperFitnessDrainMultiplier,
+  lineCoachFeedback,
+  type LineCoachFocus,
+  type DefensiveLineFocus,
+  type ForwardLineFocus,
+  type MidfieldLineFocus,
+  type RuckLineFocus,
+} from "./lineCoaching.ts";
 
 /**
  * The full possession-state match loop — Engine.md "Core loop", steps 1-5
@@ -292,6 +318,24 @@ export interface SimulateMatchOptions {
    */
   homeCondition?: Map<number, number>;
   awayCondition?: Map<number, number>;
+  /**
+   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Each side's
+   * assigned match-day line coaches' own effectiveness, pre-computed by the
+   * caller as `coach.ratings[role].ovr / 99` for whichever of the 4 roles
+   * have a real coach assigned (`LiveMatch.tsx` reads this from
+   * `useSaveStore`'s `lineCoaches` + `data/assistantCoachPool.ts`, only ever
+   * for the human coach's own side — an AI opponent simply omits this
+   * option, same as it always has for `homeCondition`/`homePlan`). Deliberately
+   * opt-in per side, same backward-compat pattern as every other option here:
+   * omitting it means every role plays at the flat, unassigned baseline (see
+   * `Ctx.homeLineCoachEffectiveness`'s own doc comment) — every caller written
+   * before this round keeps working unchanged. Line FOCUS itself (Default/a
+   * named focus/Demand They Dig Deeper) is never supplied here — it always
+   * starts at Default for all 4 roles regardless (see `Ctx.homeLineFocus`)
+   * and is only ever changed live, mid-match, via `setLineFocus`.
+   */
+  homeLineCoachEffectiveness?: Partial<Record<MatchDayCoachRole, number>>;
+  awayLineCoachEffectiveness?: Partial<Record<MatchDayCoachRole, number>>;
 }
 
 const DEFAULT_TICKS_PER_QUARTER = 130;
@@ -921,6 +965,33 @@ export interface Ctx {
    * earlier in the same stoppage-free stretch).
    */
   lastEffectiveDisposal: { playerId: number; side: Side } | null;
+  /**
+   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Each side's
+   * current focus for all 4 match-day line coaches (Defensive Line/Forward
+   * Line/Midfield/Ruck and Stoppage), keyed by `MatchDayCoachRole`. Always
+   * populated with all 4 roles at "Default" from `startMatch` — unlike
+   * `homePlan`/`awayPlan`, there's no opt-out: every match has 4 line
+   * coaches running at least the Default path, exactly like every player has
+   * a real Tactic even when a coach never opens Match Preparation. Changed
+   * mid-match via the exported `setLineFocus`, read via `getLineFocus` — same
+   * pause-between-quarters idiom `setGameStyle`/`getGameStyle` already use.
+   */
+  homeLineFocus: Map<MatchDayCoachRole, LineCoachFocus>;
+  awayLineFocus: Map<MatchDayCoachRole, LineCoachFocus>;
+  /**
+   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Each side's
+   * assigned line coach's own effectiveness (`coach.ratings[role].ovr / 99`),
+   * pre-computed by the caller — match.ts has no `Coach`/coach-pool
+   * dependency (see lineCoaching.ts's own top comment), so this is a plain
+   * number, not a `Coach` reference. A role missing from the map means
+   * unassigned — `lineCoachEffectivenessFor` falls back to
+   * `DEFAULT_LINE_COACH_EFFECTIVENESS` exactly the way an unassigned Talent
+   * Scout falls back to `DEFAULT_SCOUT_ACCURACY`. Optional-map convention
+   * matches `homeCondition`/`awayCondition`: omitted entirely (see
+   * SimulateMatchOptions) means every role plays at the flat baseline.
+   */
+  homeLineCoachEffectiveness: Partial<Record<MatchDayCoachRole, number>>;
+  awayLineCoachEffectiveness: Partial<Record<MatchDayCoachRole, number>>;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
@@ -967,6 +1038,92 @@ function conditionMultiplierFor(ctx: Ctx, side: Side, player: Player): number {
   const map = side === "home" ? ctx.homeCondition : ctx.awayCondition;
   const condition = map?.get(player.PlayerID) ?? 100;
   return conditionRatingMultiplier(condition);
+}
+
+// --- Match-Day Line Coach Direction — Sep 2026 round 84 -----------------------------------------
+// See lineCoaching.ts's own top comment and [[Match-Day Line Coach Direction]] for the full design.
+// This section is match.ts's own half of the split that file's top comment describes: WHEN to call
+// each pure lineCoaching.ts multiplier, and what real box-score numbers feed its feedback classifier.
+
+/** Resolves `player`'s own match-day line coach role, focus, and effectiveness in one shot — every wiring site below needs exactly this triple. Role is derived from the player's own tactic group (`tacticGroupForSlot`), same "gate on who they are" rule every per-player Tactic already follows. */
+function lineCoachStateFor(ctx: Ctx, side: Side, player: Player): { role: MatchDayCoachRole; focus: LineCoachFocus; effectiveness: number } {
+  const team = teamOf(ctx, side);
+  const role = matchDayRoleForTacticGroup(tacticGroupForSlot(team.positions?.get(player.PlayerID), player.archetype as Archetype));
+  const focusMap = side === "home" ? ctx.homeLineFocus : ctx.awayLineFocus;
+  const focus = focusMap.get(role) ?? "Default";
+  const effMap = side === "home" ? ctx.homeLineCoachEffectiveness : ctx.awayLineCoachEffectiveness;
+  const effectiveness = lineCoachEffectivenessFor(effMap[role]);
+  return { role, focus, effectiveness };
+}
+
+/**
+ * The line-coach contest-rating factor for `player`, playing role `contestRole` in a
+ * `contestType` roll — 1 (no effect) if that player's own line coach has no lever for this
+ * specific (contestType, contestRole) combination. See lineCoaching.ts's own per-lever doc
+ * comments for exactly which pairs are covered: Defensive Line only on the defender side (spoiling/
+ * marking/intercepting are defensive actions), Forward Line only on the attacker side (leading/
+ * contested marking are attacking actions), Midfield and Ruck and Stoppage on either side
+ * (contested groundBall/aerial work cuts both ways for those two roles).
+ */
+function lineCoachContestFactor(ctx: Ctx, side: Side, player: Player, contestType: "markContested" | "markLead" | "groundBall", contestRole: "attacker" | "defender"): number {
+  const { role, focus, effectiveness } = lineCoachStateFor(ctx, side, player);
+  if (role === "Defensive Line" && contestRole === "defender") {
+    return defensiveLineContestMultiplier(focus as DefensiveLineFocus, effectiveness);
+  }
+  if (role === "Forward Line" && contestRole === "attacker") {
+    if (contestType === "markLead") return forwardLineMarkLeadMultiplier(focus as ForwardLineFocus, effectiveness);
+    if (contestType === "markContested") return forwardLineMarkContestedMultiplier(focus as ForwardLineFocus, effectiveness);
+  }
+  if (role === "Midfield" && contestType === "groundBall") {
+    return midfieldContestedPossessionMultiplier(focus as MidfieldLineFocus, effectiveness);
+  }
+  if (role === "Ruck and Stoppage" && contestType === "markContested") {
+    return ruckAerialFocusMultiplier(focus as RuckLineFocus, effectiveness);
+  }
+  return 1;
+}
+
+/** The Defensive Line's clean-mark-vs-spoil bias for whichever defender just won a defensive marking contest — 0 (no bias, the plain `P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK` split) unless that defender's own tactic group resolves to "Defensive Line". See `effectiveCleanMarkProbability`. */
+function lineCoachCleanMarkBiasFor(ctx: Ctx, side: Side, player: Player): number {
+  const { role, focus, effectiveness } = lineCoachStateFor(ctx, side, player);
+  if (role !== "Defensive Line") return 0;
+  return defensiveLineCleanMarkBias(focus as DefensiveLineFocus, effectiveness);
+}
+
+/** Tackle/chase-rating factor for `player` — Defensive Line's own tackle lever applies unconditionally; Forward Line's forward-pressure lever only while `isInForwardHalf` (see lineCoaching.ts's own doc comment on why). 1 for Midfield/Ruck and Stoppage — neither role has a tackle lever. */
+function lineCoachTackleFactor(ctx: Ctx, side: Side, player: Player, isInForwardHalf: boolean): number {
+  const { role, focus, effectiveness } = lineCoachStateFor(ctx, side, player);
+  if (role === "Defensive Line") return defensiveLineTackleMultiplier(focus as DefensiveLineFocus, effectiveness);
+  if (role === "Forward Line" && isInForwardHalf) return forwardLineForwardPressureTackleMultiplier(focus as ForwardLineFocus, effectiveness);
+  return 1;
+}
+
+/** Disposal-rating factor for the current ball carrier — only Midfield has a ball-use lever; 1 for every other role. */
+function lineCoachDisposalFactor(ctx: Ctx, side: Side, player: Player): number {
+  const { role, focus, effectiveness } = lineCoachStateFor(ctx, side, player);
+  if (role !== "Midfield") return 1;
+  return midfieldDisposalMultiplier(focus as MidfieldLineFocus, effectiveness);
+}
+
+/** Clearance-rating factor for the clearance rep — only Midfield has a clearance lever; 1 for every other role (including, deliberately, Ruck and Stoppage — see lineCoaching.ts's own "no double-dipping" comment). */
+function lineCoachClearanceFactor(ctx: Ctx, side: Side, player: Player): number {
+  const { role, focus, effectiveness } = lineCoachStateFor(ctx, side, player);
+  if (role !== "Midfield") return 1;
+  return midfieldClearanceMultiplier(focus as MidfieldLineFocus, effectiveness);
+}
+
+/** Raw hitout win-rate factor for the ruck rep — only Ruck and Stoppage has this lever; 1 for every other role (a makeshift secondary-ruck tap-taker is never actually in the Ruck and Stoppage group, so this already correctly falls through to 1 for them without special-casing). */
+function lineCoachRuckHitoutFactor(ctx: Ctx, side: Side, player: Player): number {
+  const { role, focus, effectiveness } = lineCoachStateFor(ctx, side, player);
+  if (role !== "Ruck and Stoppage") return 1;
+  return ruckHitoutFocusMultiplier(focus as RuckLineFocus, effectiveness);
+}
+
+/** Tap-execution-rating factor for the ruck winner — see `resolveRuckTap`'s own `tapExecutionRating`. Only Ruck and Stoppage has this lever. */
+function lineCoachTapExecutionFactor(ctx: Ctx, side: Side, player: Player): number {
+  const { role, focus, effectiveness } = lineCoachStateFor(ctx, side, player);
+  if (role !== "Ruck and Stoppage") return 1;
+  return ruckTapExecutionMultiplier(focus as RuckLineFocus, effectiveness);
 }
 
 function lineFor(ctx: Ctx, player: Player): BoxScoreLine {
@@ -1056,6 +1213,53 @@ function recordContest(ctx: Ctx, type: ContestType, winner: Player, loser: Playe
     { playerId: winner.PlayerID, stat: fields.wins, delta: 1 },
     { playerId: loser.PlayerID, stat: fields.attempts, delta: 1 },
   ];
+}
+
+// --- Match-Day Line Coach feedback classifier — Sep 2026 round 84 -------------------------------
+// Continues the section started near conditionMultiplierFor above — split across the file only
+// because this half needs CONTEST_STAT_FIELDS, defined just above, which those other helpers don't.
+
+/** Which of `CONTEST_STAT_FIELDS`' attempts/wins pairs feed each match-day line coach's own feedback win-rate — each line's own real, already-tracked "how are we doing at our job" metrics. See [[Match-Day Line Coach Direction]]'s own "Feedback sentences" section. Defined here (not lineCoaching.ts) since it needs the real `BoxScoreLine`/`CONTEST_STAT_FIELDS` types — lineCoaching.ts itself only ever sees a plain computed win-rate number, see that file's own top comment. */
+const LINE_FEEDBACK_FIELDS: Record<MatchDayCoachRole, ReadonlyArray<{ attempts: keyof BoxScoreLine; wins: keyof BoxScoreLine }>> = {
+  "Defensive Line": [CONTEST_STAT_FIELDS.markContested, CONTEST_STAT_FIELDS.groundBall, CONTEST_STAT_FIELDS.tackle],
+  "Forward Line": [CONTEST_STAT_FIELDS.markLead, CONTEST_STAT_FIELDS.markContested, CONTEST_STAT_FIELDS.tackle],
+  Midfield: [CONTEST_STAT_FIELDS.clearance, CONTEST_STAT_FIELDS.groundBall],
+  "Ruck and Stoppage": [CONTEST_STAT_FIELDS.ruck, CONTEST_STAT_FIELDS.markContested],
+};
+
+/** Sums specific attempts/wins field pairs across a set of players' box lines — a narrower, match.ts-local cousin of summary.ts's own `sumTeam` (which sums every `BoxScoreLine` field wholesale); this only ever needs the 2-3 fields one line coach's feedback cares about. */
+function sumContestFields(ctx: Ctx, ids: Set<number>, fields: readonly { attempts: keyof BoxScoreLine; wins: keyof BoxScoreLine }[]): { attempts: number; wins: number } {
+  let attempts = 0;
+  let wins = 0;
+  for (const id of ids) {
+    const line = ctx.box[id];
+    if (!line) continue;
+    for (const f of fields) {
+      attempts += (line[f.attempts] as number) ?? 0;
+      wins += (line[f.wins] as number) ?? 0;
+    }
+  }
+  return { attempts, wins };
+}
+
+/**
+ * A match-day line coach's one-sentence read on how their line is performing so far this match —
+ * Tyler's own ask: "they provide a single sentence feedback for how their line is performing."
+ * Derived from that line's own real, already-tracked contest win-rate (`LINE_FEEDBACK_FIELDS`
+ * above), not invented flavour text. `winRate` defaults to a neutral 0.5 (the "meeting all our key
+ * metrics" band) before that line has recorded a single relevant attempt yet — e.g. reading the
+ * panel in the seconds before Q1's first contest of that type resolves.
+ */
+export function lineFeedbackFor(ctx: Ctx, side: Side, role: MatchDayCoachRole): string {
+  const team = teamOf(ctx, side);
+  const ids = new Set(
+    onGroundPlayers(team)
+      .filter((p) => matchDayRoleForTacticGroup(tacticGroupForSlot(team.positions?.get(p.PlayerID), p.archetype as Archetype)) === role)
+      .map((p) => p.PlayerID),
+  );
+  const { attempts, wins } = sumContestFields(ctx, ids, LINE_FEEDBACK_FIELDS[role]);
+  const winRate = attempts > 0 ? wins / attempts : 0.5;
+  return lineCoachFeedback(role, winRate);
 }
 
 /**
@@ -1385,14 +1589,16 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
   const homeRuck = bestByRating(home, repRating);
   const awayRuck = bestByRating(away, repRating);
   const homeRuckMult = useSecondaryRuck
-    ? conditionMultiplierFor(ctx, "home", homeRuck)
+    ? conditionMultiplierFor(ctx, "home", homeRuck) * lineCoachRuckHitoutFactor(ctx, "home", homeRuck)
     : ruckHitoutMultiplier(tacticFor(homePlan, homeRuck, ctx.home.positions)) *
       thirdManUpRuckMultiplier(teamHasTactic(homePlan, "Third Man Up")) *
+      lineCoachRuckHitoutFactor(ctx, "home", homeRuck) *
       conditionMultiplierFor(ctx, "home", homeRuck);
   const awayRuckMult = useSecondaryRuck
-    ? conditionMultiplierFor(ctx, "away", awayRuck)
+    ? conditionMultiplierFor(ctx, "away", awayRuck) * lineCoachRuckHitoutFactor(ctx, "away", awayRuck)
     : ruckHitoutMultiplier(tacticFor(awayPlan, awayRuck, ctx.away.positions)) *
       thirdManUpRuckMultiplier(teamHasTactic(awayPlan, "Third Man Up")) *
+      lineCoachRuckHitoutFactor(ctx, "away", awayRuck) *
       conditionMultiplierFor(ctx, "away", awayRuck);
   const ruckResult = resolveContest(homeRuck, awayRuck, "ruck", ctx.rng, {
     attackerMultiplier: homeRuckMult,
@@ -1416,7 +1622,10 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
   // uses, since a clean controlled tap and a strong contested one draw on
   // the same underlying skill.
   const ruckWinnerSide: Side = ruckResult.winner === "attacker" ? "home" : "away";
-  const tapExecutionRating = computeContestRating(ruckWinner, ["strengthOverhead", "verticalLeap"]) * conditionMultiplierFor(ctx, ruckWinnerSide, ruckWinner);
+  const tapExecutionRating =
+    computeContestRating(ruckWinner, ["strengthOverhead", "verticalLeap"]) *
+    lineCoachTapExecutionFactor(ctx, ruckWinnerSide, ruckWinner) *
+    conditionMultiplierFor(ctx, ruckWinnerSide, ruckWinner);
   const tapWentToHand = resolveThreshold(tapExecutionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success;
   // Aug 2026 round 54 — [[Season Stats and Records]]: `tapWentToHand` already existed and already
   // drove the flavour text below; this is the first time it's actually written to a stat field.
@@ -1519,11 +1728,13 @@ function runClearance(ctx: Ctx, state: State): State {
   const homeClearMult =
     taggingClearanceMultiplier(teamHasTactic(homePlan, "Tagging")) *
     gameStyleClearanceMultiplier(styleFor(homePlan)) *
+    lineCoachClearanceFactor(ctx, "home", homeClear) *
     conditionMultiplierFor(ctx, "home", homeClear) *
     (homeWonHitout && tapWentToHand ? FAVOURED_SIDE_CLEARANCE_BONUS : 1);
   const awayClearMult =
     taggingClearanceMultiplier(teamHasTactic(awayPlan, "Tagging")) *
     gameStyleClearanceMultiplier(styleFor(awayPlan)) *
+    lineCoachClearanceFactor(ctx, "away", awayClear) *
     conditionMultiplierFor(ctx, "away", awayClear) *
     (!homeWonHitout && tapWentToHand ? FAVOURED_SIDE_CLEARANCE_BONUS : 1);
   const clearResult = resolveContest(homeClear, awayClear, "clearance", ctx.rng, {
@@ -1953,6 +2164,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         const chaserRating =
           computeContestRating(chaser, ["speed", "acceleration"]) *
           tackleDefenderRatingMultiplier(chaserTactic, chaserInForwardHalf) *
+          lineCoachTackleFactor(ctx, defendingSide, chaser, chaserInForwardHalf) *
           gameStyleDefenderMultiplier(styleFor(defendingPlan), chaserInForwardHalf) *
           conditionMultiplierFor(ctx, defendingSide, chaser);
         const evasionRating = computeContestRating(carrier, ["speed", "agility"]) * conditionMultiplierFor(ctx, state.possession, carrier);
@@ -2094,6 +2306,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const tacklerRating =
     computeContestRating(defender, ["tenacity", "strengthManOnMan", "aggression"]) *
     tackleDefenderRatingMultiplier(defenderTactic, defenderInForwardHalf) *
+    lineCoachTackleFactor(ctx, defendingSide, defender, defenderInForwardHalf) *
     gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
     conditionMultiplierFor(ctx, defendingSide, defender);
   // Deliberately NOT multiplied by `TAGGED_CARRIER_RATING_MULTIPLIER` here —
@@ -2153,12 +2366,14 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     carrierDisposalMultiplier(carrierTactic) *
     runOffManDisposalMultiplier(carrierTactic) *
     taggerDisposalMultiplier(carrierTactic === "Tagging") *
+    lineCoachDisposalFactor(ctx, state.possession, carrier) *
     gameStyleDisposalMultiplier(styleFor(possessingPlan)) *
     conditionMultiplierFor(ctx, state.possession, carrier) *
     (tagger ? TAGGED_CARRIER_RATING_MULTIPLIER : 1);
   const defenderRating =
     computeContestRating(defender, ["tenacity", "strengthManOnMan", "aggression"]) *
     tackleDefenderRatingMultiplier(defenderTactic, defenderInForwardHalf) *
+    lineCoachTackleFactor(ctx, defendingSide, defender, defenderInForwardHalf) *
     gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
     conditionMultiplierFor(ctx, defendingSide, defender);
   const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
@@ -2561,9 +2776,11 @@ function runContest(ctx: Ctx, state: State): State {
   const defenderInForwardHalf = isForward50(state.zone, defendingSide);
   const attackerMult =
     contestRatingMultiplier(tacticFor(attackingPlan, attackerRep, attackingTeam.positions), contestType, "attacker") *
+    lineCoachContestFactor(ctx, attackingSide, attackerRep, contestType, "attacker") *
     conditionMultiplierFor(ctx, attackingSide, attackerRep);
   const defenderMult =
     contestRatingMultiplier(tacticFor(defendingPlan, defenderRep, defendingTeam.positions), contestType, "defender") *
+    lineCoachContestFactor(ctx, defendingSide, defenderRep, contestType, "defender") *
     gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
     conditionMultiplierFor(ctx, defendingSide, defenderRep);
   // This roll now decides who wins POSITION to attempt the play — Aug 2026
@@ -2705,7 +2922,7 @@ function runContest(ctx: Ctx, state: State): State {
   spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "interceptPossessions", delta: 1 });
   let spoilLabel = `${defenderRep.lname} spoils it and takes control`;
   if (contestType !== "groundBall") {
-    if (ctx.rng() < P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK) {
+    if (ctx.rng() < effectiveCleanMarkProbability(P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK, lineCoachCleanMarkBiasFor(ctx, defendingSide, defenderRep))) {
       line.marks += 1;
       line.interceptMarks += 1;
       spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "marks", delta: 1 }, { playerId: defenderRep.PlayerID, stat: "interceptMarks", delta: 1 });
@@ -2860,9 +3077,11 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   const defenderInForwardHalf = isForward50(zone, defendingSide);
   const attackerMult =
     contestRatingMultiplier(tacticFor(possessingPlan, receiver, possessingTeam.positions), "markContested", "attacker") *
+    lineCoachContestFactor(ctx, possessingSide, receiver, "markContested", "attacker") *
     conditionMultiplierFor(ctx, possessingSide, receiver);
   const defenderMult =
     contestRatingMultiplier(tacticFor(defendingPlan, defender, defendingTeam.positions), "markContested", "defender") *
+    lineCoachContestFactor(ctx, defendingSide, defender, "markContested", "defender") *
     gameStyleDefenderMultiplier(styleFor(defendingPlan), defenderInForwardHalf) *
     conditionMultiplierFor(ctx, defendingSide, defender);
   const result = resolveContest(receiver, defender, "markContested", ctx.rng, {
@@ -2957,7 +3176,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   defenderLine.interceptPossessions += 1;
   spoilDeltas.push({ playerId: defender.PlayerID, stat: "interceptPossessions", delta: 1 });
   let spoilLabel = `${defender.lname} spoils the contest and takes control`;
-  if (ctx.rng() < P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK) {
+  if (ctx.rng() < effectiveCleanMarkProbability(P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK, lineCoachCleanMarkBiasFor(ctx, defendingSide, defender))) {
     defenderLine.marks += 1;
     defenderLine.interceptMarks += 1;
     spoilDeltas.push({ playerId: defender.PlayerID, stat: "marks", delta: 1 }, { playerId: defender.PlayerID, stat: "interceptMarks", delta: 1 });
@@ -3357,6 +3576,13 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. No disposal chain
     // exists yet at kick-off, same as at every other stoppage.
     lastEffectiveDisposal: null,
+    // Sep 2026 round 84 — [[Match-Day Line Coach Direction]]: every match starts all 4 match-day
+    // line coaches on "Default" — see Ctx.homeLineFocus's own doc comment for why there's no opt-out
+    // the way homePlan/awayPlan have one.
+    homeLineFocus: new Map(MATCH_DAY_COACH_ROLES.map((role) => [role, defaultLineFocusFor(role)])),
+    awayLineFocus: new Map(MATCH_DAY_COACH_ROLES.map((role) => [role, defaultLineFocusFor(role)])),
+    homeLineCoachEffectiveness: opts.homeLineCoachEffectiveness ?? {},
+    awayLineCoachEffectiveness: opts.awayLineCoachEffectiveness ?? {},
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.
@@ -3370,12 +3596,22 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
 
 /** Every tick's fitness update — drains every on-ground player a little, recovers every bench player rather more (Tyler's own "give him a moment to recharge"). Runs unconditionally each tick (not gated on the periodic rotation check below), same "the meter itself is continuous, only the DECISION to act on it is periodic" split `groundedUntilTick` doesn't need but this genuinely does. */
 function stepFitness(ctx: Ctx): void {
-  stepFitnessSide(ctx.home, ctx.homeFitness);
-  stepFitnessSide(ctx.away, ctx.awayFitness);
+  stepFitnessSide(ctx, "home", ctx.home, ctx.homeFitness);
+  stepFitnessSide(ctx, "away", ctx.away, ctx.awayFitness);
 }
-function stepFitnessSide(team: MatchTeam, fitness: Map<number, number>): void {
+/**
+ * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]: an on-ground player's fitness drain is
+ * now scaled by `digDeeperFitnessDrainMultiplier` (1x for every focus except "Demand They Dig
+ * Deeper", which drains faster) — the disclosed, honestly-scoped substitute for wiring a genuine
+ * cross-match disgruntlement risk (see that file's own "Demand They Dig Deeper" section for why).
+ * `ctx`/`side` are new parameters purely to resolve each player's own line-coach focus; the
+ * exported `stepFitness` above still takes just `ctx`, so none of its own call sites needed to change.
+ */
+function stepFitnessSide(ctx: Ctx, side: Side, team: MatchTeam, fitness: Map<number, number>): void {
   for (const p of onGroundPlayers(team)) {
-    fitness.set(p.PlayerID, Math.max(FITNESS_FLOOR, (fitness.get(p.PlayerID) ?? 100) - ON_GROUND_FITNESS_DRAIN));
+    const { focus } = lineCoachStateFor(ctx, side, p);
+    const drain = ON_GROUND_FITNESS_DRAIN * digDeeperFitnessDrainMultiplier(focus);
+    fitness.set(p.PlayerID, Math.max(FITNESS_FLOOR, (fitness.get(p.PlayerID) ?? 100) - drain));
   }
   for (const p of benchPlayers(team)) {
     fitness.set(p.PlayerID, Math.min(100, (fitness.get(p.PlayerID) ?? 100) + BENCH_FITNESS_RECOVERY));
@@ -3688,6 +3924,25 @@ export function setGameStyle(match: MatchInProgress, side: Side, style: GameStyl
 export function getGameStyle(match: MatchInProgress, side: Side): GameStyle {
   const plan = side === "home" ? match.ctx.homePlan : match.ctx.awayPlan;
   return plan?.gameStyle ?? "Balanced";
+}
+
+/**
+ * Changes a side's active focus for one match-day line coach mid-match — Sep 2026 round 84,
+ * [[Match-Day Line Coach Direction]]. Tyler's own ask: available at Quarter/Half/Three-Quarter
+ * Time, mirroring `setGameStyle`'s own "only at a real break" idiom (enforced by the caller —
+ * `LiveMatch.tsx` only ever calls this while a break is genuinely pending, same as it already does
+ * for `setGameStyle`/`attemptInterchange`). Unlike `setGameStyle`, there's no "no plan at all"
+ * no-op case — every match always has all 4 line-coach maps populated from `startMatch`.
+ */
+export function setLineFocus(match: MatchInProgress, side: Side, role: MatchDayCoachRole, focus: LineCoachFocus): void {
+  const map = side === "home" ? match.ctx.homeLineFocus : match.ctx.awayLineFocus;
+  map.set(role, focus);
+}
+
+/** Reads a side's current focus for one match-day line coach — "Default" if never changed. */
+export function getLineFocus(match: MatchInProgress, side: Side, role: MatchDayCoachRole): LineCoachFocus {
+  const map = side === "home" ? match.ctx.homeLineFocus : match.ctx.awayLineFocus;
+  return map.get(role) ?? defaultLineFocusFor(role);
 }
 
 /** A MatchResult snapshot of however much of `match` has been simulated so far — safe to call mid-match (e.g. after just one quarter, for live display during a Coach's Call pause) or after all 4 quarters (the true final result). Doesn't mutate `match`, so it's safe to call more than once. */

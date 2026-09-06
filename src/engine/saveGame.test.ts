@@ -195,6 +195,10 @@ describe("serializeSave / deserializeSave", () => {
       // non-null value here (not null), same "prove JSON round-tripping" ethos as the rest of this
       // fixture — `coachId`/`focusArea` are plain number/string-union fields, no Map/Set involved.
       talentScout: { coachId: 42, focusArea: "Midfielders" },
+      // Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. A real, partially-populated record
+      // (not every role assigned), same "prove JSON round-tripping" ethos as `talentScout` above —
+      // plain number values, no Map/Set involved.
+      lineCoaches: { "Defensive Line": 7, "Ruck and Stoppage": 19 },
     };
   }
 

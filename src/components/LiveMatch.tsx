@@ -10,6 +10,9 @@ import {
   simulateQuarter,
   setGameStyle,
   getGameStyle,
+  setLineFocus,
+  getLineFocus,
+  lineFeedbackFor,
   matchResultSoFar,
   attemptInterchange,
   fitnessFor,
@@ -20,6 +23,9 @@ import {
   CONTEST_STAT_FIELDS,
 } from "../engine/match";
 import type { ContestType } from "../engine/contestTypes";
+import type { LineCoachFocus } from "../engine/lineCoaching";
+import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
+import { MATCH_DAY_COACH_ROLES, type MatchDayCoachRole } from "../types/coach";
 import { ZONE_NAMES, ZONES, ownZone, type Side, type Zone } from "../engine/zones";
 import type { Position } from "../types/archetype";
 import { mulberry32 } from "../engine/rng";
@@ -33,11 +39,13 @@ import { DEFAULT_GAME_STYLE, type TeamPlan, type GameStyle } from "../engine/tac
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
+import { useSaveStore } from "../store/useSaveStore";
 import { MatchCanvas } from "./MatchCanvas";
 import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
 import { CoachsCall } from "./CoachsCall";
 import { QuarterTimeInterchange } from "./QuarterTimeInterchange";
+import { LineCoachPanel } from "./LineCoachPanel";
 import { DetailedStatsTable } from "./DetailedStatsTable";
 import { ClubBadgeByName } from "./ClubBadge";
 
@@ -97,6 +105,9 @@ export function LiveMatch() {
 
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
+  /** Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Same "single-slot, the human coach's own club" shape as `talentScout` — see `SaveGameData.lineCoaches`'s own doc comment. */
+  const lineCoaches = useSaveStore((s) => s.lineCoaches);
+  const assignLineCoach = useSaveStore((s) => s.assignLineCoach);
   /** [[Interchange Rotation]], round 48 — read broadly (every club, not just myClub) so resolveTeam can thread whichever side's own saved overrides through symmetrically; in practice only the human coach's own club ever has any (see Selection Committee's new eligibility editor). */
   const allEligibility = useSelectionStore((s) => s.eligibility);
 
@@ -140,25 +151,48 @@ export function LiveMatch() {
   /** Which side (if any) the user is actually coaching this game — a Coach's Call only ever applies to them; the AI opponent has no UI to make its own calls (ROADMAP.md gap #22). */
   const mySide: "home" | "away" | null = homeTeam.name === myClub ? "home" : awayTeam.name === myClub ? "away" : null;
 
+  /**
+   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Resolves `lineCoaches` (the human
+   * coach's own club-wide assignment) into the plain `role -> ovr/99` map `startMatch`'s
+   * `homeLineCoachEffectiveness`/`awayLineCoachEffectiveness` options expect — match.ts itself has
+   * no `Coach`/coach-pool dependency (see lineCoaching.ts's own top comment), so that resolution
+   * happens here. Only ever non-empty for `mySide` — an AI opponent (or the other side, when
+   * neither is the user's club) always plays with every line at the flat, unassigned baseline,
+   * same as it always has for `homeCondition`/`homePlan` opting out.
+   */
+  function lineCoachEffectivenessForSide(side: "home" | "away"): Partial<Record<MatchDayCoachRole, number>> {
+    if (side !== mySide) return {};
+    const effectiveness: Partial<Record<MatchDayCoachRole, number>> = {};
+    for (const role of MATCH_DAY_COACH_ROLES) {
+      const coachId = lineCoaches[role];
+      if (coachId === undefined) continue;
+      const coach = ASSISTANT_COACH_POOL.find((c) => c.id === coachId);
+      if (coach) effectiveness[role] = coach.ratings[role].ovr / 99;
+    }
+    return effectiveness;
+  }
+
   function kickOff(homePlan: TeamPlan, awayPlan: TeamPlan) {
     const seed = Math.floor(Math.random() * 1_000_000_000);
     setLastSeed(seed);
     setHomeStyle(homePlan.gameStyle);
     setAwayStyle(awayPlan.gameStyle);
+    const homeLineCoachEffectiveness = lineCoachEffectivenessForSide("home");
+    const awayLineCoachEffectiveness = lineCoachEffectivenessForSide("away");
 
     if (!mySide) {
       // Neither side is the user's own club (e.g. watching two AI clubs
       // play) - no one to offer a Coach's Call to, so simulate the whole
       // match up front exactly like every Match-tab game did before this
       // feature existed.
-      const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan });
+      const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness });
       setResult(fresh);
       setMatchInProgress(null);
       setQuartersSimulated(4);
       return;
     }
 
-    const match = startMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan });
+    const match = startMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness });
     simulateQuarter(match, 1);
     setMatchInProgress(match);
     setQuartersSimulated(1);
@@ -209,6 +243,22 @@ export function LiveMatch() {
       console.warn("attemptInterchange rejected a swap the UI should already have prevented:", outcome.reason);
       return;
     }
+    setResult(matchResultSoFar(matchInProgress));
+  }
+
+  /**
+   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. `setLineFocus` mutates `matchInProgress`
+   * in place (same pattern `setGameStyle` already uses), so — same as `handleInterchange` above —
+   * the only thing needed to make the change visible is a re-render; re-deriving `result` from the
+   * now-current `matchInProgress` is the same "something changed inside the live match" signal
+   * `chooseCoachsCall`/`handleInterchange` already use for this. Deliberately does NOT auto-advance
+   * the quarter or resume playback the way `chooseCoachsCall` does — a line-coach focus change isn't
+   * "the" decision that ends the break the way picking a game style is; the coach can set as many
+   * (or as few) line focuses as they like before actually choosing a Coach's Call option.
+   */
+  function handleLineFocusChange(side: "home" | "away", role: MatchDayCoachRole, focus: LineCoachFocus) {
+    if (!matchInProgress) return;
+    setLineFocus(matchInProgress, side, role, focus);
     setResult(matchResultSoFar(matchInProgress));
   }
 
@@ -373,6 +423,13 @@ export function LiveMatch() {
                 team={pendingCoachsCall.side === "home" ? homeTeam : awayTeam}
                 fitnessFor={(playerId) => (matchInProgress ? fitnessFor(matchInProgress, pendingCoachsCall.side, playerId) : 100)}
                 onInterchange={(outgoingId, incomingId) => handleInterchange(pendingCoachsCall.side, outgoingId, incomingId)}
+              />
+              <LineCoachPanel
+                lineCoaches={lineCoaches}
+                feedbackFor={(role) => (matchInProgress ? lineFeedbackFor(matchInProgress.ctx, pendingCoachsCall.side, role) : "")}
+                focusFor={(role) => (matchInProgress ? getLineFocus(matchInProgress, pendingCoachsCall.side, role) : "Default")}
+                onAssign={assignLineCoach}
+                onFocusChange={(role, focus) => handleLineFocusChange(pendingCoachsCall.side, role, focus)}
               />
               <CoachsCall
                 quarterJustFinished={pendingCoachsCall.quarterJustFinished}

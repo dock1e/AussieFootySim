@@ -262,6 +262,73 @@ function archetypeWeights(existingPlayers: readonly Player[]): (readonly [Archet
   return ARCHETYPES.map((a) => [a, (counts.get(a) ?? 0) / total] as const);
 }
 
+/**
+ * Round 87 — Tyler's own instruction for the "U16 U15 Boys.xlsx" community batch (388 real
+ * prospects with no position data at all, "too early in their career" for a real scout to have
+ * assigned one): "we just need to guess at their positions... using Goals and Best Players as a
+ * loose reference." Without this, `normalizePosition(null) ?? weightedPick(weights, rng)` falls
+ * back to a position-BLIND population-weighted draw — the same treatment the ~86% of EXISTING real
+ * prospects with no position already get. This function replaces that blind fallback with a
+ * loosely stat-informed one for ANY null-position real prospect with a usable games/goals/best
+ * sample, not just the new batch — the two populations share the exact same data shape
+ * (`seasonStats.gamesPlayed/goals/bestCount`, no `positionRaw`), so there's no principled reason to
+ * treat them differently, and every existing thin real prospect gets a small, honest upgrade over
+ * a pure random draw for free.
+ *
+ * **Deliberately loose, not a hard rule** — per Tyler's own "loose reference" framing, this NUDGES
+ * the population-weighted draw rather than overriding it outright: a high scorer becomes MUCH more
+ * likely to land a forward archetype, not guaranteed one, so the pool still reads as genuinely
+ * uncertain rather than mechanically typecast. Two independent signals, each only applied when
+ * there's a real sample to trust:
+ *
+ * - **Goals/game -> forward lean.** Thresholds are this xlsx's own empirical p75 (1.33) and p90
+ *   (2.25) goals/game across all 414 real rows (before dedup — see
+ *   `scripts/mergeU16U15Prospects.ts`'s own extraction step and `verify_round87_scratch.ts` for
+ *   the exact numbers), not arbitrary round figures. Boosts Pressure Forward/Hybrid Mid
+ *   Forward/Small Forward/Medium Forward/Key Forward equally — there's no height data either, so
+ *   this can't tell a tall target from a small crumber and doesn't try to.
+ * - **Best-nominations/game -> midfield lean.** Same empirical grounding (p75 0.7, p90 0.88,
+ *   among rows where a best-count was actually tracked in the source — some leaderboards only
+ *   ever published a games/goals list; those rows store `bestCount: 0` at ingestion rather than a
+ *   real zero, same disclosed limitation every other thin real prospect's `bestCount` already has).
+ *   Boosts Inside Mid/Outside Mid — being consistently among the best without necessarily scoring
+ *   is the classic junior-football midfielder signature.
+ * - **Both signals can fire together** (a genuine two-way junior star) — they boost disjoint
+ *   archetype sets, so `weightedPick` simply ends up choosing between two now-likelier camps
+ *   rather than one cancelling the other out.
+ * - **No signal at all** (fewer than 3 games recorded, or no `seasonStats`) falls back to the
+ *   plain population-weighted draw unchanged — an unreliable small sample shouldn't pretend to
+ *   know anything, and this is honestly the common case for the U15 sheet's early-season 3-game
+ *   rows.
+ */
+const FORWARD_LEAN_ARCHETYPES: readonly Archetype[] = ["Pressure Forward", "Hybrid Mid Forward", "Small Forward", "Medium Forward", "Key Forward"];
+const MIDFIELD_LEAN_ARCHETYPES: readonly Archetype[] = ["Inside Mid", "Outside Mid"];
+
+export function archetypeGuessFromUnderageStats(record: RealProspectRecord, weights: readonly (readonly [Archetype, number])[], rng: () => number): Archetype {
+  const ss = record.seasonStats;
+  if (!ss || ss.gamesPlayed < 3) return weightedPick(weights, rng);
+
+  const goalsPerGame = ss.goals / ss.gamesPlayed;
+  const bestPerGame = ss.bestCount / ss.gamesPlayed;
+
+  let forwardMult = 1;
+  if (goalsPerGame >= 2.25) forwardMult = 7;
+  else if (goalsPerGame >= 1.33) forwardMult = 4;
+
+  let midMult = 1;
+  if (bestPerGame >= 0.88) midMult = 5;
+  else if (bestPerGame >= 0.7) midMult = 3;
+
+  if (forwardMult === 1 && midMult === 1) return weightedPick(weights, rng); // no signal either way — plain draw
+
+  const adjusted = weights.map(([a, w]) => {
+    if (FORWARD_LEAN_ARCHETYPES.includes(a)) return [a, w * forwardMult] as const;
+    if (MIDFIELD_LEAN_ARCHETYPES.includes(a)) return [a, w * midMult] as const;
+    return [a, w] as const;
+  });
+  return weightedPick(adjusted, rng);
+}
+
 /** Population-average attribute profile for one archetype among *existing* players — the "Tier B" precedent's own starting point (Player Database.md), reused here as a draft prospect's baseline before the youth offset + seeded variance below. */
 function archetypeAttributeMeans(existingPlayers: readonly Player[], archetype: Archetype): Record<RatedAttribute, number> {
   const same = existingPlayers.filter((p) => p.archetype === archetype);
@@ -661,7 +728,7 @@ export function generateProspectPool(existingPlayers: readonly Player[], year: n
   const realPlayers: Player[] = [];
   for (let i = 0; i < realCount; i++) {
     const record = rankedReal[i];
-    const archetype = normalizePosition(record.positionRaw) ?? weightedPick(weights, rng);
+    const archetype = normalizePosition(record.positionRaw) ?? archetypeGuessFromUnderageStats(record, weights, rng);
     const means = meansByArchetype.get(archetype)!;
     realPlayers.push(buildRealProspect(nextId++, record, year, archetype, means, rng));
   }

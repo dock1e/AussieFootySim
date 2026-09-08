@@ -31,8 +31,13 @@
  * first-name variant of the zerohanger name, these stay unmatched). Two
  * matches ARE a confirmed first-name/nickname variant, not a guess: "Gabe
  * Patterson" -> "Gabriel Patterson" (exact write-up cross-match, see
- * realProspects.ts), "Khaled El Souki" -> "Khaled El souki" (same name, a
- * lowercase typo in the DB's own stored casing).
+ * realProspects.ts). The other, "Khaled El Souki" -> "Khaled El souki", was a
+ * genuine lowercase typo in the DB's own stored casing that this file
+ * originally matched AROUND rather than fixed (so the exact-string lookup in
+ * `externalConsensusRankFor` wouldn't break) — **round 87 fixed the typo
+ * directly in `real_prospects_master.json` instead** (Tyler's own
+ * capitalization-cleanup request), so `matchedRecordName` below now reads
+ * "Khaled El Souki" too, correctly matching on both sides again.
  *
  * **Round 80 update**: Dougie Cochrane (rank 1) was the single highest-
  * profile name on this list still unmatched — Tyler flagged it directly
@@ -85,7 +90,7 @@ export const ZEROHANGER_SEPT_2026_RANKINGS: readonly DraftPowerRanking[] = [
   { rank: 22, name: "Marlon Neocleous", matchedRecordName: "Marlon Neocleous" },
   { rank: 23, name: "Noah Williams", matchedRecordName: "Noah Williams" },
   { rank: 24, name: "Jack Pickett", matchedRecordName: "Jack Pickett" },
-  { rank: 25, name: "Khaled El Souki", matchedRecordName: "Khaled El souki" },
+  { rank: 25, name: "Khaled El Souki", matchedRecordName: "Khaled El Souki" },
   { rank: 26, name: "Lochie Burrows", matchedRecordName: "Lochie Burrows" },
   { rank: 27, name: "Harvey Spawton-Guy", matchedRecordName: null },
   { rank: 28, name: "Harry Chapman", matchedRecordName: null },
@@ -125,6 +130,6 @@ export const ZEROHANGER_SEPT_2026_RANKINGS: readonly DraftPowerRanking[] = [
 export const CAL_TWOMEY_MID_2026_TOP_25: ReadonlySet<string> = new Set([
   "Clancy Snell", "Wil Malady", "Jackson Phillips", "Noah Williams", "Tyson Bradley",
   "Lochie Burrows", "Toby Krasna", "George Dimer", "Marlon Neocleous", "Ethan Matthews",
-  "Sam Gayfer", "Caylen Murray", "Jack Pickett", "Khaled El souki", "Jake Eime",
+  "Sam Gayfer", "Caylen Murray", "Jack Pickett", "Khaled El Souki", "Jake Eime",
   "Cody Walker", "Arki Butler", "Gus Teixeira", "Harry Van Hattum", "Ethan Drever",
 ]);

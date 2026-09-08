@@ -78,8 +78,19 @@ export interface RealProspectRecord {
   heightCm: number | null;
   /** [year, month, day] — only ~14% of records have one (see this file's own doc comment on Fork E). Standout Players Prospects is the only sheet that carries real DOB. */
   dob: readonly [number, number, number] | null;
-  /** Which sheet (if any) this record's `seasonStats` came from — the fallback basis `eligibleDraftYearFor` uses when `dob` is null. Null only for the small AFL Futures Boys-only standalone entries that matched no season sheet at all. */
-  ageGroupSheet: "U16" | "U18" | null;
+  /**
+   * Which sheet (if any) this record's `seasonStats` came from — the fallback basis
+   * `eligibleDraftYearFor` uses when `dob` is null. Null only for the small AFL Futures Boys-only
+   * standalone entries that matched no season sheet at all.
+   *
+   * Round 87 added "U15" and "U17.5": 388 real Victorian community-league juniors from Tyler's
+   * "U16 U15 Boys.xlsx" (`sourceSheets: ["Community Footy"]`), a completely different real source
+   * from the original "2026 Draft Prospects.xlsx" this field's other two values came from — this
+   * batch is grassroots suburban/country club football, not the elite Coates Talent League
+   * pathway. Both sources feed the exact same age-based eligibility formula below, though, since
+   * eligibility only ever depended on age, never on which pathway a prospect plays in.
+   */
+  ageGroupSheet: "U16" | "U18" | "U15" | "U17.5" | null;
   /** Every real write-up sentence found for this person across however many Standout Players Prospects rows they appeared on (a scouted player often has several — one per carnival game) — concatenated, not just the first. */
   writeups: readonly string[];
   standoutSourceEvents: readonly string[];
@@ -111,11 +122,28 @@ export const REAL_PROSPECTS: readonly RealProspectRecord[] = realProspectsJson a
  * exist for this sheet in a future drop, which Tyler said is coming). No
  * sheet at all (AFL-Futures-only standalone entries) uses the same
  * 2026-eligible default as U18.
+ *
+ * **Round 87** added two more buckets for the "U16 U15 Boys.xlsx" community batch: "U15" nominally
+ * born ~2011, turns 18 in 2029; "Under 17.5" sits between the U16 and U18 buckets age-wise (a real
+ * Gippsland-league grade name, one notch below a full U18/Colts competition) and gets its own
+ * interpolated year, 2027 — the same disclosed-simplification spirit as the existing U18 default
+ * above, just one bucket further out rather than invented from nothing. A "U18" tag from THIS
+ * batch (a real Goulburn Valley senior-league U18 grade, not the original xlsx's own U18 Boys
+ * sheet) still correctly defaults to 2026 via the same branch below — eligibility only ever
+ * depended on age, never on which of the two real sources a record came from.
  */
 export function eligibleDraftYearFor(record: RealProspectRecord): number {
   if (record.dob) return record.dob[0] + 18;
-  if (record.ageGroupSheet === "U16") return 2028;
-  return 2026;
+  switch (record.ageGroupSheet) {
+    case "U15":
+      return 2029;
+    case "U16":
+      return 2028;
+    case "U17.5":
+      return 2027;
+    default:
+      return 2026; // "U18", null (AFL-Futures-only standalone entries) — see doc comment above
+  }
 }
 
 /** Age in whole years as of `year`'s mid-season — null when there's no real DOB (the age-group default above still gives a valid eligible year without needing an exact age). */

@@ -56,7 +56,9 @@ interface RawRecord {
     u18WcFinalsPlayer: boolean;
   } | null;
   aflFutures: boolean;
-  ageGroupSheet: "U16" | "U18" | null;
+  // Round 87: widened to include the "U16 U15 Boys.xlsx" community batch's two extra buckets — see
+  // realProspects.ts's own RealProspectRecord.ageGroupSheet doc comment for the full explanation.
+  ageGroupSheet: "U16" | "U18" | "U15" | "U17.5" | null;
   sourceSheets: string[];
   homeState: string | null;
 }
@@ -67,8 +69,11 @@ function main() {
   console.log(`Parsed ${raw.length} real prospect records`);
 
   // --- Sanity checks — fail loudly rather than silently ship bad data. ---
+  // Round 87: floor left at 1,000 rather than raised to match the new ~1,686 total — the point of
+  // this check is catching a regressed/truncated extraction, not asserting an exact count that
+  // would need bumping on every future data drop.
   if (raw.length < 1000) {
-    throw new Error(`Expected ~1,280 real prospects (Fork E's full-population scope), got only ${raw.length} — extraction likely regressed`);
+    throw new Error(`Expected at least 1,000 real prospects (Fork E's full-population scope plus round 87's community batch), got only ${raw.length} — extraction likely regressed`);
   }
   const seenKeys = new Set<string>();
   let dupeKeys = 0;

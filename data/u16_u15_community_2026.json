@@ -1,0 +1,3494 @@
+[
+ {
+  "name": "Nate Chamberlain",
+  "team": "St Josephs Podbury U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 5.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jarryn Baker",
+  "team": "Colac Tigers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 1.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Isaac Leeson",
+  "team": "Colac Tigers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 0.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Sonni Andrews",
+  "team": "Ocean Grove Neeld U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 10.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jack Smithson",
+  "team": "Ocean Grove Neeld U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 2.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jedah Zurawel",
+  "team": "Ocean Grove Neeld U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 16.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ethan Barbaro",
+  "team": "Newtown & Chilwell Morrissy U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 3.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie Fantella",
+  "team": "South Barwon Holz U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 6.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cooper Robinson",
+  "team": "Leopold 1 U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 2.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Levi Coverdale",
+  "team": "St Josephs Podbury U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 5.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Louis Belsar-LeBel",
+  "team": "Ocean Grove Neeld U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 13.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nate Cambridge",
+  "team": "Ocean Grove Neeld U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 0.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Perry Nicolson",
+  "team": "Torquay Dunstan U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 29.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hamish Watson",
+  "team": "St Josephs Podbury U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 5.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Samuel Phillips",
+  "team": "Colac Tigers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 1.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Emanuel Robb",
+  "team": "Colac Tigers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 1.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Leo Jones",
+  "team": "St Marys McMahon U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jude Lewry",
+  "team": "Leopold 1 U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 2.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lachlan Barclay",
+  "team": "Newtown & Chilwell Morrissy U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 9.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tom Aspinall",
+  "team": "South Barwon Holz U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 3.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Zac Martin",
+  "team": "South Barwon Holz U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 1.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Samuel Burke",
+  "team": "Torquay Dunstan U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 2.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harry Scarlett",
+  "team": "Torquay Dunstan U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 36.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hyde Rahilly",
+  "team": "Torquay Dunstan U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 15.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Frederick Melville",
+  "team": "Colac Tigers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hamish Isbister",
+  "team": "Newtown & Chilwell Morrissy U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 20.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Noah Healy",
+  "team": "Torquay Dunstan U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Bol Reech",
+  "team": "Newtown & Chilwell Morrissy U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 0.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ethan Baird",
+  "team": "St Marys McMahon U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 4.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hamish Hughan",
+  "team": "South Barwon Holz U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 6.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Owen O'Hearn",
+  "team": "Leopold 1 U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 12.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kade Witney",
+  "team": "St Marys McMahon U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 9.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max Flakemore",
+  "team": "Grovedale Knevitt U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 7.0,
+  "goals": 7.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Archie Huddart",
+  "team": "Pascoe Vale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 3.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Darcy Parker",
+  "team": "Maribyrnong Park 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 10.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Sam Contessa",
+  "team": "Pascoe Vale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 4.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ben Verzaci",
+  "team": "Pascoe Vale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 9.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ali Merhi",
+  "team": "Pascoe Vale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 15.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jake Bajinskis",
+  "team": "Aberfeldie 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 11.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Riley Plant",
+  "team": "Greenvale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 4.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Xavier Walsh",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 15.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "James Wood",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 0.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "isaac lawry",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 6.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nash Thorneycroft",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 15.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ali Kassab",
+  "team": "Strathmore 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 8.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lyam Skroce",
+  "team": "Strathmore 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 5.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Chase Byrne",
+  "team": "Strathmore 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 7.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Riley Verrall",
+  "team": "Maribyrnong Park 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 9.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lachlan Atchison",
+  "team": "Maribyrnong Park 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nate Reddan",
+  "team": "Essendon Doutta Stars 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 2.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "David Lubansky",
+  "team": "Avondale Heights/Ascot Vale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 4.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Bodhi Taylor",
+  "team": "Greenvale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 6.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Leon Price-Brink",
+  "team": "Pascoe Vale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 1.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lachlan Barley",
+  "team": "Essendon Doutta Stars 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 3.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Benjamin Tranter",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 9.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Xavier Sharkey",
+  "team": "Aberfeldie 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 2.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Luca Palmisano",
+  "team": "Strathmore 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Samuel Limoli",
+  "team": "Maribyrnong Park 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 8.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Archie Seidel",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nicholas Peroukaneas",
+  "team": "Greenvale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Aydin Yildiz",
+  "team": "Greenvale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 5.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oliver Trimbos",
+  "team": "Greenvale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 3.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oscar Mcintosh",
+  "team": "Aberfeldie 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 2.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nate Harris",
+  "team": "Aberfeldie 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 36.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Leo Amato",
+  "team": "Aberfeldie 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 30.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ahmad El-Bardouh",
+  "team": "Strathmore 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 23.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Aidan Plunkett",
+  "team": "Strathmore 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 19.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Dante Mammoliti",
+  "team": "Pascoe Vale 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 16.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jasper McNamara",
+  "team": "Maribyrnong Park 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 15.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Joseph Di Lizia",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 14.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Dean Micallef",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 13.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Michael Corso",
+  "team": "Keilor 1 (16B)",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 11.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cameron Koppens",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 3.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Tex Robertson",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 6.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Harley Lancaster",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 10.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Andrew MacRae",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 5.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Basil Risvanis",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 3.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Tom Quinn",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 20.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Jack Atchison",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 43.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Samuel Cowell",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 11.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Max Meredith",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 23.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Oscar Allen",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 7.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Andrew Bourke",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Mason Naghsh",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 1.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Oliver Prideaux",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 11.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Archie Brown",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 7.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Owen Bernes",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 1.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Ewan Fallows",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 17.0,
+  "goals": 2.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Will Chamberlain",
+  "team": "Mordi-Brae U16 Boys MACGEORGE",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 41.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Kieran McCarthy",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 28.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Luca Sgroi",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 28.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Jack Plapp",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 28.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Marcus Rice",
+  "team": "E Brighton Vampires U16 Boys PERLA-DOWDELL",
+  "ageGroup": "U16",
+  "gamesPlayed": 16.0,
+  "goals": 21.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Henry Gibbs",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 15.0,
+  "goals": 19.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Spencer Mackay",
+  "team": "St Kilda City JFC / Port Melbourne U16 Boys BURDETT",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 19.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Jack Stephens",
+  "team": "Mordi-Brae U16 Boys MACGEORGE",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 19.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Ned Long",
+  "team": "Beaumaris U16 Boys SHARKS",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 17.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Luca De Crespigny",
+  "team": "St Kilda City JFC / Port Melbourne U16 Boys BURDETT",
+  "ageGroup": "U16",
+  "gamesPlayed": 6.0,
+  "goals": 17.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Rafferty Moss",
+  "team": "St Kilda City JFC / Port Melbourne U16 Boys BURDETT",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 16.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Jai Gunasekera",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 16.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Lucas Kitto",
+  "team": "Mordi-Brae U16 Boys MACGEORGE",
+  "ageGroup": "U16",
+  "gamesPlayed": 15.0,
+  "goals": 14.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Edward Cacopardo",
+  "team": "East Malvern U16 Boys DALTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 14.0,
+  "goals": 14.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Jack Hodgson",
+  "team": "E Brighton Vampires U16 Boys PERLA-DOWDELL",
+  "ageGroup": "U16",
+  "gamesPlayed": 16.0,
+  "goals": 13.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Archer Ross",
+  "team": "St Kilda City JFC / Port Melbourne U16 Boys BURDETT",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 13.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Tom Pollock",
+  "team": "East Sandy Rovers U16 Boys RANKINE",
+  "ageGroup": "U16",
+  "gamesPlayed": 7.0,
+  "goals": 13.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Joseph Blangiardo",
+  "team": "WPHawks U16 Boys RYAN",
+  "ageGroup": "U16",
+  "gamesPlayed": 4.0,
+  "goals": 13.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Gabriel Chambers",
+  "team": "St Kilda City JFC / Port Melbourne U16 Boys BARTON",
+  "ageGroup": "U16",
+  "gamesPlayed": 4.0,
+  "goals": 13.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Lachlan Crone",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 6.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Benjamin Weickhardt",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Jett Passarella",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Kye Wilkin",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 18.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Luke Cerritelli",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 3.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Tyce Ingram",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 17.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Charlie Sime",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 39.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Max Bakker",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 1.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Rhys Atkins",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 8.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Hamish Paragreen",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Elijah Peters",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 2.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Harrison Hume",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 1.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Nicholas Rigby",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Mitchell Corr",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 7.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Elijah De Rooden",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 8.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "William Borrello",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 9.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Finley Burgess",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 3.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Rem Porjazoski",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "dane roberts",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Leo Pepe",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 7.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "lewis zeffiro",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "oscar luke",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 3.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Ethan Vogdanos",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 7.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Nash Styles",
+  "team": "Balwyn Tigers U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 9.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Harley O\u2019Brien",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 1.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Luca Caruso",
+  "team": "Park Orchards U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 5.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Jye Henry",
+  "team": "St Marys U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 27.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Hudson McGregor",
+  "team": "St Marys U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 24.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Benjamin Richardson",
+  "team": "Heidelberg U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 6.0,
+  "goals": 23.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Reed Stacy",
+  "team": "Heidelberg U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 18.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Samuel Saccone",
+  "team": "St Marys U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 17.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Edward Norden",
+  "team": "Ashburton U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 17.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Liam Angerosa",
+  "team": "St Marys U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 16.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Lachlan Sweet",
+  "team": "Ivanhoe U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 6.0,
+  "goals": 15.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "James D'Antonio",
+  "team": "St Marys U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 12.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Declan Murphy",
+  "team": "Werribee Districts U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 14.0,
+  "bestCount": 12.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Brayden Jewell",
+  "team": "Werribee Districts U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 12.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ollie Chatfield",
+  "team": "St Bernards U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 4.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Dallas Reed",
+  "team": "Werribee Districts U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 0.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kobe Page",
+  "team": "Point Cook U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 5.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Noah Tankey",
+  "team": "St Bernards U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 5.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oscar Weston",
+  "team": "HCFC U16 Boys 1 Blue",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 5.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Aden Heberle",
+  "team": "Point Cook U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 6.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Thomas Mutton",
+  "team": "Newport Power U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 1.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Logan Phee",
+  "team": "St Bernards U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 17.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Bailey McPherson",
+  "team": "Newport Power U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 0.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jack Court",
+  "team": "Williamstown Juniors U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 1.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lucas Pante",
+  "team": "Werribee Districts U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 0.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mohammed Hussein",
+  "team": "Point Cook U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Noah Redmond",
+  "team": "Point Cook U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 0.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jye Raciti",
+  "team": "St Bernards U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Marco De Lia",
+  "team": "HCFC U16 Boys 1 Blue",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 5.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie Pearson",
+  "team": "Williamstown Juniors U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 22.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kaden Page",
+  "team": "Point Cook U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 30.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mohamed Elhawli",
+  "team": "Newport Power U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 29.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jack Neave",
+  "team": "Werribee Districts U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 24.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lachlan Fairfield",
+  "team": "Point Cook U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 21.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cohen Moore",
+  "team": "Williamstown Juniors U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 8.0,
+  "goals": 21.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Dane Sheckelton",
+  "team": "Werribee Districts U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 18.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Phoenix Rotondi",
+  "team": "Werribee Districts U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 18.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Campbell Butler",
+  "team": "HCFC U16 Boys 1 Blue",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 17.0,
+  "bestCount": 5.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Luca MacDonald",
+  "team": "Point Cook U16 Boys 1",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 11.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Dylan Bell",
+  "team": "St Bernards U16 Boys",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 11.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Sol Zak",
+  "team": "Shepparton Swans U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 8.0,
+  "bestCount": 13.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Toby Keady",
+  "team": "Shepparton Swans U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 9.0,
+  "bestCount": 12.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Zayd Gibson",
+  "team": "Shepparton Swans U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 35.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max Stockdale",
+  "team": "Kyabram Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 13.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ethan Greiner",
+  "team": "Kyabram Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Will Hatfield",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 8.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Noah Wells",
+  "team": "Shepparton Bears U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 2.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Levi Duffy",
+  "team": "Shepparton Swans U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 22.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ryder Dudgeon",
+  "team": "Shepparton Bears U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 5.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cody Costello",
+  "team": "Shepparton Bears U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 7.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Billy Isaac",
+  "team": "Kyabram Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 2.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lloyd Akers",
+  "team": "Shepparton Swans U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 13.0,
+  "goals": 1.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie Pekin",
+  "team": "Kyabram Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 17.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Henry Bell",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 5.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Keoni Anderson",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 10.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lynkoln Richardson",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 16.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kobe Freer",
+  "team": "Mooroopna Cats U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 9.0,
+  "goals": 20.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Clancy Keenan",
+  "team": "Shepparton Bears U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 8.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Liam Moreno",
+  "team": "Shepparton Bears U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 6.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Billy Sutton",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 2.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Macen Hamilton",
+  "team": "Mooroopna Cats U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kai Rankins",
+  "team": "Echuca Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 8.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tyson Muskee",
+  "team": "Kyabram Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 33.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Alfred Cunningham",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 12.0,
+  "goals": 18.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Xavier Carmichael",
+  "team": "Echuca Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 10.0,
+  "goals": 17.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Macklan Dalziel",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 7.0,
+  "goals": 16.0,
+  "bestCount": 5.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lennix Mellington",
+  "team": "Shepparton Swans U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 11.0,
+  "goals": 15.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max Potter",
+  "team": "Echuca Murray Bombers U16",
+  "ageGroup": "U16",
+  "gamesPlayed": 7.0,
+  "goals": 14.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Thomas Graham",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 8.0,
+  "bestCount": 16.0,
+  "bestTracked": true
+ },
+ {
+  "name": "leroy hayes",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 36.0,
+  "bestCount": 14.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tanner Croucher",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 7.0,
+  "bestCount": 13.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lachlan Taylor",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 9.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Brodie Chilton",
+  "team": "Boisdale Briagolong Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 15.0,
+  "goals": 7.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Will Rhode",
+  "team": "Paynesville Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 13.0,
+  "goals": 1.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "yianni tziaras",
+  "team": "Paynesville Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 13.0,
+  "goals": 3.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Zaya Hood",
+  "team": "Paynesville Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 12.0,
+  "goals": 2.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ned Conway",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 4.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jack Barnes",
+  "team": "Orbost Snowy Rovers Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 19.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Daniel Martin",
+  "team": "Orbost Snowy Rovers Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 27.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hamish Germaine",
+  "team": "Boisdale Briagolong Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 15.0,
+  "goals": 2.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Xavier Cook",
+  "team": "Lindenow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 11.0,
+  "goals": 10.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "HARRISON BENNETT",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 3.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Riley Jakins",
+  "team": "Wy Yung Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 34.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harvey Janson",
+  "team": "Wy Yung Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 10.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Rusty Morrison",
+  "team": "Orbost Snowy Rovers Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 12.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Titus Harrison",
+  "team": "Lindenow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 14.0,
+  "goals": 24.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "beau hanratty",
+  "team": "Orbost Snowy Rovers Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 13.0,
+  "goals": 20.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Bradley Saulle",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 8.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harry Kerr",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 7.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kody Hammer",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 11.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kobe Higgins",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 5.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Monty Mayman",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 54.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jack Brodribb",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 9.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Archie Conway",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 6.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Xavier Martin",
+  "team": "Orbost Snowy Rovers Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 19.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Sonny Johnson",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 1.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tye Robinson",
+  "team": "Orbost Snowy Rovers Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 1.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Zane Holley",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 12.0,
+  "goals": 29.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Robert Tavale",
+  "team": "Paynesville Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 11.0,
+  "goals": 0.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Selwyn Gurnsey",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 11.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oliver Witt",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 0.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kade Musselwhite",
+  "team": "Lindenow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 2.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Reshan Canary",
+  "team": "Wy Yung Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 15.0,
+  "goals": 2.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Liam Carmichael",
+  "team": "Paynesville Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 13.0,
+  "goals": 0.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jeremy Rotheram",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 13.0,
+  "goals": 9.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harper Davis",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 10.0,
+  "goals": 11.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jai Pyke",
+  "team": "Paynesville Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 8.0,
+  "goals": 2.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nicholas Harrison",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 3.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jaret Miller",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 1.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nash Faithfull",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 34.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hunter Appleton",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 2.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Xavier Pepper",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 13.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Durome Abbey",
+  "team": "Lindenow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 5.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jhye Ritchie",
+  "team": "Lindenow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 10.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max Shaw",
+  "team": "Stratford Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 30.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Thomas Macalister",
+  "team": "Orbost Snowy Rovers Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 2.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Reuben Bedggood",
+  "team": "Boisdale Briagolong Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 16.0,
+  "goals": 4.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cruz Coggan",
+  "team": "Boisdale Briagolong Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 14.0,
+  "goals": 5.0,
+  "bestCount": 6.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oscar Hopkins",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 49.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie Moss",
+  "team": "Lindenow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 13.0,
+  "goals": 40.0,
+  "bestCount": 5.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Archie Irish",
+  "team": "Lindenow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 13.0,
+  "goals": 36.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "ollie hodson",
+  "team": "Lucknow Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 18.0,
+  "goals": 33.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Archer Connally",
+  "team": "Lakes Entrance Under 17.5s",
+  "ageGroup": "U17.5",
+  "gamesPlayed": 17.0,
+  "goals": 21.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Xavier Wapling",
+  "team": "Benalla U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 20.0,
+  "bestCount": 16.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Nate Yze",
+  "team": "Shepparton United U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 19.0,
+  "bestCount": 15.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Benjamin McCarthy",
+  "team": "Seymour U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 5.0,
+  "bestCount": 15.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Darby Martin",
+  "team": "Rochester U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 4.0,
+  "bestCount": 15.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cale James",
+  "team": "Rochester U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 16.0,
+  "goals": 10.0,
+  "bestCount": 15.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Judd Tamburro",
+  "team": "Mooroopna U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 15.0,
+  "bestCount": 14.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jayden Thorne",
+  "team": "Mooroopna U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 7.0,
+  "bestCount": 14.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oliver Wilson",
+  "team": "Euroa U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 6.0,
+  "bestCount": 14.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kaleb Gilmour",
+  "team": "Shepparton U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 25.0,
+  "bestCount": 14.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Josh Hart",
+  "team": "Benalla U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 19.0,
+  "bestCount": 13.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ethan Pigdon",
+  "team": "Mansfield U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 6.0,
+  "bestCount": 13.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jett Kervin",
+  "team": "Echuca U18s",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 8.0,
+  "bestCount": 13.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Campbell Flanagan",
+  "team": "Shepparton Swans U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 15.0,
+  "goals": 3.0,
+  "bestCount": 13.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jackson Walker",
+  "team": "Euroa U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 6.0,
+  "bestCount": 12.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cody Montgomery",
+  "team": "Shepparton U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 18.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Addison Godsmark",
+  "team": "Shepparton United U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 3.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Campbell Baker",
+  "team": "Euroa U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 16.0,
+  "goals": 0.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Trey White",
+  "team": "Rochester U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 13.0,
+  "goals": 19.0,
+  "bestCount": 11.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Zaine Atkinson",
+  "team": "Shepparton United U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 11.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Thomas Hudson",
+  "team": "Shepparton Swans U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 2.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ben O\u2019Connell",
+  "team": "Tatura U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 3.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Andrew Friday",
+  "team": "Mansfield U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 10.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "William Hann",
+  "team": "Rochester U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 2.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ben Jeffery",
+  "team": "Shepparton Swans U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 16.0,
+  "goals": 4.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jedd Turpin",
+  "team": "Kyabram U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 16.0,
+  "goals": 62.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hayden Desmond",
+  "team": "Mansfield U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 15.0,
+  "goals": 6.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lucas O'Hora",
+  "team": "Shepparton United U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 15.0,
+  "goals": 7.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harry Kelly",
+  "team": "Seymour U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 14.0,
+  "goals": 8.0,
+  "bestCount": 10.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lewis Boswell",
+  "team": "Shepparton U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 20.0,
+  "goals": 25.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kodi Still",
+  "team": "Shepparton U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 20.0,
+  "goals": 9.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max Thomas",
+  "team": "Mooroopna U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 8.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tyler Doolan",
+  "team": "Kyabram U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 3.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kade Pearse",
+  "team": "Rochester U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 23.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Samuel Zotti",
+  "team": "Seymour U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 0.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Baxter Cowley",
+  "team": "Echuca U18s",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 26.0,
+  "bestCount": 9.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Archie Loughran",
+  "team": "Mooroopna U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 17.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jacob Edmunds",
+  "team": "Mooroopna U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 11.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cruz Purday",
+  "team": "Mansfield U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 1.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oscar Carver",
+  "team": "Kyabram U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 4.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ryder Robertson",
+  "team": "Benalla U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 28.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ben Henson",
+  "team": "Echuca U18s",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 1.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Campbell O\u2019Brien",
+  "team": "Shepparton Swans U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 0.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max Smyth",
+  "team": "Benalla U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 17.0,
+  "goals": 19.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Gerry McCarthy",
+  "team": "Tatura U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 15.0,
+  "goals": 0.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tanner Miller",
+  "team": "Tatura U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 15.0,
+  "goals": 24.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Archie Wilson",
+  "team": "Euroa U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 12.0,
+  "goals": 6.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Spencer Sharp",
+  "team": "Shepparton U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 10.0,
+  "goals": 1.0,
+  "bestCount": 8.0,
+  "bestTracked": true
+ },
+ {
+  "name": "zeke neumann",
+  "team": "Echuca U18s",
+  "ageGroup": "U18",
+  "gamesPlayed": 20.0,
+  "goals": 2.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Riley Myers",
+  "team": "Shepparton U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 71.0,
+  "bestCount": 7.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mitchell Sutton",
+  "team": "Echuca U18s",
+  "ageGroup": "U18",
+  "gamesPlayed": 18.0,
+  "goals": 41.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oliver Jones",
+  "team": "Echuca U18s",
+  "ageGroup": "U18",
+  "gamesPlayed": 16.0,
+  "goals": 37.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max McCarty",
+  "team": "Echuca U18s",
+  "ageGroup": "U18",
+  "gamesPlayed": 14.0,
+  "goals": 32.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Liam Sofra",
+  "team": "Shepparton United U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 28.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ethan Saxon",
+  "team": "Shepparton U18",
+  "ageGroup": "U18",
+  "gamesPlayed": 19.0,
+  "goals": 27.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "william young",
+  "team": "EDFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 3.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Elijah De Rooden",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kobe Page",
+  "team": "WFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "William Peters",
+  "team": "RDFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kobe Treeby",
+  "team": "SMJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 7.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mason Evans",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cooper Joy",
+  "team": "SMJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ray Lonie",
+  "team": "F&DJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Henry Hitchen",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 6.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Landon White",
+  "team": "EDFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 8.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Taylan Towers",
+  "team": "RDFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tye Kennedy",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 3.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jye Henry",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Samuel Church",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harvey Murton",
+  "team": "F&DJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Alexus Bosidis",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jake Bajinskis",
+  "team": "EDFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tanner Burgess",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Darcy Tabain",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mohammed Hussein",
+  "team": "WFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harley Jackson",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kobi Eddington",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Joel Quinlan",
+  "team": "SMJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Sebastian Gigliotti Sevas",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jett Glouftsis",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "wasim kadour",
+  "team": "WFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 3.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jake Curcio",
+  "team": "RDFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Dean Moretti",
+  "team": "WFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harvey Ball",
+  "team": "EDFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jack Cruse",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Zac Dillon",
+  "team": "RDFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harrison Wood",
+  "team": "WFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 3.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Harry Greenbank",
+  "team": "SMJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Cohen Moore",
+  "team": "WFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Adam Reginato Jr",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lachlan Fairfield",
+  "team": "WFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Oscar Minehan",
+  "team": "F&DJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie O'Gorman",
+  "team": "F&DJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Bodhi Taylor",
+  "team": "EDFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Orlando McTrusty",
+  "team": "RDFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Stanley Moore",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hudson Willett",
+  "team": "F&DJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 2.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "john patel",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 9.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Luke Cheep",
+  "team": "SMJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 7.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mitchell Campbell",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 7.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "liam grybas",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 7.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mason Ballard",
+  "team": "NFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 6.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Leo Amato",
+  "team": "EDFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 5.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Sidney McLachlan",
+  "team": "SMJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Bailey Freeth",
+  "team": "EDFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Benjamin Pendreich",
+  "team": "SMJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hudson McGregor",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Louis Garrow",
+  "team": "F&DJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Riley Hirt",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Hayden Rodolico",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Ben MacKenzie",
+  "team": "YJFL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Noah Kavanagh",
+  "team": "EFNL U15 Boys Division 1",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Finn Granger",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 1.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Adrien Nardone",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 1.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Ryder Gieschen",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 0.0,
+  "bestCount": 4.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Mason Chan",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 3.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kobe Parsons",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 0.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Aedan Parker",
+  "team": "Southern Gippsland U15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kurt Hansch",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 1.0,
+  "bestCount": 3.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lochie Yates",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Kit Barberio",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Lincoln Geary",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 5.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Max Taylor",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 2.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jeremy Rotheram",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Flynn Ashwood",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Tyson Mcinnes",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Patrick Centra",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 1.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Jed Caddy",
+  "team": "Southern Gippsland U15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Roy Paterson",
+  "team": "Southern Gippsland U15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 0.0,
+  "bestCount": 2.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie Pollard",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 7.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie Young",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 6.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Hudson Smith",
+  "team": "Latrobe Valley 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 6.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Billy Warfe",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 5.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ },
+ {
+  "name": "Flynn Mahony",
+  "team": "Eastern Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 4.0,
+  "goals": 4.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Coby Bridger",
+  "team": "Western Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 1.0,
+  "bestTracked": true
+ },
+ {
+  "name": "Charlie Soumilas",
+  "team": "Western Gippsland 15s",
+  "ageGroup": "U15",
+  "gamesPlayed": 3.0,
+  "goals": 4.0,
+  "bestCount": 0.0,
+  "bestTracked": false
+ }
+]

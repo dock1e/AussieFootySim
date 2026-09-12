@@ -24,6 +24,7 @@ import {
   externalConsensusPoolBonus,
   applyExternalConsensusFloor,
   type RealProspectRecord,
+  type RealProspectTie,
 } from "../data/realProspects.ts";
 
 /**
@@ -604,6 +605,27 @@ function buildRealProspect(id: number, record: RealProspectRecord, year: number,
 export function realProspectsEligibleFor(year: number, existingPlayers: readonly Player[]): RealProspectRecord[] {
   const alreadyDrafted = new Set(existingPlayers.map((p) => p.realFullName).filter((n): n is string => !!n));
   return REAL_PROSPECTS.filter((r) => eligibleDraftYearFor(r) <= year && !alreadyDrafted.has(r.name));
+}
+
+/**
+ * Round 88: the real Father-Son/Academy/NGA tie that governs `prospect`'s bid-match right in-game —
+ * see `RealProspectTie`'s own doc comment in `realProspects.ts` for the data this reads, and
+ * `draftPicks.ts`'s `canClubMatchBid`/`forfeitPicksForBid` for what a caller does with the result.
+ * When a record carries more than one tie (dual eligibility — the source report's own flagged
+ * example, a prospect eligible via both parents'/multiple clubs), only the FIRST is treated as the
+ * active bid-match right, a disclosed simplification of the real "family nominates one club" rule.
+ * `null` for a fictional prospect, a real prospect with no tie, or a `realFullName` that doesn't
+ * resolve to any known record (shouldn't happen for an actual drafted player, but never throws).
+ */
+export function primaryTieFor(prospect: Player): RealProspectTie | null {
+  if (!prospect.realFullName) return null;
+  const record = REAL_PROSPECTS.find((r) => r.name === prospect.realFullName);
+  // `?? []` (not just an interface guarantee): every real prospect record from before round 88 has
+  // no `ties` key at all in the on-disk JSON (see buildRealProspects.ts's own doc comment on why
+  // there's no backfill migration), so this is `undefined` at runtime for the ~1,830 pre-round-88
+  // records despite the type saying `readonly RealProspectTie[]`.
+  const ties = record?.ties ?? [];
+  return ties.length === 0 ? null : ties[0];
 }
 
 /**
@@ -1270,11 +1292,17 @@ const GENERIC_REPORT_TEMPLATES: readonly ((p: Player) => string)[] = [
 // - Family-AFL-connection and Academy/NGA/father-son recruitment-pathway
 //   asides (common in the real sample — Snell's Duursma cousin, Gayfer's
 //   uncle Mick, Krasna's Next Generation Academy status, El Souki's
-//   multicultural NGA rights) have no underlying data model for fictional
-//   prospects — inventing them would be a specific, checkable-sounding claim
-//   with nothing behind it, the kind of thing this project discloses as
-//   missing rather than fakes (same reasoning as skipping Academy/NGA logic
-//   entirely for the fictional side of `generateProspectPool`).
+//   multicultural NGA rights) still have no underlying data model for
+//   FICTIONAL prospects as of round 88 — inventing them would be a specific,
+//   checkable-sounding claim with nothing behind it, the kind of thing this
+//   project discloses as missing rather than fakes (same reasoning as
+//   skipping Academy/NGA logic entirely for the fictional side of
+//   `generateProspectPool`). Round 88 DID close this gap for a small,
+//   specific set of REAL prospects a source report names with a real tie —
+//   see `realProspects.ts`'s `RealProspectTie`/`ties` and this file's own
+//   `primaryTieFor` — surfaced structurally in Draft.tsx (a badge + the
+//   bid-match mechanic) rather than as prose here, so this generator still
+//   correctly has nothing to say about it either way.
 // ---------------------------------------------------------------------------
 
 /** Archetype-appropriate "second stat" for a flavor stat-line, plus a plausible range — every range a rough eyeball off the real sample set's own numbers (disposals 11-35, marks/tackles/clearances high single figures to teens, goals 1-4), not sourced from a larger real distribution the way `simulatedUnderageSignal`'s constants are; this is narrative flavor text, not a number anything else in the engine reads. */
@@ -1656,6 +1684,19 @@ export function draftPlayer(prospect: Player, clubName: string, pickNumber: numb
   };
   const terms: ReSignTerms = { years: 2, salaryPerYear: prospect.totalValue };
   return reSign(assigned, terms, year);
+}
+
+/**
+ * Round 88: re-credits an already-`draftPlayer`-ed player to a different club — the Father-Son/
+ * Academy bid-match redirect (see `draftPicks.ts`'s doc comment on `canClubMatchBid`/
+ * `forfeitPicksForBid`, and `primaryTieFor` above for how the tied club is found). Only moves the 3
+ * club-identity fields `draftPlayer` itself would have set had it drafted straight to this club in
+ * the first place — `draft_pick`/`draft_year`/`draft_draftType`/contract terms are untouched, since
+ * this genuinely IS that same pick, just credited to the matching club instead of the natural bidder.
+ */
+export function redirectDraftedPlayerToClub(player: Player, clubName: string): Player {
+  const club = clubByName(clubName);
+  return { ...player, Team: clubName, OriginClub: clubName, ClubID: club?.ClubID ?? player.ClubID };
 }
 
 /**

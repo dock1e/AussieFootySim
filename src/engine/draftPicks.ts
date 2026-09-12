@@ -428,3 +428,80 @@ export function resolveDraftOrder(picks: readonly DraftPick[], year: number, lad
   }
   return order;
 }
+
+/**
+ * Round 88: Father-Son/Academy/NGA bid-matching — a new AFL rule Tyler's "Upcoming AFL Draft
+ * Prospects Report" says commences in the 2026 National Draft (see `RealProspectTie`'s doc comment
+ * in `realProspects.ts` for the data side of this feature: which real prospects carry a tie, and to
+ * which club). A club with a real tie to a drafted prospect can match a rival's bid by forfeiting its
+ * own top pick(s) at a DVI cost keyed off its OWN ladder position — clubs who finished low pay a
+ * discount, clubs who finished high pay a loading, mirroring the real rule's intent of stopping
+ * top-heavy clubs from cheaply securing father-son/academy talent. "Ladder position" here is `1` =
+ * minor premier, matching `resolveDraftOrder`'s own reversed-ladder convention (see `ladderPositionOf`).
+ *
+ * Worked example straight from the source report: a rival bids Pick 1 (3000 DVI) on a prospect tied
+ * to the reigning premier (ladder position 1) — 20% loading applies since pick 1 is inside the top
+ * 18 — so the premier needs 3000 * 1.20 = 3600 DVI to match, meaning it must commit two top-10 picks,
+ * not one.
+ *
+ * NOT YET WIRED to an interactive decision: `useSaveStore.ts`'s pick-loop integration always matches
+ * automatically when `canClubMatchBid` says the tied club can afford it, for both AI and the human's
+ * own club — a disclosed v1 simplification. A real "would you like to match or pass" prompt for the
+ * human's own tied club is real, sensible follow-up work, not attempted this round.
+ */
+
+/** Ladder position for bid-match purposes — `1` = minor premier (top of `ladder`), matching `resolveDraftOrder`'s own `[...ladder].reverse()` convention. `null` if `clubId` isn't on the ladder at all (can't happen for a real save, but callers get an explicit signal rather than a silently-wrong default). */
+export function ladderPositionOf(ladder: readonly LadderRow[] | null | undefined, clubId: number): number | null {
+  if (!ladder) return null;
+  const idx = ladder.findIndex((r) => r.clubId === clubId);
+  return idx === -1 ? null : idx + 1;
+}
+
+/** DVI loading/discount multiplier a club must pay to match a bid, purely a function of its own ladder position, the bid's pick number, and the year — see this section's doc comment for the source report's worked example. */
+export function bidMatchLoadPercent(clubLadderPosition: number, bidPickNumber: number, year: number): number {
+  const insideTop18 = bidPickNumber <= 18;
+  if (clubLadderPosition <= 2) return insideTop18 ? 1.2 : 1.0;
+  if (clubLadderPosition <= 4) return insideTop18 ? 1.1 : 1.0;
+  if (clubLadderPosition <= 10) return 1.0;
+  // 11th and below: the source report frames this discount as commencing "from 2027" — 2026 itself
+  // (the rule's launch year) gets no loading/discount for this tier, face value like 5th-10th.
+  return year >= 2027 && bidPickNumber <= 36 ? 0.9 : 1.0;
+}
+
+/** Hard rule from the source report: a bid beyond pick 36 can never be matched, at any price. */
+const MAX_MATCHABLE_BID_PICK = 36;
+/** Hard rule from the source report: at most 2 of the matching club's own picks can be combined to meet the required DVI. */
+const MAX_COMBINABLE_PICKS = 2;
+
+/** Picks a matching club would spend to cover `requiredDvi` for `year` — its own single highest-value pick if that alone suffices, else its two highest combined, else `null` if even that combination falls short. Shared by `canClubMatchBid` and `forfeitPicksForBid` so the two can never disagree about what's affordable. */
+function selectPicksForBid(picks: readonly DraftPick[], clubId: number, year: number, requiredDvi: number): DraftPick[] | null {
+  const owned = [...picks.filter((p) => p.currentClubId === clubId && p.year === year)].sort((a, b) => pickValue(b) - pickValue(a));
+  if (owned.length === 0) return null;
+  if (pickValue(owned[0]) >= requiredDvi) return [owned[0]];
+  const combo = owned.slice(0, MAX_COMBINABLE_PICKS);
+  const comboValue = combo.reduce((sum, p) => sum + pickValue(p), 0);
+  return comboValue >= requiredDvi ? combo : null;
+}
+
+/** Whether `clubId` can match a bid at `bidPickNumber` in `year`, given its own ladder position, using only its own picks for that year. */
+export function canClubMatchBid(picks: readonly DraftPick[], clubId: number, year: number, bidPickNumber: number, clubLadderPosition: number): boolean {
+  if (bidPickNumber > MAX_MATCHABLE_BID_PICK) return false;
+  const required = dviValueForPick(bidPickNumber) * bidMatchLoadPercent(clubLadderPosition, bidPickNumber, year);
+  return selectPicksForBid(picks, clubId, year, required) !== null;
+}
+
+/**
+ * Spends the minimal picks `clubId` needs to match a bid at `bidPickNumber` — call only after
+ * `canClubMatchBid` has confirmed affordability (this function trusts its caller and is a no-op if
+ * the club actually can't afford it, same "never throw mid-draft" defensiveness `transferPick` uses).
+ * Forfeits the spent picks entirely (removes them from the inventory) rather than transferring them
+ * to the natural bidder — a disclosed simplification of the real rule, where the matching club's
+ * replacement selection is generated fresh rather than handed to whoever it out-bid.
+ */
+export function forfeitPicksForBid(picks: readonly DraftPick[], clubId: number, year: number, bidPickNumber: number, clubLadderPosition: number): DraftPick[] {
+  const required = dviValueForPick(bidPickNumber) * bidMatchLoadPercent(clubLadderPosition, bidPickNumber, year);
+  const spend = selectPicksForBid(picks, clubId, year, required);
+  if (!spend) return [...picks];
+  const spendIds = new Set(spend.map((p) => p.id));
+  return picks.filter((p) => !spendIds.has(p.id));
+}

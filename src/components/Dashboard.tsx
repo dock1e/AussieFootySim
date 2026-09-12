@@ -37,7 +37,7 @@ import {
 } from "../engine/seasonSummary";
 import type { PlayedMatch, Season } from "../engine/season";
 import type { FixtureMatch } from "../engine/fixture";
-import type { LadderRow } from "../engine/ladder";
+import { recentForm, type LadderRow, type RoundResult } from "../engine/ladder";
 import type { MatchTeam } from "../engine/team";
 
 /**
@@ -133,6 +133,26 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
 
   const prevLadder = useMemo(() => (season ? previousLadder(season) : []), [season]);
 
+  /**
+   * Round 89, ROADMAP item #40 — "ladder card form indicator." Built once here (rather than inside
+   * `CompactLadder`/the modal separately) since both `LadderTable` call sites on this page want the
+   * same per-club last-5 form, and `season.played` -> `RoundResult[]` is the same small remap either
+   * way. `engine/ladder.ts`'s `recentForm` does the actual W/L/D derivation from each played round's
+   * final scores — see that file's own doc comment for why the shape is a local `RoundResult`
+   * rather than `season.ts`'s own `PlayedMatch` (ladder.ts can't import season.ts).
+   */
+  const formMap = useMemo(() => {
+    if (!season) return new Map<number, ("W" | "L" | "D")[]>();
+    const results: RoundResult[] = season.played.map((p) => ({
+      round: p.round,
+      homeClubId: p.homeClubId,
+      awayClubId: p.awayClubId,
+      homePoints: p.result.home.points,
+      awayPoints: p.result.away.points,
+    }));
+    return new Map(season.ladder.map((r) => [r.clubId, recentForm(r.clubId, results)]));
+  }, [season]);
+
   const totals = useMemo(() => (season ? seasonPlayerTotals(season) : null), [season]);
 
   // Reuses the exact same `freeAgentsFor` Contracts.tsx's own "Your Out-of-Contract Players" list
@@ -209,7 +229,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
                 <div className="text-xs uppercase tracking-wide text-slate-400">Ladder</div>
                 <ExpandHint label="Full ladder + fixtures" />
               </button>
-              <CompactLadder ladder={season.ladder} previousLadder={prevLadder} myClubId={myClubId} />
+              <CompactLadder ladder={season.ladder} previousLadder={prevLadder} myClubId={myClubId} recentForm={formMap} />
             </div>
             <div className="space-y-4">
               <LastGameCard
@@ -222,9 +242,11 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
                 lineupSet={lineupSet}
                 contractsOutThisYear={contractsOutThisYear}
                 emergingTalent={emergingTalent}
-                lastMatchPerformers={ourTopPerformers}
+                lastMatch={lastMatch}
+                myClubId={myClubId}
                 onGoToSelection={onGoToSelection}
                 onGoToContracts={onGoToContracts}
+                onOpenLastGame={() => setActiveModal({ type: "lastGame" })}
               />
             </div>
           </div>
@@ -301,6 +323,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
               ladder={season.ladder}
               previousLadder={prevLadder.length ? prevLadder : season.ladder}
               highlightClubId={myClubId}
+              recentForm={formMap}
             />
             <RoundFixture
               round={fixtureRound}
@@ -351,7 +374,18 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
  * the "Expand" trigger that opens the full ladder in a modal (see round 53,
  * this file's own top-level doc comment).
  */
-function CompactLadder({ ladder, previousLadder: prev, myClubId }: { ladder: LadderRow[]; previousLadder: LadderRow[]; myClubId: number }) {
+function CompactLadder({
+  ladder,
+  previousLadder: prev,
+  myClubId,
+  recentForm,
+}: {
+  ladder: LadderRow[];
+  previousLadder: LadderRow[];
+  myClubId: number;
+  /** Round 89, ROADMAP item #40 — forwarded straight to `LadderTable`'s own optional Form column, see this file's top-level `formMap`. */
+  recentForm?: Map<number, ("W" | "L" | "D")[]>;
+}) {
   const myIndex = ladder.findIndex((r) => r.clubId === myClubId);
   const start = Math.max(0, Math.min(myIndex - 3, ladder.length - 7));
   const end = Math.min(ladder.length, start + 7);
@@ -365,7 +399,16 @@ function CompactLadder({ ladder, previousLadder: prev, myClubId }: { ladder: Lad
   // `prev` is never windowed either — movement needs each club's full league-wide rank at both
   // points in time, not just its rank within this trimmed view.
   const prevFull = prev.length ? prev : ladder;
-  return <LadderTable ladder={ladder} previousLadder={prevFull} highlightClubId={myClubId} windowClubIds={windowClubIds} />;
+  return (
+    <LadderTable
+      ladder={ladder}
+      previousLadder={prevFull}
+      highlightClubId={myClubId}
+      windowClubIds={windowClubIds}
+      compact
+      recentForm={recentForm}
+    />
+  );
 }
 
 function LastGameCard({
@@ -435,10 +478,23 @@ function LastGameCard({
 function LastGameModal({ match, teams, onClose }: { match: PlayedMatch; teams: Map<number, MatchTeam>; onClose: () => void }) {
   const home = teams.get(match.homeClubId);
   const away = teams.get(match.awayClubId);
+  const myClub = useGameStore((s) => s.myClub);
+  const submitCoachesVotes = useSeasonStore((s) => s.submitCoachesVotes);
   if (!home || !away) return null;
   return (
     <Modal title={`Round ${match.round} — ${home.name} vs ${away.name}`} onClose={onClose}>
-      <FullTimeResult result={match.result} homeTeam={home} awayTeam={away} onNewMatch={onClose} closeLabel="Close" />
+      <FullTimeResult
+        result={match.result}
+        homeTeam={home}
+        awayTeam={away}
+        onNewMatch={onClose}
+        closeLabel="Close"
+        coachesVotes={match.coachesVotes}
+        myClub={myClub}
+        onSubmitBallot={(side, allocations) =>
+          submitCoachesVotes({ kind: "round", round: match.round, homeClubId: match.homeClubId, awayClubId: match.awayClubId }, side, allocations)
+        }
+      />
     </Modal>
   );
 }
@@ -512,25 +568,47 @@ function ActionsCard({
   lineupSet,
   contractsOutThisYear,
   emergingTalent,
-  lastMatchPerformers,
+  lastMatch,
+  myClubId,
   onGoToSelection,
   onGoToContracts,
+  onOpenLastGame,
 }: {
   lineupSet: boolean;
   contractsOutThisYear: number;
   emergingTalent: Player[];
-  lastMatchPerformers: PerformerLine[];
+  lastMatch: PlayedMatch | null;
+  myClubId: number;
   onGoToSelection?: () => void;
   onGoToContracts?: () => void;
+  onOpenLastGame?: () => void;
 }) {
+  // Sep 2026 round 90, [[Coaches Votes and MVP Award]], backlog #30 — replaces the old "Worth
+  // acknowledging" line (which only ever repeated `LastGameCard`'s own "Best afield for us" list
+  // right above this card, so nothing is lost by dropping it) with an actionable prompt whenever
+  // the user's own club played a match that still has an un-submitted ballot waiting on them.
+  // `lastMatch.coachesVotes` is undefined for a match simulated before this feature existed — no
+  // prompt in that case either, same "missing = feature didn't exist yet" convention used elsewhere.
+  const mySide: "home" | "away" | null = lastMatch ? (lastMatch.homeClubId === myClubId ? "home" : lastMatch.awayClubId === myClubId ? "away" : null) : null;
+  const myBallotIsUser = mySide === "home" ? lastMatch?.coachesVotes?.homeBallotIsUser : mySide === "away" ? lastMatch?.coachesVotes?.awayBallotIsUser : undefined;
+  const needsVote = !!lastMatch?.coachesVotes && mySide !== null && !myBallotIsUser;
+  const opponentId = lastMatch ? (mySide === "home" ? lastMatch.awayClubId : lastMatch.homeClubId) : undefined;
+
   return (
     <div className="card">
       <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Coach actions</div>
 
-      {lastMatchPerformers.length > 0 && (
-        <div className="mb-3 rounded-lg bg-base-800 p-2.5 text-sm">
-          <span className="font-medium text-accent-light">Worth acknowledging: </span>
-          {lastMatchPerformers.map((p) => playerFullName(p.player)).join(", ")} had great games last round.
+      {needsVote && lastMatch && (
+        <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-base-800 p-2.5 text-sm">
+          <span>
+            <span className="font-medium text-accent-light">Coaches votes: </span>
+            Submit your 5-4-3-2-1 for Round {lastMatch.round} vs {clubById(opponentId ?? -1)?.name ?? "your last opponent"}.
+          </span>
+          {onOpenLastGame && (
+            <button onClick={onOpenLastGame} className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
+              Submit votes
+            </button>
+          )}
         </div>
       )}
 

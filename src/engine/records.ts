@@ -5,6 +5,7 @@ import { realWorldRecordsFor, type RealWorldRecordEntry, type RecordCategory } f
 import { debutYearFor } from "../data/realDebutDates.ts";
 import { allTimePlayerTotals, seasonPlayerTotals, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
 import type { Season } from "./season.ts";
+import { draftHistoryFor } from "../data/realDraftHistory.ts";
 
 export type { RecordCategory } from "../data/realWorldRecords.ts";
 
@@ -87,6 +88,51 @@ interface LegendWriteupInput {
   stillActive: boolean;
   startClub: string;
   endClub: string;
+  /** Round 89, ROADMAP item #33 — see `distinguishingFactFor`'s own doc comment. `undefined` for the (large) majority of players with no notable real draft story, in which case `formatLegendWriteup` falls back to the existing career-arc-only template pool untouched. */
+  distinguishingFact?: string;
+}
+
+/**
+ * Round 89, ROADMAP item #33 — "contextual write-ups." Tyler's own framing: the existing template
+ * pool "doesn't reach into a player's own draft history/real awards/Brownlow-Coaches votes/career
+ * honours to write something specific to them." This reaches into `realDraftHistory.ts` (the same
+ * source `PlayerProfileModal.tsx`'s "Draft & Club History" section reads) for exactly one short,
+ * genuinely notable clause per player — never a fabricated one.
+ *
+ * Deliberately narrow, for two disclosed reasons. First, only pick number/draft type and Brownlow
+ * vote counts are used — both plain, unambiguous numeric facts. The awards TEXT itself
+ * (`DraftHistoryEntry.awards`, e.g. "AA40: 2025") is NOT decoded into prose here: several of its
+ * category codes (`AA40`, `AFLPA 1st`, `Ayres`) don't have a confidently-known real-world expansion
+ * available to this project, and guessing would risk asserting a wrong claim as fact — exactly what
+ * this codebase's "flag it, don't fake it" convention (see `realDraftHistory.ts`'s own doc comment
+ * on snapshot inconsistency) argues against. Second, a fact is only returned for genuinely notable
+ * cases (a Pick 1, a top-5 pick, or a Rookie-draft "find" with real recorded awards) — a mid-list
+ * Round 4 rookie signing gets no fact rather than a strained one, matching `draftTierOf`'s own
+ * (PlayerProfileModal.tsx) "elite/early/standard/rookie/rookieGem" tiering logic and its underlying
+ * judgement about what's actually worth calling out.
+ */
+function distinguishingFactFor(name: string): string | undefined {
+  const entries = draftHistoryFor(name);
+  if (entries.length === 0) return undefined;
+  const national = entries
+    .filter((e) => e.draftType === "National" && e.pickNumber !== null)
+    .sort((a, b) => a.year - b.year);
+  const rookieGem = entries
+    .filter((e) => e.draftType === "Rookie" && e.pickNumber !== null && e.awards.trim() !== "")
+    .sort((a, b) => a.year - b.year);
+  if (national.length > 0 && national[0].pickNumber === 1) {
+    return `the Pick 1 selection in the ${national[0].year} National Draft`;
+  }
+  if (rookieGem.length > 0) {
+    const e = rookieGem[0];
+    return e.brownlowVotes > 0
+      ? `a Rookie-draft find (Pick ${e.pickNumber}, ${e.year}) who went on to poll ${e.brownlowVotes} Brownlow votes`
+      : `a Rookie-draft find (Pick ${e.pickNumber}, ${e.year}) who outplayed that draft position`;
+  }
+  if (national.length > 0 && national[0].pickNumber !== null && national[0].pickNumber <= 5) {
+    return `a top-5 selection (Pick ${national[0].pickNumber}) in the ${national[0].year} National Draft`;
+  }
+  return undefined;
 }
 
 /**
@@ -122,6 +168,8 @@ const CATEGORY_WRITEUP_META: Record<RecordCategory, { verb: string; noun: string
   hitouts: { verb: "winning", noun: "hit outs" },
   hitoutsToAdvantage: { verb: "winning", noun: "hit outs to advantage" },
   fantasyPoints: { verb: "racking up", noun: "fantasy points" },
+  // Sep 2026 round 90, [[Coaches Votes and MVP Award]].
+  coachesVotes: { verb: "polling", noun: "coaches votes" },
 };
 
 /**
@@ -149,6 +197,7 @@ interface Frag {
   endA: string;
   endB: string;
   endC: string;
+  distinguishingFact?: string;
 }
 
 function toFrag(i: LegendWriteupInput): Frag {
@@ -168,6 +217,7 @@ function toFrag(i: LegendWriteupInput): Frag {
     endA: i.stillActive ? "is still adding to it today" : `retired in ${i.endYear}`,
     endB: i.stillActive ? "remains an active force today" : `bowed out in ${i.endYear}`,
     endC: i.stillActive ? "shows no sign of stopping" : `called time in ${i.endYear}`,
+    distinguishingFact: i.distinguishingFact,
   };
 }
 
@@ -221,6 +271,24 @@ const WRITEUP_TEMPLATES: ((f: Frag) => string)[] = [
   (f) => `From a ${f.startYear} debut ${f.clubPhrase} to ${f.tally}${f.stillActive ? " and counting" : ""}, ${f.name}'s career ${f.stillActive ? "continues to this day" : `wrapped up in ${f.endYear}`}.`,
 ];
 
+/**
+ * Round 89, ROADMAP item #33 — a small SEPARATE pool, used only when `toFrag` resolved a
+ * `distinguishingFact` (see `distinguishingFactFor`). Kept apart from the 36 career-arc templates
+ * above rather than folding a conditional `distinguishingFact` clause into those, so a player with
+ * no notable draft story is guaranteed to render one of the 36 exactly as before — zero risk of an
+ * awkward "undefined" or empty clause slipping into the majority-case prose.
+ */
+const FACT_WRITEUP_TEMPLATES: ((f: Frag & { distinguishingFact: string }) => string)[] = [
+  (f) => `${f.name} — ${f.distinguishingFact} — went on to build a career of ${f.tally} ${f.clubPhrase} since ${f.startYear}, and ${f.endA}.`,
+  (f) => `Taken as ${f.distinguishingFact}, ${f.name} repaid that faith with ${f.tally} ${f.clubPhrase}, and ${f.endB}.`,
+  (f) => `${f.name}, ${f.distinguishingFact}, has been ${f.verb} ${f.noun} ever since — ${f.tally} ${f.clubPhrase} since ${f.startYear}, and ${f.endC}.`,
+  (f) => `As ${f.distinguishingFact}, ${f.name} arrived in ${f.startYear} with expectation attached — and delivered ${f.tally} ${f.clubPhrase}, before ${f.endA}.`,
+  (f) => `${f.name} was ${f.distinguishingFact}, and a career of ${f.tally} ${f.clubPhrase} since ${f.startYear} has more than justified it — ${f.endB}.`,
+  (f) => `Few draft stories compare to ${f.name}'s: ${f.distinguishingFact}, who went on to compile ${f.tally} ${f.clubPhrase}, and ${f.endC}.`,
+  (f) => `${f.name} entered the system as ${f.distinguishingFact} and never looked back, finishing with ${f.tally} ${f.clubPhrase}, and ${f.endA}.`,
+  (f) => `${f.tally} ${f.clubPhrase} since ${f.startYear} — not bad for ${f.name}, ${f.distinguishingFact}, who ${f.endB}.`,
+];
+
 /** Simple deterministic string hash (djb2-ish) — same `name + category` always maps to the same template index, so a given player's write-up doesn't change from one render to the next, but different players (and the same player across different categories) land on different templates. */
 function hashKey(key: string): number {
   let h = 0;
@@ -233,9 +301,18 @@ function hashKey(key: string): number {
  * The SAME function drives every real legend with a `bio` and any simulated player who reaches the
  * podium in any of the 24 categories — one shared pool, so the two can never read as inconsistent in
  * tone. See `WRITEUP_TEMPLATES`'s own doc comment for the "why 36, why deterministic" reasoning.
+ *
+ * Round 89: when `toFrag` resolved a `distinguishingFact`, this instead (deterministically, same
+ * hashing idea) picks from the smaller `FACT_WRITEUP_TEMPLATES` pool — see that pool's own doc
+ * comment for why it's kept separate rather than merged into the 36.
  */
 function formatLegendWriteup(i: LegendWriteupInput): string {
   const f = toFrag(i);
+  if (f.distinguishingFact) {
+    const factF = f as Frag & { distinguishingFact: string };
+    const template = FACT_WRITEUP_TEMPLATES[hashKey(`${i.name}|${i.category}|fact`) % FACT_WRITEUP_TEMPLATES.length];
+    return template(factF);
+  }
   const template = WRITEUP_TEMPLATES[hashKey(`${i.name}|${i.category}`) % WRITEUP_TEMPLATES.length];
   return template(f);
 }
@@ -329,6 +406,7 @@ function simLegendWriteupInput(player: Player, category: RecordCategory, value: 
     stillActive,
     startClub: player.Team,
     endClub: player.Team,
+    distinguishingFact: distinguishingFactFor(player.realFullName ?? playerFullName(player)),
   };
 }
 
@@ -355,6 +433,7 @@ function realLegendWriteupInput(entry: RealWorldRecordEntry, category: RecordCat
     stillActive: entry.bio.stillActive,
     startClub: entry.bio.startClub,
     endClub: entry.bio.endClub,
+    distinguishingFact: distinguishingFactFor(entry.name),
   };
 }
 
@@ -610,6 +689,8 @@ interface SeasonWriteupInput {
   gamesThisSeason: number;
   club: string;
   rank: number;
+  /** Round 89, ROADMAP item #33 — same `distinguishingFactFor` lookup the All-Time pool's `LegendWriteupInput` uses, see that function's own doc comment. */
+  distinguishingFact?: string;
 }
 
 interface SeasonFrag {
@@ -624,6 +705,7 @@ interface SeasonFrag {
   rankPhrasePlural: string;
   /** Participle form, for "has them ___" or an appositive tail: "leading the competition" / "sitting 4th in the competition". */
   rankPhraseIng: string;
+  distinguishingFact?: string;
 }
 
 function toSeasonFrag(i: SeasonWriteupInput): SeasonFrag {
@@ -640,6 +722,7 @@ function toSeasonFrag(i: SeasonWriteupInput): SeasonFrag {
     rankPhrase: i.rank === 1 ? `leads ${rankTail}` : `sits ${rankTail}`,
     rankPhrasePlural: i.rank === 1 ? `lead ${rankTail}` : `sit ${rankTail}`,
     rankPhraseIng: i.rank === 1 ? `leading ${rankTail}` : `sitting ${rankTail}`,
+    distinguishingFact: i.distinguishingFact,
   };
 }
 
@@ -714,8 +797,37 @@ const SEASON_WRITEUP_TEMPLATES: ((f: SeasonFrag) => string)[] = [
   (f) => `${f.tally} and counting — ${f.name} has been in imperious ${f.noun} form for ${f.club} this season, ${f.rankPhraseIng}.`,
 ];
 
+/** Round 89, ROADMAP item #33 — This-Season counterpart to `FACT_WRITEUP_TEMPLATES`; see that pool's own doc comment for why a separate small pool beats a conditional clause inside the main 40. */
+/**
+ * Round 89 fix, found during live verification: `SeasonFrag.tally` already bakes the category noun
+ * in ("225 disposals through 23 games" — see `toSeasonFrag`), so a template that ALSO adds a separate
+ * "in ${f.noun}" clause next to `f.tally` doubles up ("...through 23 games in disposals..."). All 8
+ * templates below were originally written that way (matching the pre-existing `SEASON_WRITEUP_TEMPLATES`
+ * pool's own convention, which has the identical doubling in several of its 40 templates — a real,
+ * pre-existing wording quirk, now tracked as its own backlog item rather than rewritten wholesale here,
+ * since that's a much larger copy-editing pass than this round's scope). Fixed narrowly here because
+ * these 8 are this round's own new code: every "in ${f.noun}" adjacent to `f.tally` was dropped —
+ * `rankPhrase`/`rankPhrasePlural`/`rankPhraseIng` already supply "in the competition", so nothing is
+ * lost, and `f.tally` still names the stat either way.
+ */
+const FACT_SEASON_WRITEUP_TEMPLATES: ((f: SeasonFrag & { distinguishingFact: string }) => string)[] = [
+  (f) => `${f.name}, ${f.distinguishingFact}, ${f.rankPhrase} this season — ${f.tally} for ${f.club}.`,
+  (f) => `As ${f.distinguishingFact}, ${f.name} is repaying that pick with ${f.tally} for ${f.club} this season, ${f.rankPhraseIng}.`,
+  (f) => `Taken as ${f.distinguishingFact}, ${f.name} has grown into exactly that for ${f.club}: ${f.tally} this season, good enough to ${f.rankPhrasePlural}.`,
+  (f) => `${f.name} arrived as ${f.distinguishingFact} — this season's ${f.tally} for ${f.club} shows why, ${f.rankPhraseIng}.`,
+  (f) => `${f.distinguishingFact.charAt(0).toUpperCase()}${f.distinguishingFact.slice(1)}, ${f.name} has translated that promise into ${f.tally} for ${f.club} this season.`,
+  (f) => `${f.name}'s draft story — ${f.distinguishingFact} — reads well against this season's numbers: ${f.tally}, ${f.rankPhraseIng} for ${f.club}.`,
+  (f) => `For ${f.name}, ${f.distinguishingFact}, this season's ${f.tally} for ${f.club} is the clearest sign yet of the ceiling scouts saw.`,
+  (f) => `${f.name} was ${f.distinguishingFact}, and now ${f.rankPhrasePlural} for ${f.club} with ${f.tally} this season.`,
+];
+
 function formatSeasonWriteup(i: SeasonWriteupInput): string {
   const f = toSeasonFrag(i);
+  if (f.distinguishingFact) {
+    const factF = f as SeasonFrag & { distinguishingFact: string };
+    const template = FACT_SEASON_WRITEUP_TEMPLATES[hashKey(`${i.name}|${i.category}|season|fact`) % FACT_SEASON_WRITEUP_TEMPLATES.length];
+    return template(factF);
+  }
   const template = SEASON_WRITEUP_TEMPLATES[hashKey(`${i.name}|${i.category}|season`) % SEASON_WRITEUP_TEMPLATES.length];
   return template(f);
 }
@@ -729,6 +841,7 @@ function seasonWriteupInputFor(player: Player, category: RecordCategory, value: 
     gamesThisSeason: t?.gamesPlayed ?? 0,
     club: player.Team,
     rank,
+    distinguishingFact: distinguishingFactFor(player.realFullName ?? playerFullName(player)),
   };
 }
 

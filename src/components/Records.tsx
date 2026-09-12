@@ -116,6 +116,9 @@ const CATEGORY_GROUP: Record<RecordCategory, StatGroup> = {
   gamesPlayed: "General",
   finalsAppearances: "General",
   fantasyPoints: "General",
+  // Sep 2026 round 90, [[Coaches Votes and MVP Award]] — a whole-of-game "best afield" award, not a
+  // raw counting stat, so General fits it the same way it fits Fantasy Points.
+  coachesVotes: "General",
   disposals: "Disposal Leaders",
   kicks: "Disposal Leaders",
   handballs: "Disposal Leaders",
@@ -154,6 +157,7 @@ const PLACEHOLDER_STATS: PlaceholderStat[] = [
 
 const CATEGORY_UNIT: Record<RecordCategory, string> = {
   fantasyPoints: "points",
+  coachesVotes: "votes",
   goals: "goals",
   disposals: "disposals",
   gamesPlayed: "games",
@@ -185,6 +189,7 @@ const CATEGORY_SHORT: Record<RecordCategory, string> = {
   gamesPlayed: "GM",
   finalsAppearances: "FIN",
   fantasyPoints: "AF",
+  coachesVotes: "CV",
   disposals: "D",
   kicks: "K",
   handballs: "H",
@@ -266,6 +271,17 @@ export function Records() {
   const [archetypeFilter, setArchetypeFilter] = useState<Archetype | "all">("all");
   const [teamFilter, setTeamFilter] = useState<string>("all");
   const [expandedRank, setExpandedRank] = useState<number | null>(1);
+  /**
+   * Round 89, ROADMAP item #32 — "write-up hover popup." `expandedRank` (click-toggled) is kept
+   * exactly as-is — it's still what a touch tap sets, since touch devices don't have a meaningful
+   * hover state to preview from. `hoveredRank` is purely additive: on desktop, moving the mouse over
+   * a row shows its write-up immediately via `activeRank` below, with NO click required; moving away
+   * falls back to whatever `expandedRank` last was (the row 1 default, or the last-clicked row) —
+   * so a desktop user can still click to "pin" a row open while looking elsewhere on the page, and a
+   * touch user's tap-to-show behaviour is completely unchanged.
+   */
+  const [hoveredRank, setHoveredRank] = useState<number | null>(null);
+  const activeRank = hoveredRank ?? expandedRank;
   const [page, setPage] = useState(0);
 
   const label = CATEGORY_LABEL[category];
@@ -293,7 +309,7 @@ export function Records() {
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const pagedRows = filteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
-  const expandedRow = allRows.find((r) => r.rank === expandedRank);
+  const expandedRow = allRows.find((r) => r.rank === activeRank);
   const expandedWriteup = useMemo(() => {
     if (!expandedRow) return undefined;
     return writeupFor(expandedRow, category, seasonArchives, season, year, false);
@@ -320,7 +336,7 @@ export function Records() {
   const seasonTotalPages = Math.max(1, Math.ceil(seasonFilteredRows.length / PAGE_SIZE));
   const seasonPagedRows = seasonFilteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
-  const expandedSeasonRow = seasonFilteredRows.find((r) => r.rank === expandedRank);
+  const expandedSeasonRow = seasonFilteredRows.find((r) => r.rank === activeRank);
   const expandedSeasonWriteup = useMemo(() => {
     if (!expandedSeasonRow || !season) return undefined;
     const pseudoRow: RecordRow = {
@@ -478,13 +494,15 @@ export function Records() {
           <div className="space-y-0.5 text-sm">
             {pagedRows.length === 0 && <div className="px-3 py-2 text-slate-500">No players match this filter.</div>}
             {pagedRows.map((row) => {
-              const expanded = expandedRank === row.rank;
+              const expanded = activeRank === row.rank;
               const isTop5 = row.rank <= 5;
               const isGoat = row.rank === 1;
               return (
                 <div key={row.rank}>
                   <button
-                    onClick={() => setExpandedRank(expanded ? null : row.rank)}
+                    onClick={() => setExpandedRank(expandedRank === row.rank ? null : row.rank)}
+                    onMouseEnter={() => setHoveredRank(row.rank)}
+                    onMouseLeave={() => setHoveredRank(null)}
                     className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${tierRowClasses(row.rank)}`}
                   >
                     <span className="flex min-w-0 items-center gap-2">
@@ -573,10 +591,15 @@ export function Records() {
               </thead>
               <tbody>
                 {seasonPagedRows.map((row) => {
-                  const expanded = expandedRank === row.rank;
+                  const expanded = activeRank === row.rank;
                   return (
                     <Fragment key={row.rank}>
-                      <tr onClick={() => setExpandedRank(expanded ? null : row.rank)} className="cursor-pointer odd:bg-base-800/50 hover:bg-base-800">
+                      <tr
+                        onClick={() => setExpandedRank(expandedRank === row.rank ? null : row.rank)}
+                        onMouseEnter={() => setHoveredRank(row.rank)}
+                        onMouseLeave={() => setHoveredRank(null)}
+                        className="cursor-pointer odd:bg-base-800/50 hover:bg-base-800"
+                      >
                         <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">{row.rank}</td>
                         <td className="px-2 py-1.5">
                           <span className="flex min-w-0 items-center gap-2">

@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { MatchResult, BoxScoreLine } from "../engine/match";
 import type { MatchTeam } from "../engine/team";
-import type { Player } from "../types/player";
+import { playerFullName, type Player } from "../types/player";
 import { quarterlyPoints, sumTeam } from "../engine/summary";
 import { computeAussieFootySimRatings, fantasyPointsFor } from "../engine/ratings";
+import { isValidBallot, VOTE_VALUES, type CoachesVoteAllocation, type MatchCoachesVotes } from "../engine/coachesVotes";
 import { DetailedStatsTable } from "./DetailedStatsTable";
 import { ClubBadgeByName } from "./ClubBadge";
 import { PlayerLink } from "./PlayerLink";
@@ -43,6 +44,9 @@ export function FullTimeResult({
   awayTeam,
   onNewMatch,
   closeLabel = "New match-up",
+  coachesVotes,
+  myClub,
+  onSubmitBallot,
 }: {
   result: MatchResult;
   homeTeam: MatchTeam;
@@ -50,6 +54,16 @@ export function FullTimeResult({
   onNewMatch: () => void;
   /** Override the footer button's label — e.g. "Back to ladder" when this is reused to view a past season result rather than an ad-hoc exhibition match. */
   closeLabel?: string;
+  /**
+   * Sep 2026 round 90, [[Coaches Votes and MVP Award]] — undefined for an ad-hoc `LiveMatch.tsx`
+   * friendly (no season/fixture to feed a tally) or a pre-round-90 archived match; present for every
+   * season/finals match from round 90 on. When present, the Coaches Votes card renders read-only.
+   */
+  coachesVotes?: MatchCoachesVotes;
+  /** The user's own club name (matching `homeTeam.name`/`awayTeam.name` — same comparison `LiveMatch.tsx`'s own `mySide` already uses) — which side, if either, gets a submit-your-ballot option. */
+  myClub?: string;
+  /** Presence (not just `myClub` matching a side) is what gates a real submission FORM rather than a read-only display — absent for the archived-match review screen, where you can look back but not retroactively vote. */
+  onSubmitBallot?: (side: "home" | "away", allocations: CoachesVoteAllocation[]) => void;
 }) {
   const homeIds = useMemo(() => new Set(homeTeam.players.map((p) => p.PlayerID)), [homeTeam]);
   const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
@@ -191,6 +205,10 @@ export function FullTimeResult({
         <TopPerformers title="Top performers" clubName={awayTeam.name} rows={topAway} />
       </div>
 
+      {coachesVotes && (
+        <CoachesVotesCard votes={coachesVotes} homeTeam={homeTeam} awayTeam={awayTeam} myClub={myClub} onSubmitBallot={onSubmitBallot} />
+      )}
+
       {/* Aug 2026 round 49, [[Detailed Match Statistics]] — Tyler: "a much more detailed view of
           player statistics... at the end of the game." The two TopPerformers lists above are a
           5-a-side quick glance (unchanged); this is the actual full squad, every column, both teams
@@ -307,6 +325,143 @@ function TopPerformers({
             </span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Sep 2026 round 90, [[Coaches Votes and MVP Award]] — Tyler: "As a coach at the end of the game I
+ * want to have the option to submit my 5,4,3,2,1 coaches votes for best afield be it from my team
+ * or the opposition team." Shown for every season/finals match (own club or not — real supporters
+ * follow the weekly votes regardless of who played); the submit form only appears for `mySide`, and
+ * only when `onSubmitBallot` is actually wired up (SeasonHub's live review, not the read-only
+ * archived-match screen or an ad-hoc LiveMatch friendly, neither of which pass it).
+ */
+function CoachesVotesCard({
+  votes,
+  homeTeam,
+  awayTeam,
+  myClub,
+  onSubmitBallot,
+}: {
+  votes: MatchCoachesVotes;
+  homeTeam: MatchTeam;
+  awayTeam: MatchTeam;
+  myClub?: string;
+  onSubmitBallot?: (side: "home" | "away", allocations: CoachesVoteAllocation[]) => void;
+}) {
+  const pool = useMemo(() => [...homeTeam.players, ...awayTeam.players], [homeTeam, awayTeam]);
+  const playerById = useMemo(() => new Map(pool.map((p) => [p.PlayerID, p])), [pool]);
+  const mySide: "home" | "away" | null = homeTeam.name === myClub ? "home" : awayTeam.name === myClub ? "away" : null;
+  const myBallot = mySide === "home" ? votes.homeCoachBallot : mySide === "away" ? votes.awayCoachBallot : null;
+  const myBallotIsUser = mySide === "home" ? votes.homeBallotIsUser : mySide === "away" ? votes.awayBallotIsUser : false;
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<(number | null)[]>([null, null, null, null, null]);
+
+  function startEditing() {
+    const sorted = myBallot ? [...myBallot].sort((a, b) => b.votes - a.votes) : [];
+    setDraft(VOTE_VALUES.map((_, i) => sorted[i]?.playerId ?? null));
+    setEditing(true);
+  }
+
+  const draftAllocations: CoachesVoteAllocation[] | null = draft.every((id): id is number => id !== null)
+    ? draft.map((id, i) => ({ playerId: id, votes: VOTE_VALUES[i] }))
+    : null;
+  const canSubmitDraft = draftAllocations !== null && isValidBallot(draftAllocations);
+
+  function submit() {
+    if (!mySide || !onSubmitBallot || !draftAllocations || !isValidBallot(draftAllocations)) return;
+    onSubmitBallot(mySide, draftAllocations);
+    setEditing(false);
+  }
+
+  return (
+    <div className="card">
+      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Coaches votes</div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <BallotList
+          ballot={votes.homeCoachBallot}
+          playerById={playerById}
+          label={`${homeTeam.name}'s coach${votes.homeBallotIsUser ? " — your ballot" : ""}`}
+        />
+        <BallotList
+          ballot={votes.awayCoachBallot}
+          playerById={playerById}
+          label={`${awayTeam.name}'s coach${votes.awayBallotIsUser ? " — your ballot" : ""}`}
+        />
+      </div>
+
+      {mySide && onSubmitBallot && !editing && (
+        <button
+          onClick={startEditing}
+          className="mt-4 rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600"
+        >
+          {myBallotIsUser ? "Edit your votes" : "Submit your votes"}
+        </button>
+      )}
+
+      {mySide && onSubmitBallot && editing && (
+        <div className="mt-4 space-y-2 border-t border-base-700 pt-4">
+          <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
+            Your 5-4-3-2-1 for {mySide === "home" ? homeTeam.name : awayTeam.name}
+          </div>
+          {VOTE_VALUES.map((v, i) => (
+            <div key={v} className="flex items-center gap-2">
+              <span className="w-5 shrink-0 text-center font-bold tabular-nums text-accent">{v}</span>
+              <select
+                value={draft[i] ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value ? Number(e.target.value) : null;
+                  setDraft((d) => d.map((x, j) => (j === i ? id : x)));
+                }}
+                className="flex-1 rounded bg-base-800 px-2 py-1.5 text-sm"
+              >
+                <option value="">Select a player…</option>
+                {pool
+                  .filter((p) => !draft.includes(p.PlayerID) || draft[i] === p.PlayerID)
+                  .map((p) => (
+                    <option key={p.PlayerID} value={p.PlayerID}>
+                      {playerFullName(p)} ({p.Team})
+                    </option>
+                  ))}
+              </select>
+            </div>
+          ))}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={submit}
+              disabled={!canSubmitDraft}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Submit votes
+            </button>
+            <button onClick={() => setEditing(false)} className="rounded-lg bg-base-800 px-4 py-2 text-sm text-slate-400 hover:bg-base-700">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BallotList({ ballot, playerById, label }: { ballot: CoachesVoteAllocation[]; playerById: Map<number, Player>; label: string }) {
+  const sorted = [...ballot].sort((a, b) => b.votes - a.votes);
+  return (
+    <div>
+      <div className="mb-1.5 truncate text-xs uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="space-y-1 text-sm">
+        {sorted.map((a) => {
+          const player = playerById.get(a.playerId);
+          return (
+            <div key={a.playerId} className="flex items-center gap-2">
+              <span className="w-4 shrink-0 text-center font-bold tabular-nums text-accent">{a.votes}</span>
+              <span className="flex-1 truncate">{player ? <PlayerLink player={player} /> : "Unknown player"}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

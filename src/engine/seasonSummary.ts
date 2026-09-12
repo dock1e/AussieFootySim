@@ -130,6 +130,10 @@ export const LEADERBOARD_STAT_FIELDS = [
   "interceptMarks",
   "interceptPossessions",
   "turnovers",
+  // Sep 2026 round 90, [[Coaches Votes and MVP Award]] — see BoxScoreLine.coachesVotes's own doc
+  // comment. Added here (not hand-rolled elsewhere) so the season/all-time/career-total pipeline
+  // and the Statistics tab's stat picker pick it up for free, same as every stat above it.
+  "coachesVotes",
 ] as const satisfies readonly (keyof BoxScoreLine)[];
 
 /** Every leaderboard-eligible stat — the 22 real `BoxScoreLine` fields above, plus `fantasyPoints` (derived via `fantasyPointsFor`, not a stored field itself, same special-case the original 4-stat version already had). */
@@ -144,6 +148,7 @@ export type LeagueStat = (typeof LEADERBOARD_STAT_FIELDS)[number] | "fantasyPoin
  */
 export const ALL_LEAGUE_STATS: { key: LeagueStat; label: string }[] = [
   { key: "fantasyPoints", label: "Fantasy Points" },
+  { key: "coachesVotes", label: "Coaches Votes" },
   { key: "goals", label: "Goals" },
   { key: "behinds", label: "Behinds" },
   { key: "shotsAtGoal", label: "Shots at Goal" },
@@ -246,7 +251,13 @@ export function realSeasonEntryToTotals(playerId: number, e: RealSeasonEntry): S
  * round this project has ever shipped, so this is currently only reachable for these 3 — but
  * guarding generically means the exact same bug can't recur the next time a stat gets added here.
  */
-function aggregateBoxScores(matches: PlayedMatch[]): Map<number, SeasonPlayerTotals> {
+/**
+ * Sep 2026 round 90 — widened from `PlayedMatch[]` to just the `{ result }` shape both `PlayedMatch`
+ * and finals.ts's `FinalsMatch` share, so `finalsPlayerTotals` below can reuse this same reducer over
+ * `season.finals.matches` instead of needing its own copy — this function only ever reads `m.result`
+ * to begin with, never `round`/`homeClubId`/`awayClubId`, so nothing else about it changes.
+ */
+function aggregateBoxScores(matches: { result: MatchResult }[]): Map<number, SeasonPlayerTotals> {
   const totals = new Map<number, SeasonPlayerTotals>();
   for (const m of matches) {
     for (const [idStr, line] of Object.entries(m.result.boxScore)) {
@@ -272,6 +283,18 @@ function aggregateBoxScores(matches: PlayedMatch[]): Map<number, SeasonPlayerTot
  */
 export function seasonPlayerTotals(season: Season): Map<number, SeasonPlayerTotals> {
   return aggregateBoxScores(season.played);
+}
+
+/**
+ * Sep 2026 round 90, [[Coaches Votes and MVP Award]] — the AussieFootySim Finals Medal's own tally
+ * (finals-only, mirroring the real Gary Ayres Medal's separation from the season-long Champion
+ * Player award). Reuses `aggregateBoxScores` unchanged, just pointed at `season.finals.matches`
+ * instead of `season.played` — the exact same trick `seasonPlayerTotals` above already uses, not a
+ * new mechanism. Every `LEADERBOARD_STAT_FIELDS` stat gets a finals-only total this way, not just
+ * `coachesVotes` — harmless, and free for any future "finals stat leaders" view.
+ */
+export function finalsPlayerTotals(season: Season): Map<number, SeasonPlayerTotals> {
+  return aggregateBoxScores(season.finals?.matches ?? []);
 }
 
 /**

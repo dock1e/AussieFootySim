@@ -29,17 +29,30 @@ import { ClubBadge } from "./ClubBadge";
  * to 0 at the top of that slice instead of staying at Melbourne's true
  * rank). Filtering which rows render, rather than filtering the array the
  * caller passes in, keeps `i` correct throughout.
+ *
+ * `compact` and `recentForm` (round 89, ROADMAP item #40) are both optional and additive.
+ * `compact` drops the PF/PA columns — Tyler's own ask was specifically "drop PF/PA from compact,
+ * keep in expanded," not a wholesale re-layout, since P/W/D/L/%/Pts are the columns a glance at a
+ * sidebar ladder card actually needs; PF/PA only matter when you're studying percentage, which the
+ * full SeasonHub/modal view still shows in full. `recentForm` renders an extra "Form" column
+ * (last-5 W/L/D chips, oldest-to-newest) when supplied — every call site can compute one from its
+ * own `season.played` via `engine/ladder.ts`'s `recentForm`, so this component stays a pure render
+ * either way rather than reaching into season state itself.
  */
 export function LadderTable({
   ladder,
   highlightClubId,
   previousLadder,
   windowClubIds,
+  compact = false,
+  recentForm,
 }: {
   ladder: LadderRow[];
   highlightClubId?: number;
   previousLadder?: LadderRow[];
   windowClubIds?: Set<number>;
+  compact?: boolean;
+  recentForm?: Map<number, ("W" | "L" | "D")[]>;
 }) {
   const previousRank = previousLadder ? new Map(previousLadder.map((r, i) => [r.clubId, i + 1])) : null;
   return (
@@ -53,10 +66,15 @@ export function LadderTable({
             <th className="px-3 py-2 text-right">W</th>
             <th className="px-3 py-2 text-right">D</th>
             <th className="px-3 py-2 text-right">L</th>
-            <th className="px-3 py-2 text-right">PF</th>
-            <th className="px-3 py-2 text-right">PA</th>
+            {!compact && (
+              <>
+                <th className="px-3 py-2 text-right">PF</th>
+                <th className="px-3 py-2 text-right">PA</th>
+              </>
+            )}
             <th className="px-3 py-2 text-right">%</th>
             <th className="px-3 py-2 text-right">Pts</th>
+            {recentForm && <th className="px-3 py-2 text-left">Form</th>}
           </tr>
         </thead>
         <tbody>
@@ -90,10 +108,19 @@ export function LadderTable({
                 <td className="px-3 py-2 text-right tabular-nums">{row.wins}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{row.draws}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{row.losses}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-slate-400">{row.pointsFor}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-slate-400">{row.pointsAgainst}</td>
+                {!compact && (
+                  <>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">{row.pointsFor}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">{row.pointsAgainst}</td>
+                  </>
+                )}
                 <td className="px-3 py-2 text-right tabular-nums">{row.percentage.toFixed(1)}</td>
                 <td className="px-3 py-2 text-right tabular-nums font-semibold">{row.premiershipPoints}</td>
+                {recentForm && (
+                  <td className="px-3 py-2">
+                    <FormChips results={recentForm.get(row.clubId) ?? []} />
+                  </td>
+                )}
               </tr>
             );
           })}
@@ -103,6 +130,32 @@ export function LadderTable({
         <span className="text-accent-light">•</span> Top 8 make the finals
       </div>
     </div>
+  );
+}
+
+const FORM_TONE: Record<"W" | "L" | "D", string> = {
+  W: "bg-emerald-500/80 text-emerald-50",
+  L: "bg-rose-500/80 text-rose-50",
+  D: "bg-slate-500/80 text-slate-50",
+};
+
+const FORM_LABEL: Record<"W" | "L" | "D", string> = { W: "Win", L: "Loss", D: "Draw" };
+
+/** Small oldest-to-newest chip row for `LadderTable`'s optional Form column — see this file's own doc comment. Each chip's `title` spells out "Win"/"Loss"/"Draw" plus the 1-indexed position, so the sequence is legible on hover without relying on colour alone. */
+function FormChips({ results }: { results: ("W" | "L" | "D")[] }) {
+  if (results.length === 0) return <span className="text-xs text-slate-600">—</span>;
+  return (
+    <span className="flex items-center gap-1">
+      {results.map((r, i) => (
+        <span
+          key={i}
+          title={FORM_LABEL[r]}
+          className={`flex h-4 w-4 items-center justify-center rounded-sm text-[9px] font-bold ${FORM_TONE[r]}`}
+        >
+          {r}
+        </span>
+      ))}
+    </span>
   );
 }
 

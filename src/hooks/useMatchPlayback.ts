@@ -87,6 +87,9 @@ function emptyLine(): BoxScoreLine {
     interceptPossessions: 0,
     turnovers: 0,
     goalAssists: 0,
+    // Sep 2026 round 90 — kept in sync with engine/match.ts's own emptyLine(), same convention as
+    // the round 54/55 fields' own comments above.
+    coachesVotes: 0,
   };
 }
 

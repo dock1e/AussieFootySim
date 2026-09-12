@@ -90,6 +90,12 @@ function emptyLine(): BoxScoreLine {
     interceptPossessions: 0,
     turnovers: 0,
     goalAssists: 0,
+    // Sep 2026 round 90 — kept in sync with engine/match.ts's own emptyLine(), same convention as
+    // the round 54/55 fields' own comments above. Always 0 here and in every per-quarter line below
+    // (coachesVotes is a whole-of-match award baked on after the fact by engine/coachesVotes.ts's
+    // applyVotesToBoxScore, never a MatchEvent/StatDelta, so it has nothing to accumulate from) —
+    // sumTeam()'s generic per-key loop still sums it correctly across a real full-match box score.
+    coachesVotes: 0,
   };
 }
 

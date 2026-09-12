@@ -20,11 +20,13 @@ import {
   playsLikeFor,
   playsLikeConfidenceLabel,
   predictedDraftRange,
+  primaryTieFor,
   type MockOutlet,
   type ScoutingTier,
   type PredictedDraftRange,
 } from "../engine/draft";
 import type { DraftWindow } from "../engine/saveGame";
+import type { RealProspectTie } from "../data/realProspects";
 import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
 import type { Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
@@ -330,6 +332,7 @@ export function Draft() {
                     const accuracy = accuracyFor(p);
                     const band = scoutOvrBand(p, revealed.length, accuracy);
                     const conf = scoutConfidence(p, revealed.length, accuracy);
+                    const tie = primaryTieFor(p);
                     return (
                       <tr
                         key={p.PlayerID}
@@ -348,6 +351,7 @@ export function Draft() {
                           <span className="inline-flex items-center gap-1.5">
                             {playerFullName(p)}
                             {combineInvitedIds?.has(p.PlayerID) && <StatusPill label="COMBINE" tone="info" />}
+                            {tie && <TieBadge tie={tie} />}
                           </span>
                         </td>
                         <td className="py-1.5 pr-2 text-slate-400">{p.homeState}</td>
@@ -476,6 +480,27 @@ function ScoutingTierLabel({ tier }: { tier: ScoutingTier | undefined }) {
   return <StatusPill label={tier} tone={TIER_TONE[tier]} variant={solid ? "solid" : "soft"} />;
 }
 
+/** Round 88 — abbreviated type label for the compact `TieBadge`; spelled out in full wherever space allows instead (see `ProspectProfile`'s own tie line). */
+const TIE_TYPE_ABBR: Record<RealProspectTie["type"], string> = {
+  "Father-Son": "F/S",
+  Academy: "Academy",
+  NGA: "NGA",
+};
+
+/**
+ * Round 88 — real Father-Son/Academy/NGA recruitment-pathway tie, surfaced via
+ * `primaryTieFor` (engine/draft.ts). Shown regardless of scouting progress —
+ * unlike `ScoutingTierLabel`, a tie isn't something scouting reveals, it's a
+ * fact about the prospect's eligibility that determines who can bid-match for
+ * them at pick time (see `applyFatherSonRedirect` in useSaveStore.ts). Reuses
+ * `StatusPill`'s "info" tone, the same one already used for the COMBINE pill,
+ * so this reads as informational rather than competing with the tier pills'
+ * good/warn/bad language.
+ */
+function TieBadge({ tie }: { tie: RealProspectTie }) {
+  return <StatusPill label={`${TIE_TYPE_ABBR[tie.type]} → ${tie.club}`} tone="info" />;
+}
+
 /**
  * Round 70 — backlog #42. `ALL_PLAYERS` (the live established/drafted
  * population, imported directly the same way Contracts.tsx/TradePeriod.tsx
@@ -523,6 +548,7 @@ function ProspectProfile({
   const conf = scoutConfidence(prospect, revealedAttrs.length, scoutAccuracy);
   const width = Math.round((band.high - band.low) / 2);
   const scouted = revealedAttrs.length > 0;
+  const tie = primaryTieFor(prospect);
 
   return (
     <div className="space-y-4">
@@ -534,6 +560,15 @@ function ProspectProfile({
         <div className="mt-1 text-xs text-accent-light">
           ±{width} OVR read · {conf}% scouting confidence
         </div>
+        {tie && (
+          <div className="mt-2 flex items-center gap-1.5">
+            <TieBadge tie={tie} />
+            <span className="text-xs text-slate-500">
+              {tie.type === "Father-Son" ? "Father-Son selection" : tie.type === "NGA" ? "Next Generation Academy" : "Academy"} tie to {tie.club} —
+              that club can bid-match to secure this pick.
+            </span>
+          </div>
+        )}
       </div>
 
       <div>

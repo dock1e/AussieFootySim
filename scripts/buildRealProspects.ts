@@ -30,6 +30,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { CLUBS } from "../src/types/club.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IN_PATH = join(__dirname, "..", "data", "real_prospects_master.json");
@@ -61,6 +62,14 @@ interface RawRecord {
   ageGroupSheet: "U16" | "U18" | "U15" | "U17.5" | null;
   sourceSheets: string[];
   homeState: string | null;
+  // Round 88: widened for "Upcoming AFL Draft Prospects Report" ingestion — see realProspects.ts's
+  // own doc comments on these two fields. Optional (not `| null`) here specifically because this
+  // script is a raw pass-through with no per-record migration step (see file header): every record
+  // from before round 88 simply won't have these keys at all in the on-disk JSON, so the type here
+  // must admit `undefined`, not just `null`. `mergeDraftProspectsReport.ts` always writes both keys
+  // explicitly (null/[] when not applicable) on the new records it appends.
+  explicitEligibleYear?: number | null;
+  ties?: { club: string; type: "Father-Son" | "Academy" | "NGA" }[];
 }
 
 function main() {
@@ -96,6 +105,28 @@ function main() {
   const badDob = raw.filter((r) => r.dob && (r.dob[0] < 2005 || r.dob[0] > 2013));
   if (badDob.length > 0) {
     throw new Error(`${badDob.length} record(s) with an implausible birth year outside 2005-2013: ${badDob.map((r) => `${r.name} (${r.dob![0]})`).join(", ")}`);
+  }
+  // Round 88: catch a typo'd club name in a hand-authored `ties` entry at build time rather than
+  // it silently failing to match anything at draft-night (canClubMatchBid keys off this exact string).
+  const clubNames = new Set(CLUBS.map((c) => c.name));
+  const badTieClub = raw.filter((r) => (r.ties ?? []).some((t) => !clubNames.has(t.club)));
+  if (badTieClub.length > 0) {
+    throw new Error(
+      `${badTieClub.length} record(s) with a ties[].club not matching any real Club.name: ${badTieClub
+        .map((r) => `${r.name} (${(r.ties ?? []).map((t) => t.club).join("/")})`)
+        .join(", ")}`
+    );
+  }
+  // Round 88: explicitEligibleYear should only ever appear on brand-new report-sourced records —
+  // if it's set alongside a real dob/ageGroupSheet, eligibleDraftYearFor's precedence means the dob
+  // silently wins and the explicit year is dead data, almost certainly a merge-script mistake.
+  const explicitYearWithDob = raw.filter((r) => r.explicitEligibleYear != null && (r.dob != null || r.ageGroupSheet != null));
+  if (explicitYearWithDob.length > 0) {
+    throw new Error(
+      `${explicitYearWithDob.length} record(s) set explicitEligibleYear alongside a real dob/ageGroupSheet, which will be silently ignored: ${explicitYearWithDob
+        .map((r) => r.name)
+        .join(", ")}`
+    );
   }
 
   mkdirSync(OUT_DIR, { recursive: true });

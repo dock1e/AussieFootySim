@@ -80,3 +80,30 @@ export function computeLadder(clubIds: number[], results: MatchOutcome[]): Ladde
 export function top8(ladder: LadderRow[]): LadderRow[] {
   return ladder.slice(0, 8);
 }
+
+/** A single round's result, same shape as `MatchOutcome` plus which round it was played — `engine/season.ts`'s own `PlayedMatch` already carries all of this on `{round, homeClubId, awayClubId, result.home.points, result.away.points}`, but this file can't import `Season`'s types (season.ts imports FROM ladder.ts, not the other way around), so callers map their own `PlayedMatch[]` into this shape inline rather than this file depending on season.ts. */
+export interface RoundResult extends MatchOutcome {
+  round: number;
+}
+
+/**
+ * Round 89, [[Statistics and Dashboard Polish]] ROADMAP item #40 — "ladder card form indicator."
+ * Last `count` results for one club, oldest first (left-to-right reads oldest-to-newest, matching
+ * real afl.com.au ladder "form" columns), from that club's own W/L/D perspective. Clubs with fewer
+ * than `count` played games just return a shorter array — `LadderTable` renders whatever length it
+ * gets rather than padding with a fake "no game" placeholder.
+ */
+export function recentForm(clubId: number, results: RoundResult[], count = 5): ("W" | "L" | "D")[] {
+  const involving = results
+    .filter((r) => r.homeClubId === clubId || r.awayClubId === clubId)
+    .sort((a, b) => a.round - b.round);
+  const last = involving.slice(Math.max(0, involving.length - count));
+  return last.map((r) => {
+    const isHome = r.homeClubId === clubId;
+    const forPts = isHome ? r.homePoints : r.awayPoints;
+    const againstPts = isHome ? r.awayPoints : r.homePoints;
+    if (forPts > againstPts) return "W";
+    if (forPts < againstPts) return "L";
+    return "D";
+  });
+}

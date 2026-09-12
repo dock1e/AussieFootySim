@@ -11,6 +11,7 @@ import type { TeamPlan } from "./tactics.ts";
 import { updateConditionAfterRound } from "./progression.ts";
 import { autoFillLineup, lineupToMatchTeam } from "./selection.ts";
 import { nextDisgruntlementState, type DisgruntlementState } from "./disgruntlement.ts";
+import { generateMatchCoachesVotes, applyVotesToBoxScore, type MatchCoachesVotes } from "./coachesVotes.ts";
 
 /**
  * Season orchestration — ties fixture.ts + match.ts + ladder.ts + finals.ts
@@ -73,6 +74,14 @@ export interface PlayedMatch {
   homeClubId: number;
   awayClubId: number;
   result: MatchResult;
+  /**
+   * Sep 2026 round 90, [[Coaches Votes and MVP Award]] — both coaches' 5-4-3-2-1 ballots for this
+   * match, generated procedurally at simulation time below (see `generateMatchCoachesVotes`'s own
+   * doc comment for why it can't be deferred). Optional, not required: a match simulated before this
+   * feature existed has no vote data, same "missing = feature didn't exist yet" convention
+   * `condition`/`disgruntlement`'s own per-player maps already use for old saves.
+   */
+  coachesVotes?: MatchCoachesVotes;
 }
 
 export interface Season {
@@ -209,13 +218,18 @@ export function simulateRound(season: Season, round: number, teams: Map<number, 
     const seed = matchSeed(season.seed, round, i);
     const homePlan = plans?.get(m.homeClubId);
     const awayPlan = plans?.get(m.awayClubId);
-    const result = simulateMatch(home, away, mulberry32(seed), seed, {
+    const rawResult = simulateMatch(home, away, mulberry32(seed), seed, {
       homePlan,
       awayPlan,
       homeCondition: season.condition,
       awayCondition: season.condition,
     });
-    return { round, homeClubId: m.homeClubId, awayClubId: m.awayClubId, result };
+    // [[Coaches Votes and MVP Award]], round 90 — generated here, not lazily, because
+    // `generateMatchCoachesVotes` needs `rawResult.events` (see that function's own doc comment),
+    // which is still in memory now but gets stripped at archive time.
+    const coachesVotes = generateMatchCoachesVotes(rawResult, home, away);
+    const result = { ...rawResult, boxScore: applyVotesToBoxScore(rawResult.boxScore, coachesVotes) };
+    return { round, homeClubId: m.homeClubId, awayClubId: m.awayClubId, result, coachesVotes };
   });
 
   const played = [...season.played, ...newlyPlayed];
@@ -251,5 +265,20 @@ export function runFinals(season: Season, teams: Map<number, MatchTeam>, plans?:
     });
   });
 
-  return { ...season, finals, premierClubId: finals.premierClubId };
+  // [[Coaches Votes and MVP Award]], round 90 — the Gary-Ayres-Medal-equivalent finals tally.
+  // Deliberately a post-processing pass over `finals.matches` rather than threading vote generation
+  // through `runFinalsSeries`'s own callback: keeps finals.ts's bracket-advancement logic (which
+  // reads each match's plain `MatchResult` to decide who advances) completely untouched. Same
+  // events-must-still-be-in-memory requirement as `simulateRound` — done here, immediately, not later.
+  const matches = finals.matches.map((m) => {
+    const home = teams.get(m.homeClubId);
+    const away = teams.get(m.awayClubId);
+    if (!home || !away) return m;
+    const coachesVotes = generateMatchCoachesVotes(m.result, home, away);
+    const result = { ...m.result, boxScore: applyVotesToBoxScore(m.result.boxScore, coachesVotes) };
+    return { ...m, result, coachesVotes };
+  });
+  const finalsWithVotes = { ...finals, matches };
+
+  return { ...season, finals: finalsWithVotes, premierClubId: finals.premierClubId };
 }

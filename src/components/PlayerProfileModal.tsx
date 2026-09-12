@@ -201,6 +201,7 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
 
   const draftEntries = useMemo(() => draftHistoryFor(player.realFullName ?? playerFullName(player)), [player]);
   const primaryDraftEntry = useMemo(() => primaryDraftEntryOf(draftEntries), [draftEntries]);
+  const honours = useMemo(() => (draftEntries.length > 0 ? mergedHonoursFor(draftEntries) : null), [draftEntries]);
 
   return (
     <div className="space-y-6">
@@ -239,12 +240,17 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
 
       {draftEntries.length > 0 && (
         <section>
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Draft &amp; Honours</div>
-          <p className="mb-2 text-[11px] text-slate-500">
-            Real-world draft/trade history sourced from draftguru.com.au (Aug 2026). Games, goals, and votes below
-            are this player's real-world career-to-date totals — separate from the AussieFootySim stats elsewhere
-            on this page.
-          </p>
+          {/* Round 89, ROADMAP item #35 — was one "Draft & Honours" table repeating the full
+              Games/Goals/CV/BV/Awards accolade set on every row (e.g. 4 rows for a player traded
+              twice), which is both visually noisy and, per `realDraftHistory.ts`'s own doc comment,
+              quietly wrong: those 4 figures are draftguru scrape-timing snapshots that genuinely
+              DISAGREE across a player's rows, not a repeated constant. Split into a "Draft & Club
+              History" table (Year/Type/Pick/Club/Grade — these genuinely differ per entry, so stay
+              one-row-per-entry) and a "Career Honours" section below (Brownlow/Coaches votes +
+              merged awards — these are properties of the PLAYER, not any one entry, so shown once).
+              See `mergedHonoursFor`'s own doc comment for exactly how the merge is done and why. */}
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Draft &amp; Club History</div>
+          <p className="mb-2 text-[11px] text-slate-500">Real-world draft/trade history sourced from draftguru.com.au (Aug 2026).</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -253,12 +259,12 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
                   <th className="py-1.5 pr-3 font-normal">Type</th>
                   <th className="py-1.5 pr-3 font-normal">Pick</th>
                   <th className="py-1.5 pr-3 font-normal">Club</th>
-                  <th className="py-1.5 pr-3 font-normal">Grade</th>
-                  <th className="py-1.5 pr-3 text-right font-normal">Games</th>
-                  <th className="py-1.5 pr-3 text-right font-normal">Goals</th>
-                  <th className="py-1.5 pr-3 text-right font-normal">CV</th>
-                  <th className="py-1.5 pr-3 text-right font-normal">BV</th>
-                  <th className="py-1.5 font-normal">Awards</th>
+                  <th
+                    className="py-1.5 font-normal"
+                    title="draftguru.com.au's own retrospective &quot;how'd this pick turn out&quot; grade, A+ (best) to D (worst)"
+                  >
+                    Grade
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -277,18 +283,34 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
                       </td>
                       <td className={`py-1.5 pr-3 tabular-nums ${DRAFT_PICK_TONE[tier]}`}>{e.pickNumber ?? "—"}</td>
                       <td className="py-1.5 pr-3">{e.club}</td>
-                      <td className="py-1.5 pr-3">{e.grade}</td>
-                      <td className="py-1.5 pr-3 text-right tabular-nums">{e.games}</td>
-                      <td className="py-1.5 pr-3 text-right tabular-nums">{e.goals}</td>
-                      <td className="py-1.5 pr-3 text-right tabular-nums">{e.coachesVotes}</td>
-                      <td className="py-1.5 pr-3 text-right tabular-nums">{e.brownlowVotes}</td>
-                      <td className="py-1.5 text-xs text-slate-400">{e.awards || "—"}</td>
+                      <td className="py-1.5">{e.grade}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
+
+          {honours && (honours.coachesVotes > 0 || honours.brownlowVotes > 0 || honours.awards) && (
+            <div className="mt-4">
+              <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Career Honours</div>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-sm">
+                <div>
+                  <span className="text-slate-400">Coaches votes </span>
+                  <span className="font-semibold tabular-nums">{honours.coachesVotes}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400">Brownlow votes </span>
+                  <span className="font-semibold tabular-nums">{honours.brownlowVotes}</span>
+                </div>
+              </div>
+              {honours.awards && <p className="mt-1.5 text-sm text-slate-300">{honours.awards}</p>}
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                Vote tallies are the highest of several inconsistent snapshots draftguru.com.au recorded across this
+                player's draft/trade history rows, not a guaranteed final career total.
+              </p>
+            </div>
+          )}
         </section>
       )}
 
@@ -424,6 +446,67 @@ function primaryDraftEntryOf(entries: DraftHistoryEntry[]): DraftHistoryEntry | 
 }
 
 /**
+ * Round 89, ROADMAP item #35 — "Draft & Honours split." `realDraftHistory.ts`'s own doc comment
+ * discloses that `games`/`goals`/`coachesVotes`/`brownlowVotes` are draftguru scrape-timing
+ * snapshots that materially DISAGREE across a single player's multiple rows (Jack Gunston: 324
+ * Coaches votes on his 2009 row, 91 on his 2023 row) — not a single consistent running total. So
+ * this can't honestly report "the" career vote tally; MAX across all of a player's entries is the
+ * least-wrong single number (a real recorded snapshot, never fabricated, and never an
+ * understatement of what draftguru actually observed at some point), flagged to the user via the
+ * caption this feeds rather than silently presented as definitive. `games`/`goals` are deliberately
+ * NOT carried into this summary at all: `combinedCareerTotals` elsewhere on this same page already
+ * gives a genuinely cumulative real career total (afltables.com, round 74) for every player that
+ * data covers, so repeating draftguru's separately-inconsistent figures here would be redundant at
+ * best and visibly contradictory at worst.
+ *
+ * `awards` is different — draftguru's per-row awards TEXT isn't a running total either, but unlike
+ * the vote counts it's usually just an incomplete SUBSET on any one row (Gunston's 2022/2023 rows
+ * are missing the "Prem: 2013, 2014, 2015" segment his 2009/2011 rows do carry), so a union merge
+ * across every row's parsed "Category: year, year" segments recovers the fullest honest picture
+ * rather than whichever single row's text happened to be more complete.
+ */
+function mergedHonoursFor(entries: DraftHistoryEntry[]): { brownlowVotes: number; coachesVotes: number; awards: string } {
+  const brownlowVotes = Math.max(0, ...entries.map((e) => e.brownlowVotes));
+  const coachesVotes = Math.max(0, ...entries.map((e) => e.coachesVotes));
+  const awards = mergeAwards(entries.map((e) => e.awards));
+  return { brownlowVotes, coachesVotes, awards };
+}
+
+/**
+ * Unions "Category: year, year" segments (semicolon-separated) across several draftguru awards
+ * strings, deduplicating years within a category and preserving first-seen category order — see
+ * `mergedHonoursFor`'s own doc comment for why a union (not "pick one row") is the honest merge
+ * here. A segment without a colon, or an empty/blank source string, is skipped rather than guessed.
+ */
+function mergeAwards(awardsList: string[]): string {
+  const order: string[] = [];
+  const years = new Map<string, Set<number>>();
+  for (const raw of awardsList) {
+    if (!raw.trim()) continue;
+    for (const segment of raw.split(";")) {
+      const idx = segment.indexOf(":");
+      if (idx === -1) continue;
+      const category = segment.slice(0, idx).trim();
+      const yearStrs = segment
+        .slice(idx + 1)
+        .split(",")
+        .map((y) => y.trim())
+        .filter(Boolean);
+      if (!category || yearStrs.length === 0) continue;
+      if (!years.has(category)) {
+        years.set(category, new Set());
+        order.push(category);
+      }
+      for (const y of yearStrs) {
+        const n = Number(y);
+        if (!Number.isNaN(n)) years.get(category)!.add(n);
+      }
+    }
+  }
+  return order.map((category) => `${category}: ${[...years.get(category)!].sort((a, b) => a - b).join(", ")}`).join("; ");
+}
+
+/**
  * Round 67, Tyler: "there is a big difference between being taken at pick 5 in the National draft
  * versus being taken at pick 5 in the Rookie draft... we should draw a visual distinction." Only
  * `National` and `Rookie` get a prestige tier — the other entry pathways (FA, Trade, Pre-Draft,
@@ -508,9 +591,17 @@ function CareerTable({ yearRows, careerTotals, mode }: { yearRows: YearRow[]; ca
         <thead>
           <tr className="text-left text-xs text-slate-500">
             <th className="py-1.5 pr-3 font-normal">Year</th>
-            <th className="py-1.5 pr-3 text-right font-normal">GM</th>
+            <th className="py-1.5 pr-3 text-right font-normal" title="Games Played">
+              GM
+            </th>
+            {/* Round 89, ROADMAP item #39 — these headers are already deliberately abbreviated
+                (a full "Fantasy Points"/"Clearances"/"Hitouts" header on every column would blow out
+                this table's width), so the acronym glossary is a `title` hover rather than a layout
+                change. Reuses `statLabel`, the exact same full-name lookup the Key Stats table above
+                already uses for these categories, so the two sections can never name a stat
+                differently. */}
             {TABLE_COLUMNS.map((c) => (
-              <th key={c.key} className="py-1.5 pr-3 text-right font-normal">
+              <th key={c.key} className="py-1.5 pr-3 text-right font-normal" title={statLabel(c.key)}>
                 {c.label}
               </th>
             ))}

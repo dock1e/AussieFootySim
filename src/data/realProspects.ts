@@ -99,6 +99,60 @@ export interface RealProspectRecord {
   seasonStats: RealProspectSeasonStats | null;
   aflFutures: boolean;
   sourceSheets: readonly string[];
+  /**
+   * Round 88: a directly-stated projected draft year from a source report (Tyler's "Upcoming AFL
+   * Draft Prospects Report", covering 2027-2031), used INSTEAD of the dob/ageGroupSheet inference
+   * in `eligibleDraftYearFor` when present — checked first, before `dob`. Null for every record
+   * from every earlier source (the original elite-pathway xlsx, the U16/U15 community batch,
+   * RMC/zerohanger ingests), which all keep using the dob/ageGroupSheet fallback exactly as before.
+   *
+   * Why a separate field rather than another `ageGroupSheet` bucket (round 87's approach for
+   * "U15"/"U17.5"): this new report's own 2029-2031 sections explicitly frame their subjects as
+   * "currently in their early-to-mid teens... physical dimensions and exact positions are yet to
+   * crystallize" — there is no real age-group carnival tier to bucket them into, only a directly
+   * asserted future year. Forcing that shape into an age-group name would be a fabricated precision
+   * this file doesn't actually have. A direct year is also, simply, more information than an age
+   * bucket would give for these entries, so preferring it when present costs nothing.
+   *
+   * **Reliability disclosure, read before trusting this field for anyone already in `REAL_PROSPECTS`
+   * some other way**: cross-checking the report's own ~40-name overlap with prospects already in this
+   * file (all real, dob-verified 2008-born-so-2026-eligible names like Arki Butler, Cody Walker, Jack
+   * Pickett, Khaled El Souki, Gabriel Patterson, and ~30 more) found the report mislabels EVERY one of
+   * them as 2027 or 2028 — a systematic, not occasional, disagreement with this file's own
+   * better-sourced dob data for the exact same real people. `scripts/mergeDraftProspectsReport.ts`
+   * (round 88) never overwrites `dob`/`ageGroupSheet`/eligibility for a name already present in this
+   * file for exactly this reason — this field is only ever set on BRAND NEW records the report alone
+   * introduces, where it's the only year information that exists at all, not a correction applied
+   * over better data.
+   */
+  explicitEligibleYear: number | null;
+  /**
+   * Round 88: real Father-Son/Academy/NGA club ties, as named in Tyler's "Upcoming AFL Draft
+   * Prospects Report" — empty for the ~1,680 records from every earlier source (none of those
+   * carried structured tie data, only occasional prose asides — see `engine/draft.ts`'s own doc
+   * comment on "no underlying recruitment data model for fictional prospects", now partly closed for
+   * whichever real prospects this report actually names). An array, not a single nullable tie,
+   * because dual eligibility is a real thing this report itself calls out as its defining 2029
+   * storyline (Oscar Judd, Carlton AND West Coast via his father Chris Judd's two-club career) — see
+   * `draft.ts`'s `primaryTieFor` for how a multi-tie record resolves to one bid-match right in-game
+   * (first-listed wins, a disclosed simplification of the real "family nominates one" rule).
+   */
+  ties: readonly RealProspectTie[];
+}
+
+/**
+ * One real Father-Son/Academy/NGA recruitment pathway tie — see `RealProspectRecord.ties`'s own
+ * doc comment. `type` is flavour/display only in this file; `engine/draft.ts`'s bid-match mechanics
+ * (`canClubMatchBid`) treat all three identically, matching the source report's own framing
+ * ("Northern Academy, Next Generation Academy (NGA), and Father-Son prospects" all under one bidding
+ * rule regime) — real AFL's genuinely different eligibility BASIS for each pathway (bloodline vs.
+ * geographic zone vs. multicultural/Indigenous background) isn't modelled, only the shared
+ * bid-match consequence.
+ */
+export interface RealProspectTie {
+  /** Exact `Club.name` string (see `types/club.ts`) — validated at build time by `buildRealProspects.ts`. */
+  club: string;
+  type: "Father-Son" | "Academy" | "NGA";
 }
 
 export const REAL_PROSPECTS: readonly RealProspectRecord[] = realProspectsJson as unknown as RealProspectRecord[];
@@ -133,6 +187,11 @@ export const REAL_PROSPECTS: readonly RealProspectRecord[] = realProspectsJson a
  * depended on age, never on which of the two real sources a record came from.
  */
 export function eligibleDraftYearFor(record: RealProspectRecord): number {
+  // Round 88: only ever set on brand-new records a source report introduces where no dob/age-group
+  // exists at all — never overrides dob/ageGroupSheet for a record that already has either, so this
+  // branch and the two below it can never disagree for the same record. See the field's own doc
+  // comment for why: the report this shipped with mislabels every existing prospect it names.
+  if (record.explicitEligibleYear != null) return record.explicitEligibleYear;
   if (record.dob) return record.dob[0] + 18;
   switch (record.ageGroupSheet) {
     case "U15":
@@ -218,6 +277,22 @@ const POSITION_MAP: Record<string, Archetype> = {
   wing: "Outside Mid",
   "wing/defender": "Half Back Flanker",
   utility: "Medium Defender",
+  // Round 88: the "Upcoming AFL Draft Prospects Report" CSV appendix tags every position with
+  // abbreviations ("Fwd/Mid", "Mid/Def", "Mid", "Def", "Fwd") rather than this file's established
+  // full-word vocabulary above. `positionRaw` stores the report's own raw abbreviation unchanged
+  // (matching this field's contract elsewhere — it's the RAW source string, never rewritten), so
+  // these are new lookup keys, not replacements — resolved via the exact same rules this map's own
+  // doc comment above already states: a recognized combo takes its existing match regardless of
+  // word order ("fwd/mid" joins "midfielder/forward" AND "forward/midfielder" -> Hybrid Mid Forward;
+  // "mid/def" joins "defender/midfielder" AND "midfielder/defender" -> Half Back Flanker), an
+  // unrecognized combo takes its first-listed word's bare mapping ("mid/utility" -> "mid" ->
+  // Outside Mid), and a bare word takes its own existing bare-word default.
+  "fwd/mid": "Hybrid Mid Forward",
+  "mid/def": "Half Back Flanker",
+  "mid/utility": "Outside Mid",
+  mid: "Outside Mid",
+  fwd: "Medium Forward",
+  def: "Medium Defender",
 };
 
 /** Normalises one raw Position string to an Archetype, or `null` if `raw` is null/unmapped (fully generic text never seen in the source, or absent) — callers should fall back to a population-weighted random draw in that case, not a fixed default (see this file's own doc comment above `POSITION_MAP`). */

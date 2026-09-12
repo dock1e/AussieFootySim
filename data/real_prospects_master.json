@@ -181,6 +181,9 @@
   {
     "name": "Koby Bewick",
     "normName": "koby bewick",
+    "ties": [
+      { "club": "Essendon", "type": "Father-Son" }
+    ],
     "team": "Calder Cannons Talent League Boys",
     "positionRaw": "Defender",
     "heightCm": null,
@@ -2820,6 +2823,9 @@
   {
     "name": "Will Thornton",
     "normName": "will thornton",
+    "ties": [
+      { "club": "Carlton", "type": "Father-Son" }
+    ],
     "team": "Vic Metro",
     "positionRaw": "Wing/Defender",
     "heightCm": 185,
@@ -2905,6 +2911,9 @@
   {
     "name": "Lukas Koutoufides",
     "normName": "lukas koutoufides",
+    "ties": [
+      { "club": "Carlton", "type": "Father-Son" }
+    ],
     "team": "Vic Metro",
     "positionRaw": "Forward/Midfielder",
     "heightCm": 189,
@@ -7700,6 +7709,9 @@
   {
     "name": "Maikeli Rodan",
     "normName": "maikeli rodan",
+    "ties": [
+      { "club": "Port Adelaide", "type": "Father-Son" }
+    ],
     "team": "Calder Cannons U16 Boys",
     "positionRaw": null,
     "heightCm": null,
@@ -16623,9 +16635,13 @@
   {
     "name": "Tevita Rodan",
     "normName": "tevita rodan",
+    "ties": [
+      { "club": "Port Adelaide", "type": "Father-Son" },
+      { "club": "Essendon", "type": "NGA" }
+    ],
     "team": "Calder Cannons Talent League Boys",
-    "positionRaw": null,
-    "heightCm": null,
+    "positionRaw": "Mid/Utility",
+    "heightCm": 179,
     "dob": null,
     "writeups": [],
     "standoutSourceEvents": [],
@@ -28768,9 +28784,12 @@
   {
     "name": "Louis Salopek",
     "normName": "louis salopek",
+    "ties": [
+      { "club": "Port Adelaide", "type": "Father-Son" }
+    ],
     "team": "Dandenong Stingrays Talent League Boys",
-    "positionRaw": null,
-    "heightCm": null,
+    "positionRaw": "Mid",
+    "heightCm": 184,
     "dob": null,
     "writeups": [],
     "standoutSourceEvents": [],
@@ -30051,6 +30070,9 @@
   {
     "name": "Cody Walker",
     "normName": "cody walker",
+    "ties": [
+      { "club": "Carlton", "type": "Father-Son" }
+    ],
     "team": "Bendigo Pioneers Talent League Boys",
     "positionRaw": "Midfielder",
     "heightCm": 184,
@@ -36843,9 +36865,12 @@
   {
     "name": "Zemes Pilot",
     "normName": "zemes pilot",
+    "ties": [
+      { "club": "Port Adelaide", "type": "NGA" }
+    ],
     "team": "South Adelaide/Port Noarlunga",
-    "positionRaw": null,
-    "heightCm": null,
+    "positionRaw": "Fwd/Mid",
+    "heightCm": 192,
     "dob": null,
     "writeups": [],
     "standoutSourceEvents": [],
@@ -36938,6 +36963,9 @@
   {
     "name": "Dougie Cochrane",
     "normName": "dougie cochrane",
+    "ties": [
+      { "club": "Port Adelaide", "type": "NGA" }
+    ],
     "team": "Port Adelaide",
     "positionRaw": "Utility",
     "heightCm": 195,
@@ -47059,5 +47087,409 @@
       "Community Footy"
     ],
     "homeState": "VIC"
+  },
+  {
+    "name": "Heath Mellody",
+    "normName": "heath mellody",
+    "ties": [],
+    "team": "Claremont",
+    "positionRaw": "Mid/Def",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "A smooth-moving midfielder and half-back for Claremont, Mellody's draft stocks surged exponentially after winning the Larke Medal as the best player in the AFL National Under-18 Championships as a bottom-ager. He seamlessly transitioned into senior WAFL football immediately afterward, proving his physical readiness."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": "WA",
+    "explicitEligibleYear": 2028
+  },
+  {
+    "name": "Oscar Judd",
+    "normName": "oscar judd",
+    "ties": [
+      { "club": "Carlton", "type": "Father-Son" },
+      { "club": "West Coast", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "The son of dual Brownlow Medalist Chris Judd, Oscar possesses immense physical and technical upside. Because his father played real AFL football at both West Coast and Carlton, Oscar will emerge as a dual-eligible father-son prospect — whichever club drafts him will need to begin restructuring its draft capital years in advance given the DVI loadings applied to top-of-the-ladder bids."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2029
+  },
+  {
+    "name": "Malachy Picken",
+    "normName": "malachy picken",
+    "ties": [
+      { "club": "Western Bulldogs", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of premiership hero Liam Picken, heavily tracked as a cornerstone of the Bulldogs' future midfield."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Jack Cameron",
+    "normName": "jack cameron",
+    "ties": [
+      { "club": "Western Bulldogs", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of Leon Cameron, identified alongside Picken as a premier 2030 target."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Levi Hahn",
+    "normName": "levi hahn",
+    "ties": [
+      { "club": "Western Bulldogs", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Utility",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of Mitch Hahn, projecting as a powerful utility option."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Otis Giansiracusa",
+    "normName": "otis giansiracusa",
+    "ties": [
+      { "club": "Western Bulldogs", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of Daniel Giansiracusa, adding to an unbelievable 2030 haul for the Dogs."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Tyler Cross",
+    "normName": "tyler cross",
+    "ties": [
+      { "club": "Western Bulldogs", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of Daniel Cross, recognized for inheriting elite endurance and work rate."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Boh Enright",
+    "normName": "boh enright",
+    "ties": [
+      { "club": "Geelong", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Def",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of defensive legend Corey Enright, projecting as a reliable backline prospect."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Max Ling",
+    "normName": "max ling",
+    "ties": [
+      { "club": "Geelong", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of premiership captain Cameron Ling."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Archie Johnson",
+    "normName": "archie johnson",
+    "ties": [
+      { "club": "Geelong", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of David Johnson, tracked in the deep Geelong father-son pipeline."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Archie Maxwell",
+    "normName": "archie maxwell",
+    "ties": [
+      { "club": "Collingwood", "type": "Father-Son" }
+    ],
+    "team": "Williamstown JFC",
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Emerging through Williamstown JFC as a primary target for the Magpies."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Levi Parker",
+    "normName": "levi parker",
+    "ties": [
+      { "club": "Collingwood", "type": "NGA" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Highly touted NGA prospect for Collingwood projected to go high in the 2030 pool."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2030
+  },
+  {
+    "name": "Jude Brown",
+    "normName": "jude brown",
+    "ties": [
+      { "club": "Western Bulldogs", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of Nathan Brown, continuing the Bulldogs' staggering multi-year run of eligible father-son talent."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2031
+  },
+  {
+    "name": "Jimmy Harley",
+    "normName": "jimmy harley",
+    "ties": [
+      { "club": "Geelong", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Mid/Def",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of dual premiership captain Tom Harley."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2031
+  },
+  {
+    "name": "Beau Schulz",
+    "normName": "beau schulz",
+    "ties": [
+      { "club": "Port Adelaide", "type": "Father-Son" }
+    ],
+    "team": null,
+    "positionRaw": "Fwd",
+    "heightCm": null,
+    "dob": null,
+    "writeups": [
+      "Son of accurate spearhead Jay Schulz, earmarked to inject goal-kicking prowess into Port Adelaide's future."
+    ],
+    "standoutSourceEvents": [
+      "Upcoming AFL Draft Prospects Report (Sep 2026)"
+    ],
+    "standoutStats": null,
+    "gamesInStandout": 0,
+    "seasonStats": null,
+    "aflFutures": false,
+    "ageGroupSheet": null,
+    "sourceSheets": [
+      "Upcoming AFL Draft Prospects Report"
+    ],
+    "homeState": null,
+    "explicitEligibleYear": 2031
   }
 ]

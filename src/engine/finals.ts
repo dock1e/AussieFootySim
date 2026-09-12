@@ -1,4 +1,5 @@
 import type { MatchResult } from "./match.ts";
+import type { MatchCoachesVotes } from "./coachesVotes.ts";
 
 /**
  * Top-8 finals — Configuration.md "Season structure": "top-8 finals,
@@ -22,6 +23,8 @@ export interface FinalsMatch {
   awaySeed: number;
   result: MatchResult;
   winnerClubId: number;
+  /** Sep 2026 round 90, [[Coaches Votes and MVP Award]] — the AussieFootySim Finals Medal's own tally, attached by `season.ts`'s `runFinals` as a post-processing pass (this file's own bracket-advancement logic never reads it). Optional for the same old-save reason `PlayedMatch.coachesVotes` is. */
+  coachesVotes?: MatchCoachesVotes;
 }
 
 export interface FinalsSeriesResult {

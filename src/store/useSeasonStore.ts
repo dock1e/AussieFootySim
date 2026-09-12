@@ -17,6 +17,18 @@ import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
 import { useGameStore } from "./useGameStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useTeamPlanStore } from "./useTeamPlanStore";
+import { submitUserBallot, applyVotesToBoxScore, type CoachesVoteAllocation } from "../engine/coachesVotes";
+
+/**
+ * Sep 2026 round 90, [[Coaches Votes and MVP Award]] — identifies exactly one already-simulated
+ * match to mutate a submitted ballot into, without needing to pass a `PlayedMatch`/`FinalsMatch`
+ * reference (which would go stale the moment `season` is replaced by a new object, as every action
+ * in this store already does). A round match is unique by (round, homeClubId, awayClubId); a finals
+ * match already carries its own unique `key` (see finals.ts's own `FinalsMatch`).
+ */
+export type CoachesVoteMatchRef =
+  | { kind: "round"; round: number; homeClubId: number; awayClubId: number }
+  | { kind: "finals"; key: string };
 
 interface SeasonStoreState {
   season: Season | null;
@@ -30,6 +42,15 @@ interface SeasonStoreState {
   restoreSeason: (season: Season) => void;
   /** Back to "no season in progress" — used after a real off-season step (see useSaveStore.ts's runOffSeason) so SeasonHub's existing empty-state flow runs again fresh. */
   clearSeason: () => void;
+  /**
+   * Sep 2026 round 90, [[Coaches Votes and MVP Award]] — overwrites one side's ballot for one
+   * already-simulated match with a manually-submitted one (see `engine/coachesVotes.ts`'s
+   * `submitUserBallot`), and rebakes that match's `BoxScoreLine.coachesVotes` so the season/all-time
+   * tally stays correct. A no-op if the match can't be found or was simulated before this feature
+   * existed (no `coachesVotes` at all) — the UI should never call this in that case anyway, since
+   * `FullTimeResult`'s submit form only ever renders when `coachesVotes` is already present.
+   */
+  submitCoachesVotes: (matchRef: CoachesVoteMatchRef, side: "home" | "away", allocations: CoachesVoteAllocation[]) => void;
 }
 
 /** Shared by startNewSeason/restoreSeason — see useSeasonStore's own doc comment for why teams are always rebuilt rather than persisted. */
@@ -146,4 +167,37 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
   restoreSeason: (season) => set({ season, teams: buildTeamsForMyClub() }),
 
   clearSeason: () => set({ season: null, teams: null }),
+
+  submitCoachesVotes: (matchRef, side, allocations) => {
+    const { season } = get();
+    if (!season) return;
+
+    if (matchRef.kind === "round") {
+      let changed = false;
+      const played = season.played.map((m) => {
+        if (m.round !== matchRef.round || m.homeClubId !== matchRef.homeClubId || m.awayClubId !== matchRef.awayClubId || !m.coachesVotes) {
+          return m;
+        }
+        changed = true;
+        const coachesVotes = submitUserBallot(m.coachesVotes, side, allocations);
+        const result = { ...m.result, boxScore: applyVotesToBoxScore(m.result.boxScore, coachesVotes) };
+        return { ...m, result, coachesVotes };
+      });
+      // A vote resubmission never touches score/points, so the ladder never needs recomputing here
+      // — unlike simulateRound, which always does after adding genuinely new results.
+      if (changed) set({ season: { ...season, played } });
+      return;
+    }
+
+    if (!season.finals) return;
+    let changed = false;
+    const matches = season.finals.matches.map((m) => {
+      if (m.key !== matchRef.key || !m.coachesVotes) return m;
+      changed = true;
+      const coachesVotes = submitUserBallot(m.coachesVotes, side, allocations);
+      const result = { ...m.result, boxScore: applyVotesToBoxScore(m.result.boxScore, coachesVotes) };
+      return { ...m, result, coachesVotes };
+    });
+    if (changed) set({ season: { ...season, finals: { ...season.finals, matches } } });
+  },
 }));

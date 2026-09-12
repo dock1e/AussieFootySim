@@ -5,8 +5,9 @@ import type { ScoutFocusArea, MatchDayCoachRole } from "../types/coach";
 import type { SeasonArchiveEntry } from "../engine/seasonSummary";
 import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
-import { generateProspectPool, draftPlayer, autoResolvePick, SCOUT_BUDGET_PER_DRAFT, DRAFT_ROUNDS } from "../engine/draft";
-import { resolveDraftOrder, seedDraftPickInventory, type DraftPick } from "../engine/draftPicks";
+import { generateProspectPool, draftPlayer, autoResolvePick, primaryTieFor, redirectDraftedPlayerToClub, SCOUT_BUDGET_PER_DRAFT, DRAFT_ROUNDS, type DraftPickRecord } from "../engine/draft";
+import { resolveDraftOrder, seedDraftPickInventory, canClubMatchBid, forfeitPicksForBid, ladderPositionOf, type DraftPick } from "../engine/draftPicks";
+import type { LadderRow } from "../engine/ladder";
 import { selectCombineInvitees, computeCombineResults } from "../engine/combine";
 import { applySwitch } from "../engine/positionSwitch";
 import { computeLeagueStrategies, buildLeaguePlayersByClub, type ClubStrategy } from "../engine/listNeeds";
@@ -171,6 +172,42 @@ interface SaveStoreState {
 }
 
 /**
+ * Round 88: Father-Son/Academy/NGA bid-match redirect — see `draftPicks.ts`'s own doc comment on
+ * `canClubMatchBid`/`forfeitPicksForBid` for the mechanic itself, and `draft.ts`'s `primaryTieFor`
+ * for how a drafted player's real tie is found. Called immediately after a prospect is chosen (by
+ * the AI heuristic in `autoResolveDraftPicks` below, or the human's own `confirmDraftPick`) but
+ * before the pick is logged — if the prospect carries a real tie to a club OTHER than the one that
+ * just picked them, and that tied club can actually afford to match, the pick is silently
+ * re-credited to the tied club instead, which pays by forfeiting its own top pick(s) for the year.
+ * Always auto-matches when affordable, for both AI-controlled clubs and the human's own —
+ * `draftPicks.ts`'s doc comment discloses the deferred interactive "match or pass" prompt this
+ * simplifies away as real, sensible v2 follow-up work. A no-op (echoes the inputs back unchanged)
+ * whenever there's no tie, the tie is already the club on the clock, the tied club has no ladder
+ * standing this draft, or it can't afford to match.
+ */
+function applyFatherSonRedirect(
+  result: { player: Player; record: DraftPickRecord },
+  year: number,
+  ladder: readonly LadderRow[] | null | undefined,
+  draftPickInventory: readonly DraftPick[]
+): { player: Player; record: DraftPickRecord; draftPickInventory: DraftPick[] } {
+  const unchanged = { player: result.player, record: result.record, draftPickInventory: [...draftPickInventory] };
+  const tie = primaryTieFor(result.player);
+  if (!tie || tie.club === result.record.clubName) return unchanged;
+  const tiedClub = CLUBS.find((c) => c.name === tie.club);
+  if (!tiedClub) return unchanged;
+  const ladderPosition = ladderPositionOf(ladder, tiedClub.ClubID);
+  if (ladderPosition == null) return unchanged;
+  if (!canClubMatchBid(draftPickInventory, tiedClub.ClubID, year, result.record.pickNumber, ladderPosition)) return unchanged;
+
+  return {
+    player: redirectDraftedPlayerToClub(result.player, tie.club),
+    record: { ...result.record, clubName: tie.club },
+    draftPickInventory: forfeitPicksForBid(draftPickInventory, tiedClub.ClubID, year, result.record.pickNumber, ladderPosition),
+  };
+}
+
+/**
  * Shared pure loop behind `autoResolveNextPick`/`skipToMyPick`/`finishDraft`
  * — resolves picks one at a time via engine/draft.ts's `autoResolvePick`,
  * threading a locally-mutated `playersByClub`/`strategies` through so each
@@ -183,15 +220,24 @@ interface SaveStoreState {
  * one final `set`. `opts.stopWhenClub`/`opts.maxPicks` are independent,
  * optional stop conditions — `autoResolveNextPick` uses `maxPicks: 1`,
  * `skipToMyPick` uses `stopWhenClub: myClub`, `finishDraft` uses neither
- * (runs to the end of `order`).
+ * (runs to the end of `order`). Also threads `ladder`/`draftPickInventory`
+ * through for round 88's `applyFatherSonRedirect` above — see that
+ * function's own doc comment.
  */
-function autoResolveDraftPicks(window: DraftWindow, year: number, opts: { stopWhenClub?: string; maxPicks?: number }): { window: DraftWindow; draftedPlayers: Player[] } {
+function autoResolveDraftPicks(
+  window: DraftWindow,
+  year: number,
+  opts: { stopWhenClub?: string; maxPicks?: number },
+  ladder: readonly LadderRow[] | null | undefined,
+  draftPickInventory: readonly DraftPick[]
+): { window: DraftWindow; draftedPlayers: Player[]; draftPickInventory: DraftPick[] } {
   const playersByClub = buildLeaguePlayersByClub();
   let strategies: Map<string, ClubStrategy> = computeLeagueStrategies(playersByClub);
   const picks = [...window.picks];
   const pickedIds = new Set(picks.map((p) => p.playerId));
   let currentPickIndex = window.currentPickIndex;
   const draftedPlayers: Player[] = [];
+  let inventory = [...draftPickInventory];
   let made = 0;
 
   while (currentPickIndex < window.order.length) {
@@ -203,17 +249,26 @@ function autoResolveDraftPicks(window: DraftWindow, year: number, opts: { stopWh
     const result = autoResolvePick(remaining, clubOnClock, currentPickIndex + 1, year, strategies.get(clubOnClock) ?? "Balanced", playersByClub);
     if (!result) break; // pool exhausted — shouldn't happen given DRAFT_POOL_SIZE > TOTAL_DRAFT_PICKS, guarded anyway
 
-    picks.push(result.record);
-    pickedIds.add(result.record.playerId);
-    draftedPlayers.push(result.player);
-    const roster = playersByClub.get(clubOnClock) ?? [];
-    playersByClub.set(clubOnClock, [...roster, result.player]);
+    // Round 88: may re-credit `result` to a Father-Son/Academy-tied club instead of `clubOnClock` —
+    // see `applyFatherSonRedirect`'s own doc comment. `creditedClub` below (not `clubOnClock`) is
+    // what actually gets the player added to its roster, so THIS SAME BATCH's later picks (a
+    // `finishDraft` can resolve dozens) see the accurate roster for both the natural bidder (who
+    // correctly no longer looks like it has the player) and the tied club (who correctly does).
+    const redirected = applyFatherSonRedirect(result, year, ladder, inventory);
+    inventory = redirected.draftPickInventory;
+    const creditedClub = redirected.record.clubName;
+
+    picks.push(redirected.record);
+    pickedIds.add(redirected.record.playerId);
+    draftedPlayers.push(redirected.player);
+    const roster = playersByClub.get(creditedClub) ?? [];
+    playersByClub.set(creditedClub, [...roster, redirected.player]);
     currentPickIndex++;
     made++;
     if (currentPickIndex % CLUBS.length === 0) strategies = computeLeagueStrategies(playersByClub);
   }
 
-  return { window: { ...window, picks, currentPickIndex }, draftedPlayers };
+  return { window: { ...window, picks, currentPickIndex }, draftedPlayers, draftPickInventory: inventory };
 }
 
 function snapshotSave(year: number, seasonArchives: SeasonArchiveEntry[], draftPickInventory: DraftPick[], talentScout: TalentScoutAssignment | null, lineCoaches: Partial<Record<MatchDayCoachRole, number>>): SaveGameData {
@@ -626,19 +681,30 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const pickNumber = window.currentPickIndex + 1;
     const round = Math.floor(window.currentPickIndex / CLUBS.length) + 1;
     const drafted = draftPlayer(prospect, myClub, pickNumber, year);
-    loadPool([...ALL_PLAYERS, drafted]);
-    useDraftStore.getState().logPick({ pickNumber, round, clubName: myClub, playerId: drafted.PlayerID, playerName: playerFullName(drafted) });
-    set({ poolVersion: get().poolVersion + 1 });
+    // Round 88: even the human's own pick can get Father-Son/Academy-redirected away to a tied
+    // rival club — see `applyFatherSonRedirect`'s doc comment on why this always auto-matches rather
+    // than asking first (a disclosed v1 simplification, same as the AI path below).
+    const ladder = useSeasonStore.getState().season?.ladder;
+    const redirected = applyFatherSonRedirect(
+      { player: drafted, record: { pickNumber, round, clubName: myClub, playerId: drafted.PlayerID, playerName: playerFullName(drafted) } },
+      year,
+      ladder,
+      get().draftPickInventory
+    );
+    loadPool([...ALL_PLAYERS, redirected.player]);
+    useDraftStore.getState().logPick(redirected.record);
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory: redirected.draftPickInventory });
     void get().saveNow();
   },
 
   autoResolveNextPick: () => {
     const window = useDraftStore.getState().window;
     if (!window) return;
-    const { window: next, draftedPlayers } = autoResolveDraftPicks(window, get().year, { maxPicks: 1 });
+    const ladder = useSeasonStore.getState().season?.ladder;
+    const { window: next, draftedPlayers, draftPickInventory } = autoResolveDraftPicks(window, get().year, { maxPicks: 1 }, ladder, get().draftPickInventory);
     if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
     useDraftStore.getState().openWindow(next);
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory });
     void get().saveNow();
   },
 
@@ -646,20 +712,22 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const window = useDraftStore.getState().window;
     if (!window) return;
     const myClub = useGameStore.getState().myClub;
-    const { window: next, draftedPlayers } = autoResolveDraftPicks(window, get().year, { stopWhenClub: myClub });
+    const ladder = useSeasonStore.getState().season?.ladder;
+    const { window: next, draftedPlayers, draftPickInventory } = autoResolveDraftPicks(window, get().year, { stopWhenClub: myClub }, ladder, get().draftPickInventory);
     if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
     useDraftStore.getState().openWindow(next);
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory });
     void get().saveNow();
   },
 
   finishDraft: () => {
     const window = useDraftStore.getState().window;
     if (!window) return;
-    const { window: next, draftedPlayers } = autoResolveDraftPicks(window, get().year, {});
+    const ladder = useSeasonStore.getState().season?.ladder;
+    const { window: next, draftedPlayers, draftPickInventory } = autoResolveDraftPicks(window, get().year, {}, ladder, get().draftPickInventory);
     if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
     useDraftStore.getState().openWindow(next);
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory });
     void get().saveNow();
   },
 

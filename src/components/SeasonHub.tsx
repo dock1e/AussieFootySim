@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSeasonStore } from "../store/useSeasonStore";
+import { useSeasonStore, type CoachesVoteMatchRef } from "../store/useSeasonStore";
+import type { MatchCoachesVotes } from "../engine/coachesVotes";
 import { useGameStore } from "../store/useGameStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { CLUBS, clubById, clubByName } from "../types/club";
@@ -11,6 +12,7 @@ import type { MatchTeam } from "../engine/team";
 import type { FinalsMatch, FinalsSeriesResult } from "../engine/finals";
 import { LadderTable } from "./LadderTable";
 import { FullTimeResult } from "./FullTimeResult";
+import { recentForm, type RoundResult } from "../engine/ladder";
 
 /**
  * Season hub — Engine.md "Season lifecycle": `Pre-season -> [Round 1 ...
@@ -29,10 +31,18 @@ import { FullTimeResult } from "./FullTimeResult";
  * style) is re-applied fresh every round. Every other club is still an
  * auto-picked, no-tactics AI opponent (ROADMAP.md gap #22).
  */
-type Viewing = { result: MatchResult; homeTeam: MatchTeam; awayTeam: MatchTeam; label: string };
+type Viewing = {
+  result: MatchResult;
+  homeTeam: MatchTeam;
+  awayTeam: MatchTeam;
+  label: string;
+  /** Sep 2026 round 90, [[Coaches Votes and MVP Award]] — undefined for pre-round-90 matches (no vote data ever generated for them). */
+  coachesVotes?: MatchCoachesVotes;
+  matchRef: CoachesVoteMatchRef;
+};
 
 export function SeasonHub() {
-  const { season, teams, startNewSeason, simulateNextRound, simulateAllRemaining, playFinals } = useSeasonStore();
+  const { season, teams, startNewSeason, simulateNextRound, simulateAllRemaining, playFinals, submitCoachesVotes } = useSeasonStore();
   const myClub = useGameStore((s) => s.myClub);
   const myClubId = useMemo(() => clubByName(myClub)?.ClubID ?? CLUBS[0].ClubID, [myClub]);
   const year = useSaveStore((s) => s.year);
@@ -41,6 +51,19 @@ export function SeasonHub() {
 
   const [round, setRound] = useState(1);
   const [viewing, setViewing] = useState<Viewing | null>(null);
+
+  /** Round 89, ROADMAP item #40 — same per-club last-5 W/L/D derivation Dashboard.tsx's own `formMap` uses, see that file's doc comment; this screen has its own `season` in scope so it builds its own copy rather than threading one down as a prop. */
+  const formMap = useMemo(() => {
+    if (!season) return new Map<number, ("W" | "L" | "D")[]>();
+    const results: RoundResult[] = season.played.map((p) => ({
+      round: p.round,
+      homeClubId: p.homeClubId,
+      awayClubId: p.awayClubId,
+      homePoints: p.result.home.points,
+      awayPoints: p.result.away.points,
+    }));
+    return new Map(season.ladder.map((r) => [r.clubId, recentForm(r.clubId, results)]));
+  }, [season]);
 
   // A successful off-season bumps useSaveStore's poolVersion, and App.tsx
   // keys <main> off it specifically so this whole screen remounts fresh
@@ -71,6 +94,21 @@ export function SeasonHub() {
         awayTeam={viewing.awayTeam}
         closeLabel={`Back to ${viewing.label}`}
         onNewMatch={() => setViewing(null)}
+        coachesVotes={viewing.coachesVotes}
+        myClub={myClub}
+        onSubmitBallot={(side, allocations) => {
+          submitCoachesVotes(viewing.matchRef, side, allocations);
+          // submitCoachesVotes replaces `season` with a new object — re-derive this modal's own
+          // copy of the match from it so the card immediately reflects the just-submitted ballot
+          // instead of the stale procedural one still sitting in local `viewing` state.
+          const ref = viewing.matchRef;
+          const freshSeason = useSeasonStore.getState().season;
+          const updated =
+            ref.kind === "round"
+              ? freshSeason?.played.find((m) => m.round === ref.round && m.homeClubId === ref.homeClubId && m.awayClubId === ref.awayClubId)
+              : freshSeason?.finals?.matches.find((m) => m.key === ref.key);
+          if (updated) setViewing((v) => (v ? { ...v, result: updated.result, coachesVotes: updated.coachesVotes } : v));
+        }}
       />
     );
   }
@@ -98,11 +136,18 @@ export function SeasonHub() {
   const complete = isHomeAndAwayComplete(season);
   const upNext = nextUnplayedRound(season);
 
-  function openResult(homeClubId: number, awayClubId: number, result: MatchResult, label: string) {
+  function openResult(
+    homeClubId: number,
+    awayClubId: number,
+    result: MatchResult,
+    label: string,
+    coachesVotes: MatchCoachesVotes | undefined,
+    matchRef: CoachesVoteMatchRef,
+  ) {
     const home = teams!.get(homeClubId);
     const away = teams!.get(awayClubId);
     if (!home || !away) return;
-    setViewing({ result, homeTeam: home, awayTeam: away, label });
+    setViewing({ result, homeTeam: home, awayTeam: away, label, coachesVotes, matchRef });
   }
 
   return (
@@ -169,11 +214,11 @@ export function SeasonHub() {
         <FinalsBracket
           finals={season.finals}
           premierClubId={season.premierClubId!}
-          onSelect={(fm) => openResult(fm.homeClubId, fm.awayClubId, fm.result, "finals")}
+          onSelect={(fm) => openResult(fm.homeClubId, fm.awayClubId, fm.result, "finals", fm.coachesVotes, { kind: "finals", key: fm.key })}
         />
       )}
 
-      <LadderTable ladder={season.ladder} highlightClubId={myClubId} />
+      <LadderTable ladder={season.ladder} highlightClubId={myClubId} recentForm={formMap} />
 
       <RoundFixture
         round={round}
@@ -181,7 +226,14 @@ export function SeasonHub() {
         fixture={season.fixture}
         played={season.played}
         myClubId={myClubId}
-        onSelect={(m) => openResult(m.homeClubId, m.awayClubId, m.result, `Round ${round}`)}
+        onSelect={(m) =>
+          openResult(m.homeClubId, m.awayClubId, m.result, `Round ${round}`, m.coachesVotes, {
+            kind: "round",
+            round: m.round,
+            homeClubId: m.homeClubId,
+            awayClubId: m.awayClubId,
+          })
+        }
       />
     </div>
   );

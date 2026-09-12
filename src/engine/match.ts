@@ -165,6 +165,15 @@ export interface BoxScoreLine {
    * a miss, matching Tyler's own stat name.
    */
   goalAssists: number;
+  /**
+   * Sep 2026 round 90, [[Coaches Votes and MVP Award]] — combined points this player received from
+   * BOTH coaches' 5-4-3-2-1 ballots in this one match (0-10), baked in by `engine/coachesVotes.ts`'s
+   * `applyVotesToBoxScore` right after ballots are generated/resubmitted. A real `BoxScoreLine` field
+   * (not something kept only on the side) so it flows through the entire existing season/all-time
+   * reducer pipeline for free — same "add a field, get the whole pipeline" precedent as round 54's
+   * `shotsAtGoal`/`hitoutsToAdvantage`/`marksInside50`.
+   */
+  coachesVotes: number;
 }
 
 function emptyLine(): BoxScoreLine {
@@ -203,6 +212,7 @@ function emptyLine(): BoxScoreLine {
     interceptPossessions: 0,
     turnovers: 0,
     goalAssists: 0,
+    coachesVotes: 0,
   };
 }
 

@@ -11,7 +11,7 @@ import type { TeamPlan } from "./tactics.ts";
 import { updateConditionAfterRound } from "./progression.ts";
 import { autoFillLineup, lineupToMatchTeam } from "./selection.ts";
 import { nextDisgruntlementState, type DisgruntlementState } from "./disgruntlement.ts";
-import { generateMatchCoachesVotes, applyVotesToBoxScore, type MatchCoachesVotes } from "./coachesVotes.ts";
+import { generateMatchCoachesVotes, applyVotesToBoxScore, applyBrownlowVotesToBoxScore, type MatchCoachesVotes } from "./coachesVotes.ts";
 
 /**
  * Season orchestration — ties fixture.ts + match.ts + ladder.ts + finals.ts
@@ -228,7 +228,11 @@ export function simulateRound(season: Season, round: number, teams: Map<number, 
     // `generateMatchCoachesVotes` needs `rawResult.events` (see that function's own doc comment),
     // which is still in memory now but gets stripped at archive time.
     const coachesVotes = generateMatchCoachesVotes(rawResult, home, away);
-    const result = { ...rawResult, boxScore: applyVotesToBoxScore(rawResult.boxScore, coachesVotes) };
+    // Round 91 — Brownlow-style 3-2-1 applied here too, home-and-away only (see
+    // applyBrownlowVotesToBoxScore's own doc comment for why this is deliberately absent from
+    // runFinals below, matching the real Brownlow Medal's own finals-ineligibility rule).
+    const withCoachesVotes = applyVotesToBoxScore(rawResult.boxScore, coachesVotes);
+    const result = { ...rawResult, boxScore: applyBrownlowVotesToBoxScore(withCoachesVotes, coachesVotes.objectiveRanking) };
     return { round, homeClubId: m.homeClubId, awayClubId: m.awayClubId, result, coachesVotes };
   });
 

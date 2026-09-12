@@ -8,6 +8,7 @@ import type { TradeOffer } from "./trade.ts";
 import type { DraftPickRecord } from "./draft.ts";
 import type { CombineTestResult } from "./combine.ts";
 import { runOffSeason } from "./progression.ts";
+import { developmentMultipliersFor } from "./development.ts";
 import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
 import type { DisgruntlementState } from "./disgruntlement.ts";
 import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
@@ -235,6 +236,17 @@ export interface SaveGameData {
    * appointment, so it never reaches this save file at all.
    */
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
+  /**
+   * Sep 2026 round 91 — [[Coach-Driven & Performance-Linked Player Development]]. Which
+   * `data/assistantCoachPool.ts` `Coach.id` the coach's club has assigned as Development coach —
+   * the last of the 5 development-facing `CoachRole`s (`types/coach.ts`) to actually get a save-state
+   * slot; `null` means unhired (every player's `developmentMultiplier` from this coach is then
+   * exactly 0, i.e. today's unmodified behaviour — see `engine/development.ts`). Same "multi-year
+   * state, NOT reset by `runOffSeasonOnSave`" treatment as `talentScout`/`lineCoaches` above, and the
+   * same "added without bumping `SAVE_SCHEMA_VERSION`" convention every field on this interface has
+   * followed since `eligibility`.
+   */
+  developmentCoach: number | null;
 }
 
 /** See `SaveGameData.talentScout`'s own doc comment. */
@@ -263,6 +275,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     draftPickInventory: seedDraftPickInventory(),
     talentScout: null,
     lineCoaches: {},
+    developmentCoach: null,
   };
 }
 
@@ -303,9 +316,22 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
  */
 export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   const finishedSeasonArchive = save.season ? archiveSeason(save.season, save.year) : null;
+  // Round 91 — [[Coach-Driven & Performance-Linked Player Development]]. Computed from the season
+  // that's about to be archived above (still `save.season` here, not yet discarded below), BEFORE
+  // `runOffSeason` ages anyone — see `engine/development.ts`'s own doc comment for the full mechanic
+  // and the design note for the balance argument. `save.season === null` (no season played yet, e.g.
+  // a brand-new save) naturally yields every multiplier at exactly `1`.
+  const developmentMultipliers = developmentMultipliersFor(
+    save.players,
+    save.season,
+    save.seasonArchives,
+    save.myClub,
+    save.developmentCoach,
+    save.lineCoaches,
+  );
   return {
     ...save,
-    players: runOffSeason(save.players),
+    players: runOffSeason(save.players, developmentMultipliers),
     year: save.year + 1,
     season: null,
     combineWindow: null,
@@ -371,6 +397,8 @@ export interface SerializedSaveGame {
   talentScout: TalentScoutAssignment | null;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `talentScout`. See `SaveGameData.lineCoaches`'s own doc comment. */
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineCoaches`. See `SaveGameData.developmentCoach`'s own doc comment. */
+  developmentCoach: number | null;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -403,6 +431,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     draftPickInventory: save.draftPickInventory,
     talentScout: save.talentScout,
     lineCoaches: save.lineCoaches,
+    developmentCoach: save.developmentCoach,
   };
 }
 
@@ -449,5 +478,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     draftPickInventory: s.draftPickInventory ?? seedDraftPickInventory(),
     talentScout: s.talentScout ?? null,
     lineCoaches: s.lineCoaches ?? {},
+    developmentCoach: s.developmentCoach ?? null,
   };
 }

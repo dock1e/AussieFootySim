@@ -68,6 +68,8 @@ interface SaveStoreState {
   talentScout: TalentScoutAssignment | null;
   /** Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Same "doesn't belong to any single sub-store, persists across seasons" reasoning as `talentScout` — see `SaveGameData.lineCoaches`'s own doc comment. A role absent means unassigned. */
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
+  /** Sep 2026 round 91 — [[Coach-Driven & Performance-Linked Player Development]]. Same "doesn't belong to any single sub-store, persists across seasons" reasoning as `talentScout`/`lineCoaches` — see `SaveGameData.developmentCoach`'s own doc comment. `null` means unhired. */
+  developmentCoach: number | null;
 
   /** Loads the current save from IndexedDB if one exists and hydrates every other store from it; otherwise leaves everything at its already-correct fresh-game defaults. Call once, on app boot, before rendering the main UI. */
   initialize: () => Promise<void>;
@@ -169,6 +171,13 @@ interface SaveStoreState {
 
   /** Assigns `coachId` (a `data/assistantCoachPool.ts` `Coach.id`) to `role` for match-day direction. Pass `null` to release that role back to unassigned (falls back to `DEFAULT_LINE_COACH_EFFECTIVENESS` everywhere). */
   assignLineCoach: (role: MatchDayCoachRole, coachId: number | null) => void;
+
+  // --- Coach-Driven & Performance-Linked Player Development (round 91) ----
+  // See SaveGameData.developmentCoach's own doc comment — same minimal assignment-hook treatment as
+  // Talent Scout/Line Coaches above.
+
+  /** Assigns (or clears, with `null`) the club's Development coach. */
+  assignDevelopmentCoach: (coachId: number | null) => void;
 }
 
 /**
@@ -271,7 +280,14 @@ function autoResolveDraftPicks(
   return { window: { ...window, picks, currentPickIndex }, draftedPlayers, draftPickInventory: inventory };
 }
 
-function snapshotSave(year: number, seasonArchives: SeasonArchiveEntry[], draftPickInventory: DraftPick[], talentScout: TalentScoutAssignment | null, lineCoaches: Partial<Record<MatchDayCoachRole, number>>): SaveGameData {
+function snapshotSave(
+  year: number,
+  seasonArchives: SeasonArchiveEntry[],
+  draftPickInventory: DraftPick[],
+  talentScout: TalentScoutAssignment | null,
+  lineCoaches: Partial<Record<MatchDayCoachRole, number>>,
+  developmentCoach: number | null,
+): SaveGameData {
   return {
     schemaVersion: SAVE_SCHEMA_VERSION,
     myClub: useGameStore.getState().myClub,
@@ -290,6 +306,7 @@ function snapshotSave(year: number, seasonArchives: SeasonArchiveEntry[], draftP
     draftPickInventory,
     talentScout,
     lineCoaches,
+    developmentCoach,
   };
 }
 
@@ -332,6 +349,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   draftPickInventory: seedDraftPickInventory(),
   talentScout: null,
   lineCoaches: {},
+  developmentCoach: null,
 
   initialize: async () => {
     let loaded: SaveGameData | null = null;
@@ -353,9 +371,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       // enough (nothing has changed since the load, so what's on disk still
       // matches this state) and avoids needing to persist a real timestamp
       // inside SaveGameData just for a UI label.
-      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches });
+      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches, developmentCoach: loaded.developmentCoach });
     } else {
-      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {} });
+      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {}, developmentCoach: null });
     }
 
     if (!subscribed) {
@@ -372,7 +390,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   saveNow: async () => {
-    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches);
+    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach);
     await writeSaveToDB(serializeSave(save));
     set({ hasSave: true, lastSavedAt: Date.now() });
   },
@@ -381,13 +399,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     resetPoolToGenerated();
     const save = newSaveGame(myClub, ALL_PLAYERS);
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach });
     await clearSaveInDB();
     await get().saveNow();
   },
 
   runOffSeason: async () => {
-    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches);
+    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach);
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
@@ -395,16 +413,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
     useDraftStore.getState().clearWindow();
-    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches });
+    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches, developmentCoach: next.developmentCoach });
     await get().saveNow();
   },
 
-  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches)), null, 2),
+  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach)), null, 2),
 
   importJSON: async (text) => {
     const save = deserializeSave(JSON.parse(text));
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach });
     await get().saveNow();
   },
 
@@ -765,6 +783,11 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       current[role] = coachId;
     }
     set({ lineCoaches: current });
+    void get().saveNow();
+  },
+
+  assignDevelopmentCoach: (coachId) => {
+    set({ developmentCoach: coachId });
     void get().saveNow();
   },
 }));

@@ -90,6 +90,9 @@ function emptyLine(): BoxScoreLine {
     // Sep 2026 round 90 — kept in sync with engine/match.ts's own emptyLine(), same convention as
     // the round 54/55 fields' own comments above.
     coachesVotes: 0,
+    // Sep 2026 round 91 — kept in sync with engine/match.ts's own emptyLine(), same convention as
+    // the round 54/55/90 fields' own comments above.
+    brownlowVotes: 0,
   };
 }
 

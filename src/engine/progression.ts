@@ -44,18 +44,18 @@ import { ARCHETYPE_PRIMARY_ATTRIBUTES } from "../types/archetype.ts";
  *    Intercept Defender (191.3cm, the shortest "Tall") and Hybrid Mid
  *    Forward (189.5cm, the tallest "Mid").
  *
- * **Known gap, disclosed rather than silently worked around**: this file
- * only implements the engine-level formula, proven correct by
- * `progression.test.ts`/scratch verification — nothing in the UI calls it
- * yet. Making the off-season step actually *run* interactively needs a
- * persistent, mutable player-pool concept that doesn't exist anywhere in
- * this app today (`data/loadPlayers.ts` loads the generated JSON once and
- * every screen — Dashboard, Squad List, Selection Committee, the Match tab,
- * `season.ts`'s `buildTeams` — reads it as immutable). That's a bigger,
- * foundational gap than this one feature (Phase 4's contracts/trades/draft
- * will need the exact same plumbing to persist roster changes at all), so
- * it's called out here rather than solved narrowly just for this file.
- * See ROADMAP.md's Phase 3 gap list.
+ * **Historical note, corrected Sep 2026**: this doc comment used to say "nothing in the UI calls it
+ * yet" — stale since `engine/saveGame.ts`'s `runOffSeasonOnSave` (built alongside round 54's
+ * persistent save-state work) started calling `runOffSeason` for real, wired to a genuine off-season
+ * UI action (`useSaveStore.ts`'s `runOffSeason`). The persistent, mutable player-pool concern this
+ * paragraph originally raised was solved by that same save-state layer, not narrowly here.
+ *
+ * **Round 91 — [[Coach-Driven & Performance-Linked Player Development]]**: `ageOnePlayer`'s optional
+ * `developmentMultiplier` (default `1`, today's unmodified behaviour) scales only the `imp_` term
+ * below, never `deg_` — a coach-and-performance-driven acceleration toward a player's own EXISTING
+ * `potentialTall`/`potentialMid` ceiling, never a way to raise that ceiling. See
+ * `engine/development.ts` for where the multiplier actually comes from, and that round's design note
+ * for the full balance argument (why this can't manufacture "generational talents").
  */
 
 // --- Off-season attribute step ----------------------------------------------------------------
@@ -146,8 +146,11 @@ export const PROGRESSION_SCALE = 0.12;
  * mention it (an artifact of the mapping) rather than the player's actual
  * `imp_`/`deg_` values. Averaging keeps every attribute's movement on the
  * same footing regardless of how many skills feed it.
+ *
+ * `developmentMultiplier` (round 91, default `1`) scales only the improvement half of each delta —
+ * see this file's own top doc comment and `engine/development.ts` for where a real value comes from.
  */
-export function ageOnePlayer(p: Player): Player {
+export function ageOnePlayer(p: Player, developmentMultiplier = 1): Player {
   const ceiling = potentialCeilingFor(p);
   const af = ageFactor(p.Age);
   const contributions: Partial<Record<RatedAttribute, number[]>> = {};
@@ -157,7 +160,7 @@ export function ageOnePlayer(p: Player): Player {
     const deg = p[`deg_${skill}`];
     for (const attr of SKILL_ATTRIBUTES[skill]) {
       const headroom = potentialHeadroom(p[attr], ceiling);
-      const delta = imp * headroom * PROGRESSION_SCALE - deg * af * PROGRESSION_SCALE;
+      const delta = imp * headroom * developmentMultiplier * PROGRESSION_SCALE - deg * af * PROGRESSION_SCALE;
       (contributions[attr] ??= []).push(delta);
     }
   }
@@ -220,9 +223,14 @@ export function recomputeOVR(players: readonly Player[]): Player[] {
  *   don't recompute it," so a real off-season run would silently overwrite
  *   those with formula output. A real gap for whenever this actually gets
  *   wired into play, not pretended away here.
+ *
+ * `developmentMultipliers` (round 91, optional) is a `PlayerID -> multiplier` map — see
+ * `engine/development.ts`'s `developmentMultipliersFor`, called from `saveGame.ts`'s
+ * `runOffSeasonOnSave` before this function runs. A player missing from the map (or no map at all)
+ * ages at the default `1` multiplier, i.e. exactly today's behaviour.
  */
-export function runOffSeason(players: readonly Player[]): Player[] {
-  const aged = players.map(ageOnePlayer);
+export function runOffSeason(players: readonly Player[], developmentMultipliers?: ReadonlyMap<number, number>): Player[] {
+  const aged = players.map((p) => ageOnePlayer(p, developmentMultipliers?.get(p.PlayerID) ?? 1));
   return recomputeOVR(aged);
 }
 

@@ -514,7 +514,7 @@ function simStatValue(t: SeasonPlayerTotals, category: RecordCategory): number {
   return category === "gamesPlayed" ? t.gamesPlayed : t[category];
 }
 
-function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEntry[], seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, topN: number): RecordRow[] {
+function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEntry[], seasonArchives: readonly SeasonArchiveEntry[], liveSeason: Season | null, topN: number): RecordRow[] {
   type Candidate = { name: string; value: number; source: "real" | "sim"; player?: Player; real?: RealWorldRecordEntry; simContribution?: number };
   const candidates: Candidate[] = [];
 
@@ -567,7 +567,7 @@ function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEn
 }
 
 /** The merged real+sim all-time leaderboard for any of the 24 `RecordCategory` values — the Records tab's default "All-Time Career" view. `topN` defaults to 100 but the UI widens it when a Position/Team filter is active, since a narrow filter can otherwise starve a shallow slice. */
-export function combinedRecordFor(category: RecordCategory, seasonArchives: SeasonArchiveEntry[], liveSeason: Season | null, topN = 100): RecordRow[] {
+export function combinedRecordFor(category: RecordCategory, seasonArchives: readonly SeasonArchiveEntry[], liveSeason: Season | null, topN = 100): RecordRow[] {
   return combinedRecord(category, realWorldRecordsFor(category), seasonArchives, liveSeason, topN);
 }
 

@@ -167,3 +167,35 @@ export function submitUserBallot(existing: MatchCoachesVotes, side: "home" | "aw
   }
   return { ...existing, awayCoachBallot: allocations, awayBallotIsUser: true, userDeviationScore: deviationScore };
 }
+
+/**
+ * Round 91 — [[Coach-Driven & Performance-Linked Player Development]]. A minimal, deliberately
+ * un-parallel build of a Brownlow-style vote: real Brownlow votes come from neutral field umpires,
+ * not either coach, so this reuses the SAME `objectiveRanking` the two coach ballots above are
+ * derived from (no second rating computation, no ballot concept, no user submission — there's
+ * nothing for the user's own coach to submit for an umpire's vote). Top 3 by objective rank -> 3/2/1,
+ * mirroring `proceduralBallotFrom`'s own top-N-by-rank shape exactly.
+ */
+export function proceduralBrownlowBallotFrom(ranking: ObjectiveVoteRanking[]): { playerId: number; votes: 3 | 2 | 1 }[] {
+  const top3 = [...ranking].sort((a, b) => a.rank - b.rank).slice(0, 3);
+  const values = [3, 2, 1] as const;
+  return top3.map((r, i) => ({ playerId: r.playerId, votes: values[i] }));
+}
+
+/**
+ * Bakes a fresh Brownlow-style 3-2-1 into `boxScore.brownlowVotes` for every player who appeared in
+ * the match — same full-overwrite convention `applyVotesToBoxScore` uses for `coachesVotes` (a
+ * player not in the top 3 gets 0, not left stale). Called once, at simulation time, from
+ * `season.ts`'s home-and-away `simulateRound` ONLY — never `runFinals`, matching the real Brownlow
+ * Medal's actual eligibility rule that votes are awarded in the home-and-away season only.
+ */
+export function applyBrownlowVotesToBoxScore(boxScore: Record<number, BoxScoreLine>, ranking: ObjectiveVoteRanking[]): Record<number, BoxScoreLine> {
+  const ballot = proceduralBrownlowBallotFrom(ranking);
+  const points = new Map(ballot.map((a) => [a.playerId, a.votes]));
+  const next: Record<number, BoxScoreLine> = {};
+  for (const [idStr, line] of Object.entries(boxScore)) {
+    const id = Number(idStr);
+    next[id] = { ...line, brownlowVotes: points.get(id) ?? 0 };
+  }
+  return next;
+}

@@ -10,7 +10,7 @@ import { benchPlayers, pickBest22 } from "../engine/team";
 import { POSITIONS, defaultEligiblePositions, suitabilityFor, type Archetype, type Position } from "../types/archetype";
 import { defaultTeamPlan } from "../engine/tactics";
 import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
-import { gradeForOvr, MATCH_DAY_COACH_ROLES, type Coach, type MatchDayCoachRole } from "../types/coach";
+import { gradeForOvr, MATCH_DAY_COACH_ROLES, type Coach, type CoachRole } from "../types/coach";
 import { TeamPrep } from "./MatchPreparation";
 import { SelectionGround, GROUND_ROW_POSITIONS } from "./SelectionGround";
 import { SelectionPlayerList } from "./SelectionPlayerList";
@@ -105,6 +105,8 @@ export function SelectionCommittee() {
 
   const lineCoaches = useSaveStore((s) => s.lineCoaches);
   const assignLineCoach = useSaveStore((s) => s.assignLineCoach);
+  const developmentCoach = useSaveStore((s) => s.developmentCoach);
+  const assignDevelopmentCoach = useSaveStore((s) => s.assignDevelopmentCoach);
 
   return (
     <div className="space-y-4">
@@ -209,6 +211,22 @@ export function SelectionCommittee() {
           ))}
         </div>
       </div>
+
+      <div className="space-y-2">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Development Coach</div>
+        <div className="card text-xs text-slate-400">
+          A single, club-wide hire — unlike the 4 Line Coaches above, this role isn't gated to any
+          one group of archetypes. Their rating feeds every {myClub} player's off-season growth
+          alongside how each player actually performed (coaches votes, Brownlow votes, and any
+          records broken this season). See{" "}
+          <span className="italic">Coach-Driven &amp; Performance-Linked Player Development</span>{" "}
+          for the full mechanic. Same rule as Line Coaches: a hire here takes effect at your next
+          off-season, not retroactively.
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <LineCoachHiringCard role="Development" assignedCoachId={developmentCoach} onAssign={assignDevelopmentCoach} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -229,7 +247,7 @@ function LineCoachHiringCard({
   assignedCoachId,
   onAssign,
 }: {
-  role: MatchDayCoachRole;
+  role: CoachRole;
   assignedCoachId: number | null;
   onAssign: (coachId: number | null) => void;
 }) {

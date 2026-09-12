@@ -199,6 +199,10 @@ describe("serializeSave / deserializeSave", () => {
       // (not every role assigned), same "prove JSON round-tripping" ethos as `talentScout` above —
       // plain number values, no Map/Set involved.
       lineCoaches: { "Defensive Line": 7, "Ruck and Stoppage": 19 },
+      // Sep 2026 round 91 — [[Coach-Driven & Performance-Linked Player Development]]. A real
+      // non-null value here (not null), same "prove JSON round-tripping" ethos as `talentScout`/
+      // `lineCoaches` above — a plain number field, no Map/Set involved.
+      developmentCoach: 31,
     };
   }
 

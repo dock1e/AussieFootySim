@@ -174,6 +174,20 @@ export interface BoxScoreLine {
    * `shotsAtGoal`/`hitoutsToAdvantage`/`marksInside50`.
    */
   coachesVotes: number;
+  /**
+   * Sep 2026 round 91, [[Coach-Driven & Performance-Linked Player Development]] — this player's
+   * share (0-3) of a Brownlow-style 3-2-1 vote for this match, derived from the SAME
+   * `ObjectiveVoteRanking` the two coaches' ballots above are built from (real Brownlow votes are
+   * cast by neutral field umpires, not a coach, so "objective, no user ballot" is if anything a more
+   * faithful model here than for Coaches Votes). Applied by `engine/coachesVotes.ts`'s
+   * `applyBrownlowVotesToBoxScore`, called only from `season.ts`'s home-and-away `simulateRound` —
+   * never `runFinals`, matching the real Brownlow Medal's own actual eligibility rule (no finals
+   * votes). Deliberately NOT added to `seasonSummary.ts`'s `LEADERBOARD_STAT_FIELDS`/`LeagueStat` —
+   * see the design note's "Brownlow-votes signal" section for why that would force a much bigger,
+   * separately-scoped Records/Dashboard display build. This round only reads it as a growth signal
+   * (`engine/development.ts`), aggregated directly off `season.played[].result.boxScore`.
+   */
+  brownlowVotes: number;
 }
 
 function emptyLine(): BoxScoreLine {
@@ -213,6 +227,7 @@ function emptyLine(): BoxScoreLine {
     turnovers: 0,
     goalAssists: 0,
     coachesVotes: 0,
+    brownlowVotes: 0,
   };
 }
 

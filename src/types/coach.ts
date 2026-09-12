@@ -164,3 +164,31 @@ export const SCOUT_FOCUS_AREA_ARCHETYPES: Record<ScoutFocusArea, readonly Archet
   "Small/Pressure Forwards": ["Small Forward", "Pressure Forward"],
   "Small/Tagging Defenders": ["Back Pocket", "Half Back Flanker"],
 };
+
+/**
+ * Round 91 — [[Coach-Driven & Performance-Linked Player Development]]. Off-season development has
+ * no live match `TacticGroup` to gate on (that's set per-match by `engine/tactics.ts`, read via
+ * `engine/lineCoaching.ts`'s own `matchDayRoleForTacticGroup`) — this is the same real partition,
+ * re-derived from a player's own `Archetype` so it's available year-round rather than only mid-match.
+ * It collapses `SCOUT_FOCUS_AREA_ARCHETYPES` above (round 83's 6 Talent Scout buckets) down to the
+ * same 4 `MatchDayCoachRole`s `matchDayRoleForTacticGroup` (round 84) already uses — the third
+ * independent precedent for this exact grouping, not a new invention. Covers all 14 `ARCHETYPES`
+ * exactly once (5+4+3+2=14) — cross-checked in `scripts/verify_round91_scratch.ts`, same "verify the
+ * partition in the scratch script" discipline round 83's own doc comment already established for
+ * `SCOUT_FOCUS_AREA_ARCHETYPES`.
+ */
+export const DEVELOPMENT_ROLE_ARCHETYPES: Record<MatchDayCoachRole, readonly Archetype[]> = {
+  "Defensive Line": ["Key Defender", "Intercept Defender", "Medium Defender", "Back Pocket", "Half Back Flanker"],
+  "Forward Line": ["Key Forward", "Medium Forward", "Pressure Forward", "Small Forward"],
+  Midfield: ["Inside Mid", "Outside Mid", "Hybrid Mid Forward"],
+  "Ruck and Stoppage": ["Ruck", "Hybrid Key Forward Ruck"],
+};
+
+const ARCHETYPE_DEVELOPMENT_ROLE = Object.fromEntries(
+  MATCH_DAY_COACH_ROLES.flatMap((role) => DEVELOPMENT_ROLE_ARCHETYPES[role].map((a) => [a, role] as const)),
+) as Record<Archetype, MatchDayCoachRole>;
+
+/** Which of the 4 match-day line-coach roles "owns" a player's off-season development bonus, by their own archetype — see `DEVELOPMENT_ROLE_ARCHETYPES`'s own doc comment. The Development coach's own bonus is deliberately NOT gated by this (or anything) — every player at the club gets it, matching that role's own club-wide "training... and development across the season" job. */
+export function developmentRoleForArchetype(archetype: Archetype): MatchDayCoachRole {
+  return ARCHETYPE_DEVELOPMENT_ROLE[archetype];
+}

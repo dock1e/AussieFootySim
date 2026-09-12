@@ -430,7 +430,7 @@ function mergeTotals(maps: Map<number, SeasonPlayerTotals>[]): Map<number, Seaso
  * archived seasons yet (a brand-new save under this system) this correctly
  * reduces to exactly the live season's own totals, nothing more.
  */
-export function allTimePlayerTotals(archives: SeasonArchiveEntry[], liveSeason: Season | null): Map<number, SeasonPlayerTotals> {
+export function allTimePlayerTotals(archives: readonly SeasonArchiveEntry[], liveSeason: Season | null): Map<number, SeasonPlayerTotals> {
   const maps = archives.map((a) => new Map(a.playerTotals.map((t): [number, SeasonPlayerTotals] => [t.playerId, t])));
   if (liveSeason) maps.push(seasonPlayerTotals(liveSeason));
   return mergeTotals(maps);

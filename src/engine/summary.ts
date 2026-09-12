@@ -96,6 +96,9 @@ function emptyLine(): BoxScoreLine {
     // applyVotesToBoxScore, never a MatchEvent/StatDelta, so it has nothing to accumulate from) —
     // sumTeam()'s generic per-key loop still sums it correctly across a real full-match box score.
     coachesVotes: 0,
+    // Sep 2026 round 91 — kept in sync with engine/match.ts's own emptyLine(), same convention as
+    // the coachesVotes comment directly above (always 0 here / per-quarter, baked on whole-of-match).
+    brownlowVotes: 0,
   };
 }
 

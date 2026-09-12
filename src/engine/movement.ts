@@ -486,8 +486,82 @@ const DEFAULT_MIDFIELD_TACTIC: Tactic = "Run Two Ways";
  * reading past the array — every player from the 3rd-closest down shares
  * the same, most conservative taper, a deliberate simplification rather
  * than a 6-entry table tuned per exact rank.
+ *
+ * Aug 2026 round 92 — index 1 recalibrated from `1` to `0.8`. Tyler, live
+ * testing again: "our midfielders still move as two conjoined entities."
+ * Root cause, isolated by re-reading this exact table: indices 0 AND 1 were
+ * both `1` — the two CLOSEST mids to a live carrier pulled at the identical
+ * full weight, every tick, with nothing else in `midfieldTarget`'s formula
+ * to tell them apart, so whichever two happened to be nearest visibly moved
+ * as one duplicated unit. The closest mid still crashes at full intensity
+ * (unchanged); the second-closest now visibly holds back a touch instead of
+ * mirroring the first exactly. Indices 2/3 (0.55/0.3) are untouched from
+ * round 37's own calibration. See `individualPullFactor` below for the
+ * second, complementary half of this round's fix (variance WITHIN a rank,
+ * not just between ranks).
  */
-const MIDFIELD_RANK_TAPER = [1, 1, 0.55, 0.3];
+export const MIDFIELD_RANK_TAPER = [1, 0.8, 0.55, 0.3];
+
+/**
+ * Aug 2026 round 92 — the other half of the "two conjoined entities" fix.
+ * Even with `MIDFIELD_RANK_TAPER`'s own index-1 recalibration just above, two
+ * mids sharing the same tactic AND the same rank (e.g. both "Run Two Ways" at
+ * rank 2) still pulled at the exact identical rate with zero player-to-player
+ * variation — a deterministic formula has to get its variety from *somewhere*
+ * per-player, not just from rank/tactic. `individualPhase` is a cheap,
+ * DETERMINISTIC (not `ctx.rng()`-based — this module stays a pure function of
+ * already-decided state, see this file's own top comment) pseudo-random value
+ * in [0,1) seeded by `PlayerID` alone, via the same sine-hash trick used for
+ * quick non-cryptographic per-ID variety elsewhere in graphics/game code — the
+ * exact constants don't matter, only that they decorrelate consecutive IDs
+ * well enough for visual purposes. Same player always gets the same phase
+ * (stable across ticks/matches), different players spread across the full
+ * range. `individualPullFactor` turns that into a +-15% (`INDIVIDUAL_PULL_
+ * VARIANCE`) multiplier on the crash-pull itself; `midfieldAmbientOffset`
+ * (below, near `midfieldTarget`) reuses the same phase for the idle-anchor
+ * roam's own starting angle, so a player's "eagerness to crash" and "resting
+ * roam phase" are visually the same underlying trait, not two independent
+ * random draws.
+ */
+export const INDIVIDUAL_PULL_VARIANCE = 0.15;
+
+/** Exported Aug 2026 round 92 for verify_round92_scratch.ts's own direct unit tests — no behaviour change, visibility only. */
+export function individualPhase(playerId: number): number {
+  const x = Math.sin(playerId * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+export function individualPullFactor(playerId: number): number {
+  return 1 + (individualPhase(playerId) - 0.5) * 2 * INDIVIDUAL_PULL_VARIANCE;
+}
+
+/**
+ * Aug 2026 round 92 — Tyler's own second half of the same report: "I want to
+ * see more variability of the positioning of the midfielders as they cover
+ * the field." Diagnosis: `targetFor`'s Midfield/Ruck branch only ever called
+ * `midfieldTarget` when `opponentCarrierPos` was supplied, which `stepSide`
+ * only ever does when this side is DEFENDING (the opponent holds the ball) —
+ * see `stepSide`'s own `carrierIsOpponent` gate. The moment this side has the
+ * ball itself, or nobody currently carries it, every Midfield/Ruck player
+ * just returned `home` — their exact, static, ball-relative anchor —
+ * completely motionless tick after tick, the "no dynamic behaviour outside a
+ * contest crash" gap this ambient roam closes. A small (`AMBIENT_ROAM_RADIUS`),
+ * per-player-phased drift around that anchor (not a real destination-seeking
+ * walk — this is a cheap, disclosed proxy for "looks alive," same status as
+ * `ground.ts`'s own rendering-only jitter/wobble, just now genuinely felt by
+ * the engine's tracked position too). Its angle advances with the live ball
+ * `zone` (0-4, already threaded through every call site) rather than a wall-
+ * clock tick counter, so it needs no new parameter through `stepPositions`'s
+ * existing signature and visibly shifts as play moves up and down the ground,
+ * not on a fixed real-time cycle.
+ */
+export const AMBIENT_ROAM_RADIUS = 0.12;
+
+/** Exported Aug 2026 round 92 for verify_round92_scratch.ts's own direct unit tests — no behaviour change, visibility only. */
+export function midfieldAmbientOffset(playerId: number, zone: Zone): AbstractPosition {
+  const angle = individualPhase(playerId) * Math.PI * 2 + zone * 0.9;
+  return { zoneFrac: Math.sin(angle) * AMBIENT_ROAM_RADIUS, lane: Math.cos(angle) * AMBIENT_ROAM_RADIUS };
+}
 
 /**
  * Ranks one side's own on-ground Midfield/Ruck players by CURRENT distance
@@ -514,13 +588,29 @@ function midfieldRanks(team: MatchTeam, carrierPos: AbstractPosition, current: M
   return ranks;
 }
 
-function midfieldTarget(home: AbstractPosition, carrierPos: AbstractPosition, tactic: Tactic | undefined, rank: number | undefined): AbstractPosition {
+/** Exported Aug 2026 round 92 for verify_round92_scratch.ts's own direct unit tests — no behaviour change, visibility only. */
+export function midfieldTarget(
+  home: AbstractPosition,
+  carrierPos: AbstractPosition | undefined,
+  tactic: Tactic | undefined,
+  rank: number | undefined,
+  playerId: number,
+  zone: Zone,
+): AbstractPosition {
+  // Round 92 — no genuine opponent carrier to crash toward (own side has the
+  // ball, or nobody does) or the carrier is outside crash range: ambient roam
+  // around the static anchor instead of a motionless snap to it. See
+  // `midfieldAmbientOffset`'s own doc comment.
+  if (!carrierPos || distanceBetween(home, carrierPos) > MIDFIELD_CONTEST_RANGE) {
+    const offset = midfieldAmbientOffset(playerId, zone);
+    return { zoneFrac: clampZone(home.zoneFrac + offset.zoneFrac), lane: clampLane(home.lane + offset.lane) };
+  }
   const distance = distanceBetween(home, carrierPos);
-  if (distance > MIDFIELD_CONTEST_RANGE) return home;
   const key = tactic && MIDFIELD_TRACK_WEIGHT[tactic] !== undefined ? tactic : DEFAULT_MIDFIELD_TACTIC;
   const trackWeight = MIDFIELD_TRACK_WEIGHT[key] as number;
   const taper = MIDFIELD_RANK_TAPER[Math.min(rank ?? 0, MIDFIELD_RANK_TAPER.length - 1)];
-  const pull = Math.min(1, MIDFIELD_CONTEST_PULL_MAX * (1 - distance / MIDFIELD_CONTEST_RANGE) * trackWeight * taper);
+  const individual = individualPullFactor(playerId);
+  const pull = Math.min(1, MIDFIELD_CONTEST_PULL_MAX * (1 - distance / MIDFIELD_CONTEST_RANGE) * trackWeight * taper * individual);
   return { zoneFrac: lerp(home.zoneFrac, carrierPos.zoneFrac, pull), lane: lerp(home.lane, carrierPos.lane, pull) };
 }
 
@@ -542,8 +632,12 @@ function targetFor(
   const tactic = resolvedTactic(plan, player, position);
   if (group === "Defender" && opponentPos) return defenderTarget(side, home, opponentPos, tactic, zone);
   if ((group === "KeyForward" || group === "SmallForward") && opponentPos) return forwardTarget(side, home, opponentPos, tactic, zone, possession);
-  if ((group === "Midfield" || group === "Ruck") && opponentCarrierPos) return midfieldTarget(home, opponentCarrierPos, tactic, midfieldRank);
-  return home; // a defender/forward with no resolvable opponent this match, or nobody currently carries the ball
+  // Round 92 — always routes through midfieldTarget now (no more `&& opponentCarrierPos` gate
+  // here): that function itself now handles the "no genuine carrier to crash toward" case via
+  // ambient roam rather than this dispatcher falling through to a bare, motionless `home`. See
+  // midfieldTarget's own doc comment.
+  if (group === "Midfield" || group === "Ruck") return midfieldTarget(home, opponentCarrierPos, tactic, midfieldRank, player.PlayerID, zone);
+  return home; // a defender/forward with no resolvable opponent this match
 }
 
 function stepSide(

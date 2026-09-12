@@ -633,6 +633,58 @@ const P_MISS_BECOMES_THROW_IN = 0.5;
 const P_HIGH_CONTACT_FREE_KICK = 0.04;
 const P_KICK_GOES_OUT_ON_FULL = 0.03;
 /**
+ * Standing the Mark — Aug 2026 round 92. Tyler: "the player that takes the
+ * mark should backup 10 meters from the mark to give himself space to kick."
+ * `0.25` zoneFrac-units lands at ~10m via `MAX_KICK_DISTANCE`'s own
+ * established ~40m/unit conversion (positioning.ts). Deliberately modelled as
+ * the mark/free-kick TAKER gaining separation, rather than literally
+ * relocating a specific defender: several of `standTheMark`'s own call sites
+ * (an uncontested mark, a free kick with nobody named as the "presser") have
+ * no persistent defender dot to move at all, so nudging the one player every
+ * path always has is the honest, uniform mechanism — not a claim about which
+ * named player in real AFL actually steps back.
+ */
+const MARK_STAND_BACK_DISTANCE = 0.25;
+/**
+ * Nudges `playerId`'s own tracked position back (away from `side`'s
+ * attacking direction) by `MARK_STAND_BACK_DISTANCE` — called right before
+ * the mark/free-kick's own `log()` at every site that grants `State.
+ * carrierStandingTheMark`, so the retreat is already reflected in that
+ * event's own `trackedPositions` snapshot, the same "mutate
+ * ctx.trackedPositions just before log()" convention `snapTrackedZone`
+ * (round 44) already established. Deliberately NOT called before a mark/free
+ * kick rolls straight to `SHOT` — real AFL takes the shot from the mark
+ * itself, not from 10m further back, so retreating first would have quietly
+ * inflated `shotGeometry`'s own calibrated depth penalty for every shot off
+ * a mark or free kick. A no-op if this player has no tracked position yet
+ * (should never happen in practice — every on-ground player is seeded one at
+ * `startMatch` — defensive only). Purely cosmetic/positional: never touches
+ * a stat, a roll, or the match outcome.
+ */
+function standTheMark(ctx: Ctx, playerId: number, side: Side): void {
+  const pos = ctx.trackedPositions.get(playerId);
+  if (!pos) return;
+  const dir = side === "home" ? 1 : -1;
+  ctx.trackedPositions.set(playerId, { zoneFrac: Math.min(4, Math.max(0, pos.zoneFrac - dir * MARK_STAND_BACK_DISTANCE)), lane: pos.lane });
+}
+/**
+ * Aug 2026 round 92 — Tyler: a player "awarded a free kick where they are
+ * able to be rewarded with a shot on goal attempt." The same
+ * `isForward50(...) && ctx.rng() < 0.5` shot-chance shape every other
+ * forward-50 possession gain in this file already uses (`runContest`/
+ * `resolveUncontestedGather`/`runMarkingContest`), shared by all 3 real
+ * free-kick-award sites (High Contact, and both Out on the Full sites) so
+ * they resolve identically rather than each duplicating this roll.
+ * `standTheMark` is the CALLER's job, not this function's — see each call
+ * site, which only calls it on the non-shot branch (this function's own
+ * `gotShot` parameter is decided BEFORE that call, precisely so the caller
+ * knows which branch it's in).
+ */
+function freeKickState(zone: Zone, side: Side, taker: Player, gotShot: boolean): State {
+  if (gotShot) return { phase: "SHOT", zone, possession: side, carrier: taker, shotContext: "freeKick" };
+  return { phase: "GENERAL_PLAY", zone, possession: side, carrier: taker, carrierUncontested: true, carrierStandingTheMark: true };
+}
+/**
  * Run and Carry — Aug 2026 round 20 (Tyler: "We also need to include a
  * player who is in space being able to 'Run and Carry' the ball and taking
  * bounces along the way"). Fires only for a carrier who's genuinely
@@ -1391,6 +1443,34 @@ function describeLooseBall(
   return winnerIsSpiller ? `${phrase} — ${spillerName} recovers it first` : `${phrase} — ${presserName} pounces on the loose ball`;
 }
 
+/**
+ * Boundary throw-in for a general-play scramble — Aug 2026 round 92. Tyler: "We also need to build
+ * in the boundary throw in or free kick out of bounds rule." `P_KICK_GOES_OUT_ON_FULL` (round 19)
+ * already correctly models an UNTOUCHED kick sailing out on the full as a free kick; the genuinely
+ * open piece was a contested SCRAMBLE (a fumble, a spilled contest, a knocked-on handball) spilling
+ * out of bounds instead of being recovered by either player — every one of `resolveLooseBall`'s 4
+ * call sites previously always handed the ball to one of the two named contestants, unconditionally.
+ * Rolled immediately BEFORE `resolveLooseBall` at all 4 sites: on a hit, the tick logs one of these
+ * varied phrases and routes straight to the existing `runThrowIn` instead of calling
+ * `resolveLooseBall` at all. Rules-safe by construction, not just by disclosure: every one of these
+ * 4 sites is, by definition, a scramble the ball has already been contested/touched at — real AFL
+ * only ever calls an UNTOUCHED ball going out a free kick, so there's no risk of this conflicting
+ * with the already-correct free-kick case. A flat rate applied identically regardless of which
+ * specific scramble produced the loose ball — this engine's 5-zone model has no finer
+ * boundary-proximity signal to offer than the zone it's already in; a reasoned, disclosed starting
+ * point, same status as every other placeholder probability in this file, not yet split by zone.
+ */
+const P_LOOSE_BALL_GOES_OUT = 0.12;
+const LOOSE_BALL_OUT_PHRASES: ((a: string, b: string) => string)[] = [
+  (a, b) => `${a} and ${b} both scramble for it but it trickles out of bounds`,
+  (a, b) => `The loose ball squirts out of bounds with ${a} and ${b} unable to control it`,
+  (a, _b) => `${a} can't quite gather it and it rolls out of play`,
+  (_a, b) => `${b} gets a boot to it but it bounces out of bounds`,
+];
+function describeLooseBallOut(ctx: Ctx, nameA: string, nameB: string): string {
+  return LOOSE_BALL_OUT_PHRASES[Math.floor(ctx.rng() * LOOSE_BALL_OUT_PHRASES.length)](nameA, nameB);
+}
+
 export interface State {
   phase: Phase;
   zone: Zone;
@@ -1548,8 +1628,42 @@ export interface State {
    * about. Both of `runContest`'s SHOT returns read `contestType` to set
    * this field correctly now (`resolveUncontestedGather`'s own site
    * previously hardcoded `"mark"`, fixed to match its sibling site).
+   *
+   * Aug 2026 round 92 — added `"freeKick"`. Tyler: a player "awarded a free
+   * kick where they are able to be rewarded with a shot on goal attempt."
+   * Set at all 3 real free-kick-award sites (`freeKickState`'s own doc
+   * comment) when that free kick rolls into a genuine forward-50 shot
+   * chance, mirroring exactly how `"mark"`/`"groundBall"` are set. See
+   * `setShotProbability`'s own doc comment for the new base rate and the
+   * tight-angle-favours-snap extension this value drives.
    */
-  shotContext?: "mark" | "groundBall";
+  shotContext?: "mark" | "groundBall" | "freeKick";
+  /**
+   * Aug 2026 round 92 — Tyler: "the player that takes the mark should...
+   * he cant be tackled until he plays on either via kick or handpass. This
+   * should also apply for Set Shots on Goal where the player has taken a
+   * mark, or been awarded a free kick." Set on every real path that credits
+   * a mark (`runMarkingContest`'s uncontested/contested win branches,
+   * `runContest`/`resolveUncontestedGather`'s own mark-context wins) or
+   * awards a free kick (`freeKickState`'s non-SHOT branch), whenever that
+   * doesn't immediately continue straight to `SHOT`. `runGeneralPlay` reads
+   * this once, at its own top — see that function's own doc comment — to
+   * skip the entire tackle/High-Contact-free-kick section for this one tick
+   * and route straight to `resolveUnpressuredDisposal`, the same "nobody in
+   * range, no defensive pressure at all" path an unmarked, undefended
+   * carrier already gets. `undefined` outside that one tick, same
+   * reset-by-omission convention as every other field on this interface —
+   * once the carrier actually disposes (kicks or handballs), whichever
+   * function resolves that doesn't set it again, so the very next tick's
+   * tackle logic (should the ball come back their way) applies normally.
+   * Deliberately a DIFFERENT concept from `carrierUncontested` (a narrow,
+   * single-tick stat-crediting flag that does NOT prevent a tackle attempt —
+   * confirmed by reading every one of its own call sites) — conflating the
+   * two would have silently changed `carrierUncontested`'s own, already-
+   * correct Run-and-Carry-eligibility semantics for cases (e.g.
+   * `runMarkingContest`'s contested-mark win) that deliberately omit it.
+   */
+  carrierStandingTheMark?: boolean;
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
@@ -1600,6 +1714,9 @@ function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
  * tallest on-ground player) — this only changes who's nominated, not who's
  * eligible.
  */
+/** Aug 2026 round 92 — see the ruck-tap hold-down's own doc comment (inside this function, at the `ctx.groundedUntilTick.set(ruckWinner...)` call) for the full "why". Deliberately short: just long enough to skip the one immediately-following clearance. */
+const RUCK_TAP_HOLD_DOWN_TICKS = 1;
+
 function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean): State {
   // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Both a centre bounce
   // (runStoppage) and a boundary throw-in (runThrowIn) funnel through here, so clearing it once in
@@ -1632,6 +1749,17 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
   const ruckWinner = ruckResult.winner === "attacker" ? homeRuck : awayRuck;
   const ruckLoser = ruckResult.winner === "attacker" ? awayRuck : homeRuck;
   lineFor(ctx, ruckWinner).hitouts += 1;
+  // Aug 2026 round 92 — Tyler: "our ruckmen seem to be quite prominant on our statistics, I think
+  // that is because they often compete immediately for their own ruck taps... a hold down timer for
+  // the ruck where they cant compete in the immediate contest after their tap." Grounds the tap
+  // WINNER (not the loser — Tyler's own wording is specifically "after their tap") via the exact
+  // same ctx.groundedUntilTick map round 39 built for a tackled carrier — a genuine, honest reuse,
+  // not a perfect metaphor (a ruckman isn't literally put to ground by his own tap), chosen because
+  // the semantics ("temporarily can't contest") are identical and the mechanism is already built,
+  // tested, and read by involvement.ts's nearbyDefenders elsewhere. RUCK_TAP_HOLD_DOWN_TICKS is
+  // deliberately short — long enough to skip the one immediately-following clearance (runClearance,
+  // below, is the new read side), short enough to never touch the NEXT stoppage.
+  ctx.groundedUntilTick.set(ruckWinner.PlayerID, ctx.tick + RUCK_TAP_HOLD_DOWN_TICKS);
   // Execution roll — Aug 2026 round 22, same pattern as runContest's new
   // gather/mark execution check (see CONTEST_EXECUTION_DIFFICULTY's own doc
   // comment), adapted to a ruck tap per Tyler's own closing instruction:
@@ -1729,8 +1857,17 @@ function runClearance(ctx: Ctx, state: State): State {
   const homePlan = ctx.homePlan;
   const awayPlan = ctx.awayPlan;
 
-  const homeClear = bestByRating(home, clearanceRating);
-  const awayClear = bestByRating(away, clearanceRating);
+  // Aug 2026 round 92 — the read side of the ruck-tap hold-down (see resolveRuckTap's own doc
+  // comment at its `ctx.groundedUntilTick.set(ruckWinner...)` call): both sides' clearance-rep pool
+  // is now filtered to exclude anyone still grounded, the same map involvement.ts's nearbyDefenders
+  // already filters a defender pool by. Falls back to the full pool if everyone available happens
+  // to be grounded (defensive only — a single-tick hold-down among ~18 on-ground players should
+  // never actually trigger this). Incidentally closes a smaller, related pre-existing gap: a
+  // tackled-and-grounded player (round 39) was never excluded from a clearance rep pick either.
+  const availableHome = home.filter((p) => (ctx.groundedUntilTick.get(p.PlayerID) ?? -Infinity) < ctx.tick);
+  const availableAway = away.filter((p) => (ctx.groundedUntilTick.get(p.PlayerID) ?? -Infinity) < ctx.tick);
+  const homeClear = bestByRating(availableHome.length > 0 ? availableHome : home, clearanceRating);
+  const awayClear = bestByRating(availableAway.length > 0 ? availableAway : away, clearanceRating);
   // Favoured-side tap bonus, Aug 2026 — a real, cited correlation, not an
   // invented number: AFL.com.au's centre-bounce breakdown ([[Tactics and
   // Positional Play]] Part 3) found ruckmen tap to a favoured side 75-80% of
@@ -1968,6 +2105,10 @@ function resolveUnpressuredDisposal(
     // bounds," the design note's own third named turnover example.
     lineFor(ctx, carrier).turnovers += 1;
     ctx.lastEffectiveDisposal = null;
+    // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
+    // taker's own attacking 50 can now roll straight into a shot at goal.
+    const freeKickGotShot = isForward50(newZone, newSide) && ctx.rng() < 0.5;
+    if (!freeKickGotShot) standTheMark(ctx, freeKickTaker.PlayerID, newSide);
     log(
       ctx,
       newZone,
@@ -1984,7 +2125,7 @@ function resolveUnpressuredDisposal(
         { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
       ],
     );
-    return { phase: "GENERAL_PLAY", zone: newZone, possession: newSide, carrier: freeKickTaker, carrierUncontested: true };
+    return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
 
   log(
@@ -2112,6 +2253,16 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   if (state.carrierUncontested) {
     lineFor(ctx, carrier).uncontestedPoss += 1;
     gatherDeltas.push({ playerId: carrier.PlayerID, stat: "uncontestedPoss", delta: 1 });
+  }
+
+  // Standing the Mark — Aug 2026 round 92, see State.carrierStandingTheMark's own doc comment.
+  // Routes straight to the same "nobody in range, no tackle attempt, no High Contact roll" path an
+  // unmarked, undefended carrier already gets — real AFL's own "cant be tackled until he plays on
+  // either via kick or handpass." Checked before Run and Carry too: a mark/free kick is composed
+  // enough to take the kick from the mark, not the open-field bouncing-run mechanic that models a
+  // genuinely loose carrier breaking away.
+  if (state.carrierStandingTheMark) {
+    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas, defendingSide, defendingTeam);
   }
 
   // Run and Carry — Aug 2026 round 20, see P_RUN_AND_CARRY_BASE's own doc
@@ -2296,6 +2447,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   if (ctx.rng() < P_HIGH_CONTACT_FREE_KICK) {
     lineFor(ctx, carrier).freeKicksFor += 1;
     lineFor(ctx, defender).freeKicksAgainst += 1;
+    // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
+    // carrier's own attacking 50 can now roll straight into a shot at goal.
+    const freeKickGotShot = isForward50(state.zone, state.possession) && ctx.rng() < 0.5;
+    if (!freeKickGotShot) standTheMark(ctx, carrier.PlayerID, state.possession);
     log(
       ctx,
       state.zone,
@@ -2309,7 +2464,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: defender.PlayerID, stat: "freeKicksAgainst", delta: 1 },
       ],
     );
-    return { phase: "GENERAL_PLAY", zone: state.zone, possession: state.possession, carrier, carrierUncontested: true };
+    return freeKickState(state.zone, state.possession, carrier, freeKickGotShot);
   }
 
   // Tackle attempt — see TACKLE_ATTEMPT_HANDICAP's own doc comment for the
@@ -2404,6 +2559,20 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const result = resolveThreshold(disposalRating, defenderRating, ctx.rng);
 
   if (!result.success) {
+    // Aug 2026 round 92 — see P_LOOSE_BALL_GOES_OUT's own doc comment: a genuine third outcome,
+    // rolled before resolveLooseBall gets a chance to force a two-way pick.
+    if (ctx.rng() < P_LOOSE_BALL_GOES_OUT) {
+      log(
+        ctx,
+        state.zone,
+        state.possession,
+        "GENERAL_PLAY",
+        describeLooseBallOut(ctx, carrier.lname, defender.lname),
+        [defender.PlayerID, carrier.PlayerID],
+        [...gatherDeltas, { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 }],
+      );
+      return runThrowIn(ctx, state.zone, state.possession);
+    }
     // Aug 2026 round 39 — a genuine loose-ball scramble, not an automatic
     // hand-off to whoever was applying pressure. See resolveLooseBall's own
     // doc comment for the full diagnosis (Tyler's own Van Rooyen/Moore
@@ -2480,6 +2649,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // bounds," the design note's own third named turnover example.
     lineFor(ctx, carrier).turnovers += 1;
     ctx.lastEffectiveDisposal = null;
+    // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
+    // taker's own attacking 50 can now roll straight into a shot at goal.
+    const freeKickGotShot = isForward50(newZone, newSide) && ctx.rng() < 0.5;
+    if (!freeKickGotShot) standTheMark(ctx, freeKickTaker.PlayerID, newSide);
     log(
       ctx,
       newZone,
@@ -2497,7 +2670,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
       ],
     );
-    return { phase: "GENERAL_PLAY", zone: newZone, possession: newSide, carrier: freeKickTaker, carrierUncontested: true };
+    return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
 
   log(
@@ -2720,6 +2893,12 @@ function resolveUncontestedGather(
       deltas.push({ playerId: attackerRep.PlayerID, stat: "marksInside50", delta: 1 });
     }
   }
+  // Aug 2026 round 92 — same reordering as runContest's own identical-shaped site: the shot-chance
+  // roll now runs ahead of log() (no change to when/how often it fires) so standTheMark can apply
+  // before this event's own log() only on the non-SHOT branch.
+  const wonForward50ShotRoll = isForward50(state.zone, attackingSide) && ctx.rng() < 0.5;
+  const isMarkContext = contestType === "markContested" || contestType === "markLead";
+  if (isMarkContext && !wonForward50ShotRoll) standTheMark(ctx, attackerRep.PlayerID, attackingSide);
   log(
     ctx,
     state.zone,
@@ -2729,7 +2908,7 @@ function resolveUncontestedGather(
     [attackerRep.PlayerID],
     deltas,
   );
-  if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
+  if (wonForward50ShotRoll) {
     // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment.
     // Aug 2026 round 41 — `contestType` CAN be "groundBall" here now (see
     // P_FORWARD50_CONTEST_IS_GROUNDBALL's own doc comment), so this can no
@@ -2737,7 +2916,9 @@ function resolveUncontestedGather(
     // two were still mutually exclusive by construction.
     return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep, shotContext: contestType === "groundBall" ? "groundBall" : "mark" };
   }
-  return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep, carrierUncontested: true };
+  // Aug 2026 round 92 — `carrierStandingTheMark: true` for a genuine mark win only, matching
+  // standTheMark's own call just above.
+  return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep, carrierUncontested: true, ...(isMarkContext ? { carrierStandingTheMark: true } : {}) };
 }
 
 function runContest(ctx: Ctx, state: State): State {
@@ -2854,6 +3035,22 @@ function runContest(ctx: Ctx, state: State): State {
       // player per fumble.
       (lineFor(ctx, attackerRep)[fields.attempts] as number) += 1;
       (lineFor(ctx, defenderRep)[fields.attempts] as number) += 1;
+      // Aug 2026 round 92 — see P_LOOSE_BALL_GOES_OUT's own doc comment.
+      if (ctx.rng() < P_LOOSE_BALL_GOES_OUT) {
+        log(
+          ctx,
+          state.zone,
+          attackingSide,
+          "CONTEST",
+          describeLooseBallOut(ctx, attackerRep.lname, defenderRep.lname),
+          [attackerRep.PlayerID, defenderRep.PlayerID],
+          [
+            { playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 },
+            { playerId: defenderRep.PlayerID, stat: fields.attempts, delta: 1 },
+          ],
+        );
+        return runThrowIn(ctx, state.zone, attackingSide);
+      }
       const looseBallWinner = resolveLooseBall(ctx, attackingSide, attackerRep, defendingSide, defenderRep);
       lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
       // Aug 2026 round 55 — [[Season Stats and Records]]: see runGeneralPlay's own identical-shaped
@@ -2909,6 +3106,12 @@ function runContest(ctx: Ctx, state: State): State {
       line.contestedPoss += 1;
       deltas.push({ playerId: attackerRep.PlayerID, stat: "contestedPoss", delta: 1 });
     }
+    // Aug 2026 round 92 — the shot-chance roll moved ahead of log() (no change to when/how often it
+    // fires, just its position relative to a non-rng-consuming call) so standTheMark can run before
+    // this event's own log() only on the non-SHOT branch — see that function's own doc comment.
+    const wonForward50ShotRoll = isForward50(state.zone, attackingSide) && ctx.rng() < 0.5;
+    const isMarkContext = contestType === "markContested" || contestType === "markLead";
+    if (isMarkContext && !wonForward50ShotRoll) standTheMark(ctx, attackerRep.PlayerID, attackingSide);
     log(
       ctx,
       state.zone,
@@ -2918,14 +3121,16 @@ function runContest(ctx: Ctx, state: State): State {
       [attackerRep.PlayerID, defenderRep.PlayerID],
       deltas,
     );
-    if (isForward50(state.zone, attackingSide) && ctx.rng() < 0.5) {
+    if (wonForward50ShotRoll) {
       // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment.
       // This ternary was write-only until round 41 (contestType could never
       // actually be "groundBall" here before then) — now genuinely reachable,
       // see P_FORWARD50_CONTEST_IS_GROUNDBALL's own doc comment.
       return { phase: "SHOT", zone: state.zone, possession: attackingSide, carrier: attackerRep, shotContext: contestType === "groundBall" ? "groundBall" : "mark" };
     }
-    return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep };
+    // Aug 2026 round 92 — `carrierStandingTheMark: true` for a genuine mark win only, matching
+    // standTheMark's own call just above.
+    return { phase: "GENERAL_PLAY", zone: state.zone, possession: attackingSide, carrier: attackerRep, ...(isMarkContext ? { carrierStandingTheMark: true } : {}) };
   }
 
   const line = lineFor(ctx, defenderRep);
@@ -2946,18 +3151,29 @@ function runContest(ctx: Ctx, state: State): State {
   line.interceptPossessions += 1;
   spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "interceptPossessions", delta: 1 });
   let spoilLabel = `${defenderRep.lname} spoils it and takes control`;
+  // Aug 2026 round 92 — tracked so a genuine intercept mark (below) can also stand the mark, same as
+  // every mark-taker elsewhere in this file; see standTheMark's own doc comment.
+  let isInterceptMark = false;
   if (contestType !== "groundBall") {
     if (ctx.rng() < effectiveCleanMarkProbability(P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK, lineCoachCleanMarkBiasFor(ctx, defendingSide, defenderRep))) {
       line.marks += 1;
       line.interceptMarks += 1;
       spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "marks", delta: 1 }, { playerId: defenderRep.PlayerID, stat: "interceptMarks", delta: 1 });
       spoilLabel = `${defenderRep.lname} reads it perfectly and takes an intercept mark`;
+      isInterceptMark = true;
     } else {
       line.spoils += 1;
       spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "spoils", delta: 1 });
     }
   }
   ctx.lastEffectiveDisposal = null;
+  // Aug 2026 round 92 — an intercept mark is still a mark: Tyler's own ask was unconditional ("when
+  // a player takes a mark"), and real AFL gives a defender who marks a spoil attempt the same
+  // standing-the-mark protection as anyone else. No shot-chance roll here (unlike the attacking-mark
+  // sites above) — this contest only ever happens inside the ORIGINAL attacking side's forward 50
+  // (contestType's own isForward50 gate, above), which is always defenderRep's own defensive 50, not
+  // a scorable position for them.
+  if (isInterceptMark) standTheMark(ctx, defenderRep.PlayerID, defendingSide);
   log(
     ctx,
     state.zone,
@@ -2967,7 +3183,7 @@ function runContest(ctx: Ctx, state: State): State {
     [defenderRep.PlayerID, attackerRep.PlayerID],
     spoilDeltas,
   );
-  return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: defenderRep };
+  return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: defenderRep, ...(isInterceptMark ? { carrierStandingTheMark: true } : {}) };
 }
 
 /**
@@ -3052,6 +3268,9 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       // Aug 2026 round 54 — [[Season Stats and Records]]: reuses the existing zone system unchanged.
       const isMarkInside50 = isForward50(zone, possessingSide);
       if (isMarkInside50) lineFor(ctx, receiver).marksInside50 += 1;
+      // Aug 2026 round 92 — see standTheMark's own doc comment: never applied ahead of a SHOT, only
+      // the GENERAL_PLAY continuation below.
+      if (!state.markContestIsShotChance) standTheMark(ctx, receiver.PlayerID, possessingSide);
       log(ctx, zone, possessingSide, "MARKING_CONTEST", `${receiver.lname} marks it, leading into space`, [receiver.PlayerID], [
         { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
         ...(isMarkInside50 ? [{ playerId: receiver.PlayerID, stat: "marksInside50" as const, delta: 1 }] : []),
@@ -3064,7 +3283,8 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       // this return path used to always be `SHOT`, which never reads that
       // flag, so it was never needed. See State.carrierUncontested's own doc
       // comment for what reading it a tick later actually credits.
-      return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
+      // Aug 2026 round 92 — `carrierStandingTheMark: true`, see that field's own doc comment.
+      return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true, carrierStandingTheMark: true };
     }
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
     // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
@@ -3128,6 +3348,22 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       // hand-off to `defender`; see that function's own doc comment.
       lineFor(ctx, receiver).markContestedAttempts += 1;
       lineFor(ctx, defender).markContestedAttempts += 1;
+      // Aug 2026 round 92 — see P_LOOSE_BALL_GOES_OUT's own doc comment.
+      if (ctx.rng() < P_LOOSE_BALL_GOES_OUT) {
+        log(
+          ctx,
+          zone,
+          possessingSide,
+          "MARKING_CONTEST",
+          describeLooseBallOut(ctx, receiver.lname, defender.lname),
+          [receiver.PlayerID, defender.PlayerID],
+          [
+            { playerId: receiver.PlayerID, stat: "markContestedAttempts", delta: 1 },
+            { playerId: defender.PlayerID, stat: "markContestedAttempts", delta: 1 },
+          ],
+        );
+        return runThrowIn(ctx, zone, possessingSide);
+      }
       const looseBallWinner = resolveLooseBall(ctx, possessingSide, receiver, defendingSide, defender);
       lineFor(ctx, looseBallWinner.player).contestedPoss += 1;
       // Aug 2026 round 55 — [[Season Stats and Records]]: see runGeneralPlay's own identical-shaped
@@ -3170,6 +3406,9 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       lineFor(ctx, receiver).marksInside50 += 1;
       deltas.push({ playerId: receiver.PlayerID, stat: "marksInside50", delta: 1 });
     }
+    // Aug 2026 round 92 — see standTheMark's own doc comment: never applied ahead of a SHOT, only
+    // the GENERAL_PLAY continuation below.
+    if (!state.markContestIsShotChance) standTheMark(ctx, receiver.PlayerID, possessingSide);
     log(
       ctx,
       zone,
@@ -3186,7 +3425,8 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     // comment: "false/omitted whenever they won it instead").
     // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment. Always "mark" — a contested-mark win is never a ground ball.
     if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver, shotContext: "mark" };
-    return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver };
+    // Aug 2026 round 92 — `carrierStandingTheMark: true`, see that field's own doc comment.
+    return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierStandingTheMark: true };
   }
 
   const defenderLine = lineFor(ctx, defender);
@@ -3201,7 +3441,15 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   defenderLine.interceptPossessions += 1;
   spoilDeltas.push({ playerId: defender.PlayerID, stat: "interceptPossessions", delta: 1 });
   let spoilLabel = `${defender.lname} spoils the contest and takes control`;
-  if (ctx.rng() < effectiveCleanMarkProbability(P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK, lineCoachCleanMarkBiasFor(ctx, defendingSide, defender))) {
+  // Aug 2026 round 92 — captured in a variable (same expression, same single rng draw, zero
+  // behaviour change) so a genuine intercept mark can also stand the mark below — see runContest's
+  // own identical-shaped fix for the full "why" (Tyler's ask was unconditional: "when a player takes
+  // a mark"). Unlike runContest's version, this contest isn't forward-50-gated, so a shot chance is
+  // geometrically possible here in principle — deliberately NOT added: this function had no
+  // shot-chance mechanism for a defensive mark before this round either, and retrofitting one is a
+  // separate scope decision with its own balance implications, not a byproduct of this fix.
+  const isInterceptMark = ctx.rng() < effectiveCleanMarkProbability(P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK, lineCoachCleanMarkBiasFor(ctx, defendingSide, defender));
+  if (isInterceptMark) {
     defenderLine.marks += 1;
     defenderLine.interceptMarks += 1;
     spoilDeltas.push({ playerId: defender.PlayerID, stat: "marks", delta: 1 }, { playerId: defender.PlayerID, stat: "interceptMarks", delta: 1 });
@@ -3211,6 +3459,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     spoilDeltas.push({ playerId: defender.PlayerID, stat: "spoils", delta: 1 });
   }
   ctx.lastEffectiveDisposal = null;
+  if (isInterceptMark) standTheMark(ctx, defender.PlayerID, defendingSide);
   log(
     ctx,
     zone,
@@ -3220,7 +3469,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     [defender.PlayerID, receiver.PlayerID],
     spoilDeltas,
   );
-  return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender };
+  return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: defender, ...(isInterceptMark ? { carrierStandingTheMark: true } : {}) };
 }
 
 /**
@@ -3321,6 +3570,11 @@ function runHandballContest(ctx: Ctx, state: State): State {
     return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver };
   }
 
+  // Aug 2026 round 92 — see P_LOOSE_BALL_GOES_OUT's own doc comment.
+  if (ctx.rng() < P_LOOSE_BALL_GOES_OUT) {
+    log(ctx, zone, possessingSide, "HANDBALL_CONTEST", describeLooseBallOut(ctx, receiver.lname, defender.lname), [defender.PlayerID, receiver.PlayerID], []);
+    return runThrowIn(ctx, zone, possessingSide);
+  }
   // Aug 2026 round 39 — WHO recovers a spilled handball reception is now a
   // genuine `resolveLooseBall` scramble, not an automatic hand-off to
   // `defender`; see that function's own doc comment.
@@ -3376,9 +3630,36 @@ function runHandballContest(ctx: Ctx, state: State): State {
  * (`verify_round38_scratch.ts`'s Section 5) but never through real match
  * simulation until now — is live for real as of round 41.
  */
-function setShotProbability(shooter: Player, shotContext: State["shotContext"], plan: TeamPlan | null, positions?: Map<number, Position>): number {
+/**
+ * Aug 2026 round 92 — Tyler's own extension to Standing the Mark: "This should also apply for Set
+ * Shots on Goal where the player has taken a mark, or been awarded a free kick where they are able
+ * to be rewarded with a shot on goal attempt. If they are taking the shot from a really tight angle
+ * then they can also attempt a Snap Shot from their free kick." `P_SET_SHOT_GIVEN_FREEKICK` (0.92)
+ * starts slightly above `P_SET_SHOT_GIVEN_MARK` (0.9) — a free kick is, if anything, even more
+ * procedurally composed than a mark. `angleSeverity` (`positioning.ts`'s `shotGeometry`, round 42 —
+ * 0 dead square, 1 along the goal line) only discounts the NEW `"freeKick"` branch, via
+ * `TIGHT_ANGLE_SNAP_BONUS`: square in front, still ~92% set shot; a genuinely severe angle, down
+ * toward even odds. `"mark"`/`"groundBall"`'s own already-calibrated, already-verified (rounds
+ * 38/41) rates are deliberately untouched — this is additive, not a recalibration of those.
+ */
+const P_SET_SHOT_GIVEN_FREEKICK = 0.92;
+const TIGHT_ANGLE_SNAP_BONUS = 0.45;
+
+function setShotProbability(
+  shooter: Player,
+  shotContext: State["shotContext"],
+  plan: TeamPlan | null,
+  positions: Map<number, Position> | undefined,
+  angleSeverity: number,
+): number {
   const base =
-    shotContext === "mark" ? P_SET_SHOT_GIVEN_MARK : shotContext === "groundBall" ? P_SET_SHOT_GIVEN_GROUNDBALL : P_SET_SHOT_VS_SNAP;
+    shotContext === "mark"
+      ? P_SET_SHOT_GIVEN_MARK
+      : shotContext === "groundBall"
+        ? P_SET_SHOT_GIVEN_GROUNDBALL
+        : shotContext === "freeKick"
+          ? P_SET_SHOT_GIVEN_FREEKICK - TIGHT_ANGLE_SNAP_BONUS * angleSeverity
+          : P_SET_SHOT_VS_SNAP;
   const position = positions?.get(shooter.PlayerID);
   const group = tacticGroupForSlot(position, shooter.archetype as Archetype);
   const tactic = tacticFor(plan, shooter, positions);
@@ -3401,24 +3682,28 @@ function runShot(ctx: Ctx, state: State): State {
   const defendingSide = otherSide(state.possession);
   const defendingTeam = teamOf(ctx, defendingSide);
   const defendingPlan = planFor(ctx, defendingSide);
-  const isSetShot = ctx.rng() < setShotProbability(shooter, state.shotContext, possessingPlan, possessingTeam.positions);
+  // Aug 2026 round 92 — geometry now computed BEFORE the set-shot-vs-snap roll (a pure reordering,
+  // no change to the depth/angleSeverity formula itself, and no change to rng consumption order —
+  // shotGeometry consumes no rng at all) so a free-kick shot's own roll can read the real angle;
+  // see setShotProbability's own doc comment for the tight-angle-favours-snap extension this enables.
+  const shooterPos = ctx.trackedPositions.get(shooter.PlayerID) ?? carrierPosition(shooter, possessingTeam.positions?.get(shooter.PlayerID), state.zone, possessingTeam.positions);
+  const { depth, angleSeverity } = shotGeometry(shooterPos, state.possession);
+  const isSetShot = ctx.rng() < setShotProbability(shooter, state.shotContext, possessingPlan, possessingTeam.positions, angleSeverity);
   const rating =
     (isSetShot
       ? computeContestRating(shooter, ["skill", "kickMaxDistance", "copeWithPressure", "confidence"])
       : computeContestRating(shooter, ["xFactor", "agility", "copeWithPressure"])) *
     conditionMultiplierFor(ctx, state.possession, shooter);
-  // Aug 2026 round 42 — real distance/angle to goal, not a flat random roll;
-  // see SHOT_DIFFICULTY_BASE's own doc comment. Same tracked-position-
-  // preferred, carrierPosition-as-fallback pattern this file already uses
-  // elsewhere (e.g. resolveUncontestedGather's receiver, above).
-  const shooterPos = ctx.trackedPositions.get(shooter.PlayerID) ?? carrierPosition(shooter, possessingTeam.positions?.get(shooter.PlayerID), state.zone, possessingTeam.positions);
-  const { depth, angleSeverity } = shotGeometry(shooterPos, state.possession);
   // Aug 2026 round 47 — ROADMAP backlog item #25; see SNAP_LIVE_PRESSURE_
   // PENALTY's own doc comment for the full diagnosis. Set shots never roll
   // this (real AFL set shots are uncontested by rule) — `nearby` stays null
   // and `snapPressurePenalty` stays 0, byte-identical to pre-round-47
   // behaviour for every set shot.
-  const nearby = isSetShot
+  // Aug 2026 round 92 — a free-kick shot (set OR snap) is ALSO always pressure-free: a free kick
+  // carries the same real-law protection a mark does the instant it's paid, unlike a "mark"-context
+  // snap (deliberately unchanged — playing on quickly off a mark can still draw a closing defender
+  // under the real Laws of the Game).
+  const nearby = isSetShot || state.shotContext === "freeKick"
     ? null
     : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, shooterPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
   const snapPressurePenalty = nearby ? proximityWeight(nearby.distance) * SNAP_LIVE_PRESSURE_PENALTY : 0;

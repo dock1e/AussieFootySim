@@ -17,6 +17,7 @@ import {
   DRAFT_ROUNDS,
   scoutingTiersForPool,
   scoutingReportFor,
+  scoutingSummaryFor,
   playsLikeFor,
   playsLikeConfidenceLabel,
   predictedDraftRange,
@@ -35,6 +36,7 @@ import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
 import { gradeForOvr, SCOUT_FOCUS_AREAS, type Coach, type ScoutFocusArea } from "../types/coach";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
 import { StatusPill, type PillTone } from "./StatusPill";
+import { Modal } from "./Modal";
 
 /**
  * National Draft — Phase 4 Slice 5 (ROADMAP.md). User Interface.md's Draft
@@ -91,6 +93,20 @@ import { StatusPill, type PillTone } from "./StatusPill";
  * and the `predictedRangeByPlayerId` sort map — replacing the flat
  * `DEFAULT_SCOUT_ACCURACY` every one of those call sites used through round
  * 82. No scout assigned still reads byte-identical to every prior round.
+ *
+ * **Round 94 Part 2** — [[Season Grading, Post-Season Awards, and Player History]]'s own Player
+ * Profile redesign round bundled two more Tyler asks: "our draft talent pool will also need a player
+ * profile which can be opened and purveyed by the player" and "a section which shows the 1 or 2
+ * sentence player writeup summary." `ProspectProfile` below gains a new "Summary" section
+ * (`scoutingSummaryFor`, a truncation of the exact same `scoutingReportFor` text the fuller "Scouting
+ * report" section already shows — one source of truth, never two disagreeing write-ups) and an
+ * optional `onOpenProfile` button. `ProspectProfileModal` (new) is the "player profile which can be
+ * opened" itself — a genuine modal overlay, reusing `ProspectProfile`'s exact content rather than a
+ * parallel implementation, opened via that new button. Deliberately does NOT replace the existing
+ * always-visible sidebar `ProspectProfile` (the interactive scouting/drafting workstation stays
+ * exactly as fast to use — no modal round-trip needed just to spend one more scouting-budget reveal);
+ * the modal is a bigger, considered "look this prospect over" view layered on top, matching how
+ * rostered players already get both a click-to-select context AND a dedicated `PlayerProfileModal`.
  */
 
 const HEADLINE_ATTR_LABELS: Record<RatedAttribute, string> = {
@@ -147,6 +163,10 @@ export function Draft() {
   // predicted draft order and players should be able to sort the list by
   // Overall and Potential too."
   const [sortMode, setSortMode] = useState<SortMode>("predicted");
+  // Round 94 Part 2 — which prospect's full profile modal is open, if any. Independent of
+  // `selectedId` (the sidebar's own compact scouting-workstation selection) — a coach can browse the
+  // fuller modal without losing or changing their board selection underneath it.
+  const [profileModalId, setProfileModalId] = useState<number | null>(null);
 
   // Round 83 — [[Assistant Coaching System]]'s Talent Scout integration.
   // `assignedScout`/`focusArea` are resolved once here and threaded into
@@ -390,6 +410,7 @@ export function Draft() {
                       }
                     : undefined
                 }
+                onOpenProfile={() => setProfileModalId(selected.PlayerID)}
               />
             ) : (
               <div className="text-sm text-slate-500">Select a prospect from the board to see their scouting profile.</div>
@@ -459,6 +480,33 @@ export function Draft() {
           )}
         </div>
       </div>
+
+      {profileModalId !== null &&
+        (() => {
+          const modalProspect = window_.pool.find((p) => p.PlayerID === profileModalId) ?? null;
+          if (!modalProspect) return null;
+          return (
+            <ProspectProfileModal
+              prospect={modalProspect}
+              pool={window_.pool}
+              tier={tierByPlayerId.get(modalProspect.PlayerID)}
+              revealedAttrs={revealedFor(window_, modalProspect.PlayerID)}
+              budgetRemaining={window_.scoutingBudgetRemaining}
+              scoutAccuracy={accuracyFor(modalProspect)}
+              onScout={(attr) => scoutAttribute(modalProspect.PlayerID, attr)}
+              onDraft={
+                isMyTurn
+                  ? () => {
+                      confirmDraftPick(modalProspect.PlayerID);
+                      setProfileModalId(null);
+                      setSelectedId(null);
+                    }
+                  : undefined
+              }
+              onClose={() => setProfileModalId(null)}
+            />
+          );
+        })()}
     </div>
   );
 }
@@ -533,6 +581,7 @@ function ProspectProfile({
   scoutAccuracy,
   onScout,
   onDraft,
+  onOpenProfile,
 }: {
   prospect: Player;
   pool: Player[];
@@ -543,6 +592,8 @@ function ProspectProfile({
   scoutAccuracy: number;
   onScout: (attr: RatedAttribute) => void;
   onDraft?: () => void;
+  /** Round 94 Part 2 — opens `ProspectProfileModal` for this same prospect. Omitted (not just falsy) when `ProspectProfile` is itself already being rendered AS that modal's own body — a "view full profile" button that reopens the modal it's already inside of would be nonsensical. */
+  onOpenProfile?: () => void;
 }) {
   const band = scoutOvrBand(prospect, revealedAttrs.length, scoutAccuracy);
   const conf = scoutConfidence(prospect, revealedAttrs.length, scoutAccuracy);
@@ -553,7 +604,14 @@ function ProspectProfile({
   return (
     <div className="space-y-4">
       <div>
-        <div className="font-display text-lg italic">{playerFullName(prospect)}</div>
+        <div className="flex items-start justify-between gap-2">
+          <div className="font-display text-lg italic">{playerFullName(prospect)}</div>
+          {onOpenProfile && (
+            <button onClick={onOpenProfile} className="shrink-0 rounded-lg bg-base-700 px-2.5 py-1 text-xs font-semibold hover:bg-base-600">
+              View full profile
+            </button>
+          )}
+        </div>
         <div className="text-xs text-slate-400">
           {prospect.archetype} · {prospect.homeState} · Age {prospect.Age} · {prospect.height}cm / {prospect.weight}kg
         </div>
@@ -569,6 +627,16 @@ function ProspectProfile({
             </span>
           </div>
         )}
+      </div>
+
+      <div>
+        {/* Round 94 Part 2, Tyler: "a section which shows the 1 or 2 sentence player writeup summary."
+            `scoutingSummaryFor` truncates the exact same text `scoutingReportFor` shows in full further
+            down this panel — one source of truth, so the two can never disagree. */}
+        <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Summary</div>
+        <p className="text-sm leading-relaxed text-slate-300">
+          {scouted ? scoutingSummaryFor(prospect, tier) : "Scout at least one attribute to unlock a summary."}
+        </p>
       </div>
 
       <div>
@@ -666,6 +734,52 @@ function ProspectProfile({
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * Round 94 Part 2 — Tyler: "our draft talent pool will also need a player profile which can be opened
+ * and purveyed by the player when determining which players they want to scout and which players to
+ * draft." A thin `<Modal>` wrapper around `ProspectProfile`'s own content (no `onOpenProfile`, and thus
+ * no "view full profile" button rendered inside itself) — the same "give this kind of entity a genuine
+ * modal, not just an inline panel" treatment `PlayerProfileModal.tsx` already gives a rostered player.
+ * Deliberately does not duplicate any of that component's scouting-tier/band/report/comp/range/mock-
+ * outlet logic — it IS that component, just framed by a `Modal` instead of the sidebar `<div className="card">`.
+ */
+function ProspectProfileModal({
+  prospect,
+  pool,
+  tier,
+  revealedAttrs,
+  budgetRemaining,
+  scoutAccuracy,
+  onScout,
+  onDraft,
+  onClose,
+}: {
+  prospect: Player;
+  pool: Player[];
+  tier: ScoutingTier | undefined;
+  revealedAttrs: RatedAttribute[];
+  budgetRemaining: number;
+  scoutAccuracy: number;
+  onScout: (attr: RatedAttribute) => void;
+  onDraft?: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={playerFullName(prospect)} onClose={onClose}>
+      <ProspectProfile
+        prospect={prospect}
+        pool={pool}
+        tier={tier}
+        revealedAttrs={revealedAttrs}
+        budgetRemaining={budgetRemaining}
+        scoutAccuracy={scoutAccuracy}
+        onScout={onScout}
+        onDraft={onDraft}
+      />
+    </Modal>
   );
 }
 

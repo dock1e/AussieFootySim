@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { getPlayerById } from "../data/loadPlayers";
+import { getPlayerById, ALL_PLAYERS } from "../data/loadPlayers";
 import { playerFullName, type Player } from "../types/player";
 import type { Archetype } from "../types/archetype";
 import { usePlayerProfileStore } from "../store/usePlayerProfileStore";
@@ -15,6 +15,9 @@ import { realSeasonHistoryFor } from "../data/realSeasonHistory";
 import { CURRENT_SEASON_YEAR } from "../config";
 import type { Season } from "../engine/season";
 import type { BoxScoreLine } from "../engine/match";
+import { computeSeasonGrades, highestGradeFor, GRADE_BANDS, type Grade } from "../engine/seasonGrading";
+import type { ClubHistoryEntry } from "../engine/clubHistory";
+import { simHonoursSummaryFor, awardTagsFor, profileSummaryFor } from "../engine/playerProfileText";
 import {
   benchmarkPlayer,
   bestSingleGameFor,
@@ -97,6 +100,25 @@ import {
  * unrelated: `FantasyPointsChart`'s tallest bar(s) had their value label clipped against the SVG's
  * own top edge (the label rendered at a negative y for whichever year hit the chart's max) — see
  * that component's own comment.
+ *
+ * Round 94 Part 2 — [[Season Grading, Post-Season Awards, and Player History]]'s own Draft-Guru-style
+ * redesign, plus two Tyler asks bundled into the same round: a draft-prospect profile (built in
+ * `Draft.tsx`, not here — see that file's own `ProspectProfileModal`) and "a section which shows the 1
+ * or 2 sentence player writeup summary on their player profiles." "Career & Season Stats" gains a Grade
+ * column (`engine/seasonGrading.ts`'s Season Grade, frozen at archive time for a completed sim season,
+ * computed on demand against the live season via `computeSeasonGrades(season, year, seasonArchives,
+ * ALL_PLAYERS)` otherwise — see that file's own doc comment for why this exact on-demand call was
+ * anticipated for "a future profile-UI reader") and an Awards column (`engine/awards.ts`'s 5 post-season
+ * awards, completed seasons only, deliberately blank rather than "—" for a season with no awards DATA at
+ * all — see `CareerTable`'s own doc comment for that distinction). `useSaveStore`'s `clubHistory` log now
+ * renders as its own interleaved rows between year rows (`mergeCareerRows`) — Draft Guru's own "Drafted
+ * by.../Traded from... to..." convention, sim-side. A new "Highest Grade" header stat and an "In this
+ * save:" honours summary line (`engine/playerProfileText.ts`'s `simHonoursSummaryFor`) round out the
+ * design note's own Part 2 spec — labelled "In this save" specifically so it's never mistaken for the
+ * real-world "Career Honours" section a few lines below (real draftguru data; a different provenance
+ * entirely, untouched this round). The new "Summary" section (`profileSummaryFor`) is the write-up ask —
+ * see that function's own top doc comment for why it's a new, tiered blurb generator rather than a reuse
+ * of `records.ts`'s leaderboard-calibrated write-up templates.
  */
 
 const KEY_STATS: LeagueStat[] = ["disposals", "kicks", "handballs", "marks", "tackles", "clearances", "fantasyPoints"];
@@ -132,6 +154,7 @@ export function PlayerProfileModal() {
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
   const year = useSaveStore((s) => s.year);
   const season = useSeasonStore((s) => s.season);
+  const clubHistory = useSaveStore((s) => s.clubHistory);
 
   if (openPlayerId === null) return null;
   const player = getPlayerById(openPlayerId);
@@ -157,7 +180,7 @@ export function PlayerProfileModal() {
 
   return (
     <Modal title={playerFullName(player)} onClose={closeProfile}>
-      <PlayerProfileContent player={player} seasonArchives={seasonArchives} season={season} year={year} />
+      <PlayerProfileContent player={player} seasonArchives={seasonArchives} season={season} year={year} clubHistory={clubHistory} />
     </Modal>
   );
 }
@@ -172,7 +195,19 @@ interface BenchmarkRow {
   topCareer: SingleGameHigh | null;
 }
 
-function PlayerProfileContent({ player, seasonArchives, season, year }: { player: Player; seasonArchives: SeasonArchiveEntry[]; season: Season | null; year: number }) {
+function PlayerProfileContent({
+  player,
+  seasonArchives,
+  season,
+  year,
+  clubHistory,
+}: {
+  player: Player;
+  seasonArchives: SeasonArchiveEntry[];
+  season: Season | null;
+  year: number;
+  clubHistory: Record<number, ClubHistoryEntry[]>;
+}) {
   const [tableMode, setTableMode] = useState<"total" | "average">("total");
   const [chartMode, setChartMode] = useState<"total" | "average">("total");
 
@@ -180,6 +215,17 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
   const span = useMemo(() => simCareerSpan(player, seasonArchives, season, year), [player, seasonArchives, season, year]);
   const careerTotals = useMemo(() => withRealCareerHistory(allTimePlayerTotals(seasonArchives, season)), [seasonArchives, season]);
   const seasonTotals = useMemo(() => (season ? seasonPlayerTotals(season) : new Map<number, SeasonPlayerTotals>()), [season]);
+
+  // Round 94 Part 2 — the live, still-in-progress season's Season Grade, computed on demand exactly
+  // the way `engine/seasonGrading.ts`'s own top doc comment anticipated ("the profile-UI follow-up
+  // round can reuse it unchanged for a live 'grade so far this season' reading"). Needs the FULL live
+  // population (`ALL_PLAYERS`), not just this one player — Season Grade is a population-relative
+  // percentile band, not a per-player-only computation. A completed sim season never needs this (its
+  // grade is already frozen on `SeasonArchiveEntry.seasonGrades` at archive time).
+  const liveGrade = useMemo<Grade | undefined>(() => {
+    if (!season) return undefined;
+    return computeSeasonGrades(season, year, seasonArchives, ALL_PLAYERS)[player.PlayerID]?.grade;
+  }, [season, seasonArchives, year, player]);
 
   const benchmarkRows: BenchmarkRow[] = useMemo(() => {
     const seasonAverages = toAverageMap(seasonTotals);
@@ -195,13 +241,58 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
     }));
   }, [player, seasonArchives, season, year, archetype, seasonTotals, careerTotals]);
 
-  const yearRows = useMemo(() => yearRowsFor(player, seasonArchives, season, year), [player, seasonArchives, season, year]);
+  const yearRows = useMemo(() => yearRowsFor(player, seasonArchives, season, year, liveGrade), [player, seasonArchives, season, year, liveGrade]);
   const hasRealRows = yearRows.some((r) => r.isReal);
   const combinedCareerTotals = useMemo(() => sumYearRows(player.PlayerID, yearRows), [player, yearRows]);
 
   const draftEntries = useMemo(() => draftHistoryFor(player.realFullName ?? playerFullName(player)), [player]);
   const primaryDraftEntry = useMemo(() => primaryDraftEntryOf(draftEntries), [draftEntries]);
   const honours = useMemo(() => (draftEntries.length > 0 ? mergedHonoursFor(draftEntries) : null), [draftEntries]);
+
+  // Round 94 Part 2 — "Highest Grade" is the career-best across every ARCHIVED season plus (unlike
+  // `engine/seasonGrading.ts`'s own frozen-at-archive-time convention for the Grade COLUMN) the live
+  // season's on-demand reading too, since a player's genuine career-best-so-far can legitimately BE
+  // their current, still-in-progress season. `GRADE_BANDS.indexOf` (lower index = better band) is used
+  // directly rather than routing the live grade through `highestGradeFor` a second time — that function
+  // takes a `Record<PlayerID, SeasonGradeEntry>` per season, and fabricating one just to hold a single
+  // live grade would need an invented `rollingRating` this component doesn't actually have.
+  const highestGrade = useMemo<Grade | undefined>(() => {
+    const archivedBest = highestGradeFor(
+      player.PlayerID,
+      seasonArchives.map((a) => a.seasonGrades),
+    );
+    if (!liveGrade) return archivedBest;
+    if (!archivedBest) return liveGrade;
+    return GRADE_BANDS.indexOf(liveGrade) < GRADE_BANDS.indexOf(archivedBest) ? liveGrade : archivedBest;
+  }, [player, seasonArchives, liveGrade]);
+
+  // Round 94 Part 2 — this save's own award wins, de-duplicated into a Draft-Guru-style summary line.
+  // Deliberately independent of `honours` above (that's the REAL-world draftguru scrape) — see this
+  // file's own top doc comment and `simHonoursSummaryFor`'s doc comment for why the two are never
+  // merged into one line.
+  const simHonours = useMemo(() => simHonoursSummaryFor(player.PlayerID, seasonArchives), [player, seasonArchives]);
+
+  // Round 94 Part 2 — this save's own club/trade/draft history log for this one player; empty for a
+  // real player never traded/delisted/re-signed DURING this save (no pre-save origin is ever
+  // fabricated, see `engine/clubHistory.ts`'s own doc comment) or for any player on a save started
+  // before round 94.
+  const playerHistory = useMemo(() => clubHistory[player.PlayerID] ?? [], [clubHistory, player]);
+
+  // Round 94 Part 2 — Tyler's "1 or 2 sentence player writeup summary" ask, for the rostered side of
+  // the profile. See `profileSummaryFor`'s own top doc comment for why this reads `highestGrade`
+  // (career-best, not current dip) and `simHonours` rather than re-deriving its own achievement signal.
+  const profileBlurb = useMemo(
+    () =>
+      profileSummaryFor({
+        name: playerFullName(player),
+        archetype: player.archetype,
+        club: player.Team,
+        gamesPlayed: combinedCareerTotals?.gamesPlayed ?? 0,
+        grade: highestGrade,
+        honours: simHonours,
+      }),
+    [player, combinedCareerTotals, highestGrade, simHonours],
+  );
 
   return (
     <div className="space-y-6">
@@ -233,10 +324,33 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
             <span className="text-slate-500"> ({primaryDraftEntry.club})</span>
           </div>
         )}
+        {highestGrade && (
+          <div>
+            <span className="text-slate-400">Highest Grade </span>
+            <span
+              className="font-semibold"
+              title="This save's own recency-weighted Season Grade at its peak (A+ to E) — see the Career & Season Stats table below for the year-by-year read, and its Grade column's own tooltip for how this differs from the Draft & Club History table's draft-pick grade."
+            >
+              {highestGrade}
+            </span>
+          </div>
+        )}
         {span.stillActive && (
           <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-400">Active {year}</span>
         )}
       </div>
+
+      {simHonours.text && (
+        <p className="text-sm text-accent-light">
+          <span className="text-slate-400">In this save: </span>
+          {simHonours.text}
+        </p>
+      )}
+
+      <section>
+        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Summary</div>
+        <p className="text-sm leading-relaxed text-slate-300">{profileBlurb}</p>
+      </section>
 
       {draftEntries.length > 0 && (
         <section>
@@ -387,7 +501,11 @@ function PlayerProfileContent({ player, seasonArchives, season, year }: { player
             player's real-world career, sourced from afltables.com — {CURRENT_SEASON_YEAR} onward is this save's own simulated history.
           </p>
         )}
-        <CareerTable yearRows={yearRows} careerTotals={combinedCareerTotals} mode={tableMode} />
+        <p className="mb-2 text-[11px] text-slate-500">
+          Grade and Awards reflect this save's own round-94-onward history — a season simulated before that update, or a real pre-save year,
+          shows neither. Club-movement rows only ever record events that happened during this save, never a fabricated pre-save origin.
+        </p>
+        <CareerTable yearRows={yearRows} historyEntries={playerHistory} careerTotals={combinedCareerTotals} mode={tableMode} />
       </section>
 
       <section>
@@ -422,6 +540,10 @@ interface YearRow {
   totals: SeasonPlayerTotals;
   /** True for a row sourced from `realSeasonHistory.ts` (real-world afltables data), false for this save's own simulated seasons. Drives `CareerTable`'s small "AFL" tag. */
   isReal: boolean;
+  /** Round 94 Part 2 — this year's Season Grade: frozen at archive time (`SeasonArchiveEntry.seasonGrades`) for a completed sim season, computed on demand for the live in-progress season (see `PlayerProfileContent`'s own `liveGrade`). `undefined` for a real pre-save year (no sim match data exists for those seasons) or a sim season simulated before round 94. */
+  grade?: Grade;
+  /** Round 94 Part 2 — this year's own award-win tags (`awardTagsFor`). `undefined` when no awards data exists for this row at all (a real pre-save year, the live season — awards are never computed mid-season, or a pre-round-94 archive); an EMPTY array specifically means awards were computed and this player won none that year — `CareerTable` renders the two differently ("" vs "—"). */
+  awardsTags?: string[];
 }
 
 /** Sums a set of `YearRow`s (real and/or sim) into one combined totals object — the CAREER row's own value, always a fresh sum of exactly the rows displayed above it rather than a separately-maintained total that could drift out of sync. `undefined` for an empty list, matching `allTimePlayerTotals`'s existing "no entry = no games" convention. */
@@ -555,8 +677,15 @@ const DRAFT_PICK_TONE: Record<DraftTier, string> = {
  * not there). A real row and a sim row can never collide on the same year, since a save's own
  * simulated years only ever start at `CURRENT_SEASON_YEAR` and count up. Shared by `CareerTable` and
  * `FantasyPointsChart` so both read off the identical underlying rows.
+ *
+ * Round 94 Part 2: each sim-archived row now also carries that year's own Season Grade/award tags,
+ * read directly off the `SeasonArchiveEntry` already being iterated (both frozen there at archive
+ * time — no extra lookup needed). `liveGrade` (computed on demand by the caller, see
+ * `PlayerProfileContent`) applies only to the LIVE row — the live season never gets `awardsTags` at
+ * all, matching `engine/awards.ts`'s own "completed seasons only" scope. A real pre-save row gets
+ * neither field (no sim match data exists for those years).
  */
-function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], season: Season | null, year: number): YearRow[] {
+function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], season: Season | null, year: number, liveGrade?: Grade): YearRow[] {
   const rows: YearRow[] = [];
   for (const real of realSeasonHistoryFor(player.realFullName ?? playerFullName(player))) {
     if (real.year >= CURRENT_SEASON_YEAR || real.games === 0) continue;
@@ -564,13 +693,57 @@ function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], seaso
   }
   for (const archive of [...seasonArchives].sort((a, b) => a.year - b.year)) {
     const t = archive.playerTotals.find((pt) => pt.playerId === player.PlayerID);
-    if (t && t.gamesPlayed > 0) rows.push({ year: archive.year, totals: t, isReal: false });
+    if (t && t.gamesPlayed > 0) {
+      rows.push({
+        year: archive.year,
+        totals: t,
+        isReal: false,
+        grade: archive.seasonGrades?.[player.PlayerID]?.grade,
+        awardsTags: archive.awards ? awardTagsFor(player.PlayerID, archive.awards) : undefined,
+      });
+    }
   }
   if (season) {
     const t = seasonPlayerTotals(season).get(player.PlayerID);
-    if (t && t.gamesPlayed > 0) rows.push({ year, totals: t, isReal: false });
+    if (t && t.gamesPlayed > 0) rows.push({ year, totals: t, isReal: false, grade: liveGrade });
   }
   return rows;
+}
+
+/**
+ * One row in the merged Career & Season Stats table — round 94 Part 2. Either a genuine year's stats,
+ * or a club-history event sitting between two year rows, exactly Draft Guru's own "Drafted by.../
+ * Traded from... to..." inline-row convention, sim-side.
+ */
+type CareerTableRow = { kind: "year"; row: YearRow } | { kind: "event"; entry: ClubHistoryEntry; key: string };
+
+/**
+ * Interleaves `historyEntries` (this save's own club-history log for one player — empty for a real
+ * player never traded/delisted/re-signed DURING this save, see `engine/clubHistory.ts`'s own doc
+ * comment on why no pre-save origin is ever fabricated) chronologically between `yearRows`. An event
+ * dated to year Y sits immediately BEFORE year Y's own stat row — an event introduces the stint that
+ * follows it (a draft/trade/signing happens before the games it leads to) — with any trailing event
+ * rendered after every stat row (a delisting with no further games recorded this save, or a very
+ * recent move with no season played yet). Two events in the same year keep their own relative order,
+ * since the log is always appended in the order things actually happened.
+ */
+function mergeCareerRows(yearRows: readonly YearRow[], historyEntries: readonly ClubHistoryEntry[]): CareerTableRow[] {
+  const events = [...historyEntries].sort((a, b) => a.year - b.year);
+  const years = [...yearRows].sort((a, b) => a.year - b.year);
+  const merged: CareerTableRow[] = [];
+  let ei = 0;
+  for (const row of years) {
+    while (ei < events.length && events[ei].year <= row.year) {
+      merged.push({ kind: "event", entry: events[ei], key: `evt-${ei}` });
+      ei++;
+    }
+    merged.push({ kind: "year", row });
+  }
+  while (ei < events.length) {
+    merged.push({ kind: "event", entry: events[ei], key: `evt-${ei}` });
+    ei++;
+  }
+  return merged;
 }
 
 function fmtStat(t: SeasonPlayerTotals, key: LeagueStat, mode: "total" | "average"): string {
@@ -579,12 +752,25 @@ function fmtStat(t: SeasonPlayerTotals, key: LeagueStat, mode: "total" | "averag
   return mode === "average" ? v.toFixed(1) : Math.round(v).toLocaleString();
 }
 
-function CareerTable({ yearRows, careerTotals, mode }: { yearRows: YearRow[]; careerTotals: SeasonPlayerTotals | undefined; mode: "total" | "average" }) {
-  if (yearRows.length === 0) {
+function CareerTable({
+  yearRows,
+  historyEntries,
+  careerTotals,
+  mode,
+}: {
+  yearRows: YearRow[];
+  /** Round 94 Part 2 — this save's own club-history log for this one player, interleaved between year rows via `mergeCareerRows`. */
+  historyEntries: readonly ClubHistoryEntry[];
+  careerTotals: SeasonPlayerTotals | undefined;
+  mode: "total" | "average";
+}) {
+  if (yearRows.length === 0 && historyEntries.length === 0) {
     return <p className="text-sm text-slate-500">No recorded games yet.</p>;
   }
   const realGames = yearRows.filter((r) => r.isReal).reduce((sum, r) => sum + r.totals.gamesPlayed, 0);
   const simGames = (careerTotals?.gamesPlayed ?? 0) - realGames;
+  const merged = mergeCareerRows(yearRows, historyEntries);
+  const totalColumns = 2 + 1 + TABLE_COLUMNS.length + 1; // Year, GM, Grade, ...stat columns, Awards
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -593,6 +779,17 @@ function CareerTable({ yearRows, careerTotals, mode }: { yearRows: YearRow[]; ca
             <th className="py-1.5 pr-3 font-normal">Year</th>
             <th className="py-1.5 pr-3 text-right font-normal" title="Games Played">
               GM
+            </th>
+            {/* Round 94 Part 2 — this save's own Season Grade (`engine/seasonGrading.ts`), a
+                season-by-season PERFORMANCE read. Deliberately disambiguated from the Draft & Club
+                History table's own "Grade" column above (draftguru's retrospective draft-PICK-outcome
+                grade) via this tooltip — both are real Draft Guru column names, reused faithfully, for
+                two genuinely different concepts. */}
+            <th
+              className="py-1.5 pr-3 font-normal"
+              title="This save's own recency-weighted Season Grade (a rolling AussieFootySim Rating, bucketed A+ to E) — a season-by-season PERFORMANCE read, distinct from the Draft & Club History table's retrospective draft-pick grade above."
+            >
+              Grade
             </th>
             {/* Round 89, ROADMAP item #39 — these headers are already deliberately abbreviated
                 (a full "Fantasy Points"/"Clearances"/"Hitouts" header on every column would blow out
@@ -605,32 +802,51 @@ function CareerTable({ yearRows, careerTotals, mode }: { yearRows: YearRow[]; ca
                 {c.label}
               </th>
             ))}
+            <th className="py-1.5 font-normal" title="This season's post-season awards (engine/awards.ts) — completed seasons only, never computed mid-season.">
+              Awards
+            </th>
           </tr>
         </thead>
         <tbody>
-          {yearRows.map((r) => (
-            <tr key={r.year} className="border-t border-base-800">
-              <td className="py-1.5 pr-3 font-medium tabular-nums">
-                {r.year}
-                {r.isReal && <span className="ml-1.5 rounded bg-base-700/60 px-1 py-0.5 text-[9px] font-medium text-slate-400" title="Real-world statistics (afltables.com)">AFL</span>}
-              </td>
-              <td className="py-1.5 pr-3 text-right tabular-nums">{r.totals.gamesPlayed}</td>
-              {TABLE_COLUMNS.map((c) => (
-                <td key={c.key} className="py-1.5 pr-3 text-right tabular-nums">
-                  {fmtStat(r.totals, c.key, mode)}
+          {merged.map((r) => {
+            if (r.kind === "event") {
+              return (
+                <tr key={r.key} className="border-t border-base-800 bg-base-800/30">
+                  <td colSpan={totalColumns} className="py-1 text-xs italic text-slate-400">
+                    {r.entry.year} — {r.entry.detail}
+                  </td>
+                </tr>
+              );
+            }
+            const row = r.row;
+            return (
+              <tr key={row.year} className="border-t border-base-800">
+                <td className="py-1.5 pr-3 font-medium tabular-nums">
+                  {row.year}
+                  {row.isReal && <span className="ml-1.5 rounded bg-base-700/60 px-1 py-0.5 text-[9px] font-medium text-slate-400" title="Real-world statistics (afltables.com)">AFL</span>}
                 </td>
-              ))}
-            </tr>
-          ))}
+                <td className="py-1.5 pr-3 text-right tabular-nums">{row.totals.gamesPlayed}</td>
+                <td className="py-1.5 pr-3 font-semibold">{row.grade ?? "—"}</td>
+                {TABLE_COLUMNS.map((c) => (
+                  <td key={c.key} className="py-1.5 pr-3 text-right tabular-nums">
+                    {fmtStat(row.totals, c.key, mode)}
+                  </td>
+                ))}
+                <td className="py-1.5 text-xs text-slate-300">{row.awardsTags === undefined ? "" : row.awardsTags.length > 0 ? row.awardsTags.join(", ") : "—"}</td>
+              </tr>
+            );
+          })}
           {careerTotals && (
             <tr className="border-t border-base-700 font-semibold text-primary-light">
               <td className="py-1.5 pr-3">CAREER</td>
               <td className="py-1.5 pr-3 text-right tabular-nums">{careerTotals.gamesPlayed}</td>
+              <td className="py-1.5 pr-3"></td>
               {TABLE_COLUMNS.map((c) => (
                 <td key={c.key} className="py-1.5 pr-3 text-right tabular-nums">
                   {fmtStat(careerTotals, c.key, mode)}
                 </td>
               ))}
+              <td className="py-1.5"></td>
             </tr>
           )}
         </tbody>

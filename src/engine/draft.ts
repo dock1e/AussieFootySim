@@ -1454,6 +1454,41 @@ export function scoutingReportFor(prospect: Player, tier?: ScoutingTier): string
   return templates[pick](prospect);
 }
 
+/**
+ * Splits `text` on sentence-ending punctuation and rejoins the first `maxSentences` — the shared
+ * truncation helper behind round 94 Part 2's "1 or 2 sentence player writeup summary" ask (see
+ * `scoutingSummaryFor` below, and `engine/playerProfileText.ts`'s own top doc comment for the rostered
+ * side of the same ask). A hard `maxChars` safety net (word-boundary-truncated, "…"-suffixed) guards
+ * against a single genuinely long real sentence — `scoutingReportFor`'s real Cal Twomey text is
+ * sometimes one dense multi-clause sentence on its own — still reading as a "summary," not a
+ * paragraph. Falls back to the whole (short) string untouched when it's already within budget, which
+ * covers every `GENERIC_REPORT_TEMPLATES` entry (already ~1 sentence each) as a no-op.
+ */
+export function firstSentencesOf(text: string, maxSentences = 2, maxChars = 220): string {
+  const sentences = text.trim().split(/(?<=[.!?])\s+/);
+  const joined = sentences.slice(0, maxSentences).join(" ").trim();
+  if (joined.length <= maxChars) return joined;
+  const truncated = joined.slice(0, maxChars);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return `${(lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated).trim()}…`;
+}
+
+/**
+ * Round 94 Part 2, Tyler: "I also want a section which shows the 1 or 2 sentence player writeup
+ * summary on their player profiles" — read, per the design note's own "draft talent pool will also
+ * need a player profile" companion ask, as applying to a draft prospect's profile too. Deliberately
+ * NOT a new content-generation system: this truncates whatever `scoutingReportFor` already produces
+ * (real Cal Twomey text, a procedural Elite/Superstar/Generational write-up, or a generic placeholder)
+ * down to a short summary — the SAME source of truth the existing, fuller "Scouting report" section
+ * shows in full, so the two can never disagree with each other. Still gated the same way that section
+ * already is (callers should only show this once the prospect has been scouted at least once — see
+ * `Draft.tsx`'s own `scouted` check), since an unscouted prospect's `scoutingReportFor` reads as a
+ * placeholder blurb, not a real summary of anything.
+ */
+export function scoutingSummaryFor(prospect: Player, tier?: ScoutingTier): string {
+  return firstSentencesOf(scoutingReportFor(prospect, tier));
+}
+
 // ---------------------------------------------------------------------------
 // "Plays like" comps (backlog #42, round 70)
 // ---------------------------------------------------------------------------

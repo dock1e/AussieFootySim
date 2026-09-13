@@ -14,6 +14,9 @@ import type { DisgruntlementState } from "./disgruntlement.ts";
 import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 import type { ScoutFocusArea, MatchDayCoachRole } from "../types/coach.ts";
+import { computeSeasonAwards } from "./awards.ts";
+import { computeSeasonGrades, type SeasonGradeEntry } from "./seasonGrading.ts";
+import type { ClubHistoryEntry } from "./clubHistory.ts";
 
 /**
  * The save-game data model — closes ROADMAP.md gap #24/#29: "nothing in
@@ -247,6 +250,20 @@ export interface SaveGameData {
    * followed since `eligibility`.
    */
   developmentCoach: number | null;
+  /**
+   * Round 94, [[Season Grading, Post-Season Awards, and Player History]] — the sim-side club/trade/
+   * draft history log, keyed by PlayerID (`engine/clubHistory.ts`). Populated at every point a
+   * player's club actually changes during the save (a draft-night selection, a completed trade, a
+   * free-agency signing, a delisting) — see that file's own doc comment for the full list of call
+   * sites and why a player's history at save-creation time is deliberately NOT retroactively
+   * fabricated. Multi-year state, NOT reset by `runOffSeasonOnSave` below, same "carries over
+   * unchanged" treatment as `draftPickInventory`/`talentScout`/`lineCoaches` — a player's own history
+   * obviously doesn't reset just because a new season started. Added without bumping
+   * `SAVE_SCHEMA_VERSION`, same convention as every field above: a pre-round-94 save just has no
+   * logged history for anyone, which `deserializeSave` below defaults to `{}` (an honest "nothing
+   * recorded yet," not a fabricated backfill).
+   */
+  clubHistory: Record<number, ClubHistoryEntry[]>;
 }
 
 /** See `SaveGameData.talentScout`'s own doc comment. */
@@ -276,6 +293,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     talentScout: null,
     lineCoaches: {},
     developmentCoach: null,
+    clubHistory: {},
   };
 }
 
@@ -313,9 +331,24 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
  * at all — calling this with no season in progress (shouldn't happen; the
  * Off-Season Hub only ever offers this step once a season is complete) is a
  * no-op on `seasonArchives` rather than archiving `null`.
+ *
+ * Round 94, [[Season Grading, Post-Season Awards, and Player History]] — also the one moment a
+ * just-finished season's post-season awards (`engine/awards.ts`'s `computeSeasonAwards`) and every
+ * rated player's Season Grade (`engine/seasonGrading.ts`'s `computeSeasonGrades`) get computed, for
+ * exactly the same reason `archiveSeason` itself runs here: both are frozen forever onto the
+ * resulting `SeasonArchiveEntry` (`.awards`/`.seasonGrades`) the moment this step runs, never
+ * recomputed later against a since-changed league — see each function's own doc comment. Both are
+ * computed from `save.players`/`save.season` BEFORE `runOffSeason` ages anyone, same timing
+ * `developmentMultipliersFor` already relies on below (and `finishedSeasonAwards` now feeds directly
+ * into that same call, so a Norm Smith/Finals MVP/All-Australian/Best & Fairest win this season can
+ * actually influence the growth step it's computed alongside — see `development.ts`'s own
+ * "double-counting" doc comments for why Brownlow/Champion Player are deliberately excluded from
+ * that bonus).
  */
 export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
-  const finishedSeasonArchive = save.season ? archiveSeason(save.season, save.year) : null;
+  const finishedSeasonAwards = save.season ? computeSeasonAwards(save.season, save.players) : null;
+  const finishedSeasonGrades: Record<number, SeasonGradeEntry> | null = save.season ? computeSeasonGrades(save.season, save.year, save.seasonArchives, save.players) : null;
+  const finishedSeasonArchive = save.season ? archiveSeason(save.season, save.year, finishedSeasonAwards ?? undefined, finishedSeasonGrades ?? undefined) : null;
   // Round 91 — [[Coach-Driven & Performance-Linked Player Development]]. Computed from the season
   // that's about to be archived above (still `save.season` here, not yet discarded below), BEFORE
   // `runOffSeason` ages anyone — see `engine/development.ts`'s own doc comment for the full mechanic
@@ -328,6 +361,7 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     save.myClub,
     save.developmentCoach,
     save.lineCoaches,
+    finishedSeasonAwards,
   );
   return {
     ...save,
@@ -340,10 +374,12 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     draftWindow: null,
     seasonArchives: finishedSeasonArchive ? [...save.seasonArchives, finishedSeasonArchive] : save.seasonArchives,
     savedAt: new Date().toISOString(),
-    // draftPickInventory deliberately NOT reset here — unlike combineWindow/contractWindow/
-    // tradeWindow/draftWindow (per-off-season sessions that genuinely restart each year), pick
-    // OWNERSHIP is multi-year state: a pick traded away in 2026 for a 2027 future selection must
-    // still read as traded away when 2027 actually arrives. It carries over unchanged.
+    // draftPickInventory, clubHistory deliberately NOT reset here — unlike combineWindow/
+    // contractWindow/tradeWindow/draftWindow (per-off-season sessions that genuinely restart each
+    // year), pick ownership and a player's own club history are both multi-year state: a pick traded
+    // away in 2026 for a 2027 future selection must still read as traded away when 2027 actually
+    // arrives, and a player's draft/trade timeline obviously doesn't reset just because a new season
+    // started. Both carry over unchanged via the `...save` spread above.
   };
 }
 
@@ -399,6 +435,8 @@ export interface SerializedSaveGame {
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineCoaches`. See `SaveGameData.developmentCoach`'s own doc comment. */
   developmentCoach: number | null;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `developmentCoach`. See `SaveGameData.clubHistory`'s own doc comment. */
+  clubHistory: Record<number, ClubHistoryEntry[]>;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -432,6 +470,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     talentScout: save.talentScout,
     lineCoaches: save.lineCoaches,
     developmentCoach: save.developmentCoach,
+    clubHistory: save.clubHistory,
   };
 }
 
@@ -479,5 +518,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     talentScout: s.talentScout ?? null,
     lineCoaches: s.lineCoaches ?? {},
     developmentCoach: s.developmentCoach ?? null,
+    clubHistory: s.clubHistory ?? {},
   };
 }

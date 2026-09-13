@@ -189,18 +189,36 @@ describe("reSign / delist / signFreeAgent", () => {
 
   it("delist flags without mutating the input", () => {
     const p = makePlayer({});
-    const next = delist(p);
+    const { player: next } = delist(p, 2026);
     expect(p.delisted).toBeUndefined();
     expect(next.delisted).toBe(true);
   });
 
+  it("delist also returns a club-history entry for the delisted player", () => {
+    const p = makePlayer({ PlayerID: 7, Team: "Adelaide" });
+    const { historyEntry } = delist(p, 2026);
+    expect(historyEntry.playerId).toBe(7);
+    expect(historyEntry.entry.eventType).toBe("delisted");
+    expect(historyEntry.entry.club).toBe("Adelaide");
+    expect(historyEntry.entry.year).toBe(2026);
+  });
+
   it("signFreeAgent moves the player to the signing club with new terms", () => {
     const p = makePlayer({ Team: "Adelaide", ClubID: 1, totalValue: 400_000, expired_year: 2025 });
-    const next = signFreeAgent(p, "Carlton", { years: 4, salaryPerYear: 700_000 }, 2026);
+    const { player: next } = signFreeAgent(p, "Carlton", { years: 4, salaryPerYear: 700_000 }, 2026);
     expect(next.Team).toBe("Carlton");
     expect(next.ClubID).toBe(3);
     expect(next.totalValue).toBe(700_000);
     expect(next.expired_year).toBe(2030);
+  });
+
+  it("signFreeAgent also returns a club-history entry recording the move", () => {
+    const p = makePlayer({ PlayerID: 8, Team: "Adelaide", totalValue: 400_000, expired_year: 2025 });
+    const { historyEntry } = signFreeAgent(p, "Carlton", { years: 4, salaryPerYear: 700_000 }, 2026);
+    expect(historyEntry.playerId).toBe(8);
+    expect(historyEntry.entry.eventType).toBe("free-agency");
+    expect(historyEntry.entry.club).toBe("Carlton");
+    expect(historyEntry.entry.detail).toContain("Adelaide");
   });
 });
 

@@ -228,7 +228,7 @@ describe("executeTrade", () => {
       makePlayer({ PlayerID: 3, Team: "Essendon", ClubID: 5 }),
     ];
     const frozen = players.map((p) => ({ ...p }));
-    const next = executeTrade(players, "Adelaide", "Carlton", new Set([1]), new Set([2]));
+    const { players: next } = executeTrade(players, "Adelaide", "Carlton", new Set([1]), new Set([2]), 2026);
 
     expect(players).toEqual(frozen); // input array's objects untouched
 
@@ -240,6 +240,19 @@ describe("executeTrade", () => {
     expect(p2.Team).toBe("Adelaide");
     expect(p2.ClubID).toBe(clubByName("Adelaide")!.ClubID);
     expect(p3).toEqual(players[2]); // untouched third player, same object shape
+  });
+
+  it("also returns a ClubHistoryUpdate for each moved player, from their own point of view", () => {
+    const players = [makePlayer({ PlayerID: 1, Team: "Adelaide", ClubID: 1 }), makePlayer({ PlayerID: 2, Team: "Carlton", ClubID: 3 })];
+    const { historyEntries } = executeTrade(players, "Adelaide", "Carlton", new Set([1]), new Set([2]), 2026);
+
+    expect(historyEntries).toHaveLength(2);
+    const forP1 = historyEntries.find((h) => h.playerId === 1)!;
+    const forP2 = historyEntries.find((h) => h.playerId === 2)!;
+    expect(forP1.entry.eventType).toBe("traded");
+    expect(forP1.entry.club).toBe("Carlton"); // destination, matching p1's own new Team
+    expect(forP2.entry.eventType).toBe("traded");
+    expect(forP2.entry.club).toBe("Adelaide");
   });
 });
 

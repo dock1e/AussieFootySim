@@ -24,6 +24,7 @@ import { useTradeStore } from "./useTradeStore";
 import { useDraftStore } from "./useDraftStore";
 import { useCombineStore } from "./useCombineStore";
 import { readSaveFromDB, writeSaveToDB, clearSaveInDB } from "./db";
+import { clubHistoryEntryForDraft, clubHistoryEntryForFatherSon, appendClubHistory, appendManyClubHistory, type ClubHistoryEntry } from "../engine/clubHistory";
 
 /**
  * The save-game lifecycle store — the reactive/persistence glue over
@@ -70,6 +71,8 @@ interface SaveStoreState {
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
   /** Sep 2026 round 91 — [[Coach-Driven & Performance-Linked Player Development]]. Same "doesn't belong to any single sub-store, persists across seasons" reasoning as `talentScout`/`lineCoaches` — see `SaveGameData.developmentCoach`'s own doc comment. `null` means unhired. */
   developmentCoach: number | null;
+  /** Round 94 — [[Season Grading, Post-Season Awards, and Player History]]'s sim-side club/trade/draft history log. Same "doesn't belong to any single sub-store, persists across seasons" reasoning as `draftPickInventory`/`talentScout`/`lineCoaches`/`developmentCoach` above — see `SaveGameData.clubHistory`'s own doc comment. */
+  clubHistory: Record<number, ClubHistoryEntry[]>;
 
   /** Loads the current save from IndexedDB if one exists and hydrates every other store from it; otherwise leaves everything at its already-correct fresh-game defaults. Call once, on app boot, before rendering the main UI. */
   initialize: () => Promise<void>;
@@ -217,6 +220,24 @@ function applyFatherSonRedirect(
 }
 
 /**
+ * Round 94, [[Season Grading, Post-Season Awards, and Player History]] — the club-history entry one
+ * completed pick produces, whether from `draftPlayer` (`confirmDraftPick`, the human's own pick) or
+ * `autoResolvePick` (the AI heuristic, via `autoResolveDraftPicks` below). `engine/draft.ts` itself is
+ * deliberately untouched by this round (see the design note's own "minimal call-site touching"
+ * reasoning) — drafting's history entry is constructed here, at the store call site, instead of baked
+ * into `draftPlayer` the way `executeTrade`/`delist`/`signFreeAgent` bake theirs in, since draftPlayer
+ * has no single natural "both paths funnel through this" choke point the way those do.
+ * `record.clubName` already reflects the FINAL crediting club (`applyFatherSonRedirect` above may have
+ * already redirected it away from `originalClub`), so comparing the two tells us whether this reads as
+ * a plain natural-order selection or a Father-Son/Academy redirect.
+ */
+function draftHistoryEntryFor(originalClub: string, record: DraftPickRecord, year: number, draftType: string): ClubHistoryEntry {
+  return record.clubName === originalClub
+    ? clubHistoryEntryForDraft(record.clubName, record.pickNumber, year, draftType)
+    : clubHistoryEntryForFatherSon(record.clubName, record.pickNumber, year);
+}
+
+/**
  * Shared pure loop behind `autoResolveNextPick`/`skipToMyPick`/`finishDraft`
  * — resolves picks one at a time via engine/draft.ts's `autoResolvePick`,
  * threading a locally-mutated `playersByClub`/`strategies` through so each
@@ -232,6 +253,9 @@ function applyFatherSonRedirect(
  * (runs to the end of `order`). Also threads `ladder`/`draftPickInventory`
  * through for round 88's `applyFatherSonRedirect` above — see that
  * function's own doc comment.
+ *
+ * Round 94: also accumulates the `ClubHistoryEntry` each pick in this batch produces (see
+ * `draftHistoryEntryFor` above) — one per drafted player, in the same order as `draftedPlayers`.
  */
 function autoResolveDraftPicks(
   window: DraftWindow,
@@ -239,13 +263,14 @@ function autoResolveDraftPicks(
   opts: { stopWhenClub?: string; maxPicks?: number },
   ladder: readonly LadderRow[] | null | undefined,
   draftPickInventory: readonly DraftPick[]
-): { window: DraftWindow; draftedPlayers: Player[]; draftPickInventory: DraftPick[] } {
+): { window: DraftWindow; draftedPlayers: Player[]; draftPickInventory: DraftPick[]; historyEntries: { playerId: number; entry: ClubHistoryEntry }[] } {
   const playersByClub = buildLeaguePlayersByClub();
   let strategies: Map<string, ClubStrategy> = computeLeagueStrategies(playersByClub);
   const picks = [...window.picks];
   const pickedIds = new Set(picks.map((p) => p.playerId));
   let currentPickIndex = window.currentPickIndex;
   const draftedPlayers: Player[] = [];
+  const historyEntries: { playerId: number; entry: ClubHistoryEntry }[] = [];
   let inventory = [...draftPickInventory];
   let made = 0;
 
@@ -270,6 +295,7 @@ function autoResolveDraftPicks(
     picks.push(redirected.record);
     pickedIds.add(redirected.record.playerId);
     draftedPlayers.push(redirected.player);
+    historyEntries.push({ playerId: redirected.record.playerId, entry: draftHistoryEntryFor(clubOnClock, redirected.record, year, "National Draft") });
     const roster = playersByClub.get(creditedClub) ?? [];
     playersByClub.set(creditedClub, [...roster, redirected.player]);
     currentPickIndex++;
@@ -277,7 +303,7 @@ function autoResolveDraftPicks(
     if (currentPickIndex % CLUBS.length === 0) strategies = computeLeagueStrategies(playersByClub);
   }
 
-  return { window: { ...window, picks, currentPickIndex }, draftedPlayers, draftPickInventory: inventory };
+  return { window: { ...window, picks, currentPickIndex }, draftedPlayers, draftPickInventory: inventory, historyEntries };
 }
 
 function snapshotSave(
@@ -287,6 +313,7 @@ function snapshotSave(
   talentScout: TalentScoutAssignment | null,
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>,
   developmentCoach: number | null,
+  clubHistory: Record<number, ClubHistoryEntry[]>,
 ): SaveGameData {
   return {
     schemaVersion: SAVE_SCHEMA_VERSION,
@@ -307,6 +334,7 @@ function snapshotSave(
     talentScout,
     lineCoaches,
     developmentCoach,
+    clubHistory,
   };
 }
 
@@ -350,6 +378,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   talentScout: null,
   lineCoaches: {},
   developmentCoach: null,
+  clubHistory: {},
 
   initialize: async () => {
     let loaded: SaveGameData | null = null;
@@ -371,9 +400,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       // enough (nothing has changed since the load, so what's on disk still
       // matches this state) and avoids needing to persist a real timestamp
       // inside SaveGameData just for a UI label.
-      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches, developmentCoach: loaded.developmentCoach });
+      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches, developmentCoach: loaded.developmentCoach, clubHistory: loaded.clubHistory });
     } else {
-      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {}, developmentCoach: null });
+      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {}, developmentCoach: null, clubHistory: {} });
     }
 
     if (!subscribed) {
@@ -390,7 +419,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   saveNow: async () => {
-    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach);
+    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory);
     await writeSaveToDB(serializeSave(save));
     set({ hasSave: true, lastSavedAt: Date.now() });
   },
@@ -399,13 +428,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     resetPoolToGenerated();
     const save = newSaveGame(myClub, ALL_PLAYERS);
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory });
     await clearSaveInDB();
     await get().saveNow();
   },
 
   runOffSeason: async () => {
-    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach);
+    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory);
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
@@ -413,16 +442,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
     useDraftStore.getState().clearWindow();
-    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches, developmentCoach: next.developmentCoach });
+    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches, developmentCoach: next.developmentCoach, clubHistory: next.clubHistory });
     await get().saveNow();
   },
 
-  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach)), null, 2),
+  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory)), null, 2),
 
   importJSON: async (text) => {
     const save = deserializeSave(JSON.parse(text));
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory });
     await get().saveNow();
   },
 
@@ -446,21 +475,22 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   delistPlayer: (playerId) => {
+    const year = get().year;
     const before = ALL_PLAYERS.find((p) => p.PlayerID === playerId);
     if (!before) return;
-    const after = delist(before);
-    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? after : p)));
+    const delisted = delist(before, year);
+    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? delisted.player : p)));
     useSelectionStore.getState().removePlayer(before.Team, playerId);
     useContractStore.getState().logEntry({
       id: `${playerId}-user-${Date.now()}`,
       day: useContractStore.getState().window?.daysElapsed ?? 0,
       kind: "delisted",
       playerId,
-      playerName: playerFullName(after),
+      playerName: playerFullName(delisted.player),
       clubName: before.Team,
-      detail: `${playerFullName(after)} is delisted by ${before.Team}.`,
+      detail: `${playerFullName(delisted.player)} is delisted by ${before.Team}.`,
     });
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, clubHistory: appendClubHistory(get().clubHistory, playerId, delisted.historyEntry.entry) });
     void get().saveNow();
   },
 
@@ -470,20 +500,20 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const before = ALL_PLAYERS.find((p) => p.PlayerID === playerId);
     if (!before) return;
     const fromClub = before.Team;
-    const after = signFreeAgent(before, myClub, terms, year);
-    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? after : p)));
+    const signed = signFreeAgent(before, myClub, terms, year);
+    loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? signed.player : p)));
     useSelectionStore.getState().removePlayer(fromClub, playerId);
     useContractStore.getState().logEntry({
       id: `${playerId}-user-${Date.now()}`,
       day: useContractStore.getState().window?.daysElapsed ?? 0,
       kind: "signed",
       playerId,
-      playerName: playerFullName(after),
+      playerName: playerFullName(signed.player),
       clubName: myClub,
       fromClubName: fromClub,
-      detail: `${myClub} signs ${playerFullName(after)} from ${fromClub} as a free agent.`,
+      detail: `${myClub} signs ${playerFullName(signed.player)} from ${fromClub} as a free agent.`,
     });
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, clubHistory: appendClubHistory(get().clubHistory, playerId, signed.historyEntry.entry) });
     void get().saveNow();
   },
 
@@ -495,10 +525,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     // rule every other stochastic engine step follows (Engine.md "Tech
     // stack"), not Date.now()/Math.random().
     const seed = year * 1000 + day;
-    const { players, activity } = simulateLeagueContracts(ALL_PLAYERS, myClub, year, day, seed);
+    const { players, activity, historyEntries } = simulateLeagueContracts(ALL_PLAYERS, myClub, year, day, seed);
     loadPool(players);
     useContractStore.getState().logDay(activity);
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, clubHistory: appendManyClubHistory(get().clubHistory, historyEntries) });
     void get().saveNow();
   },
 
@@ -517,7 +547,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const outcome = resolveTradeOutcome(evaluation, myClub, partnerClub, new Set(myGivePlayerIds), getBefore, ctx);
     if (outcome.result !== "accepted") return outcome;
 
-    let players = executeTrade(ALL_PLAYERS, myClub, partnerClub, new Set(myGivePlayerIds), new Set(myGetPlayerIds));
+    const executed = executeTrade(ALL_PLAYERS, myClub, partnerClub, new Set(myGivePlayerIds), new Set(myGetPlayerIds), year);
+    let players = executed.players;
     for (const p of giveBefore) useSelectionStore.getState().removePlayer(myClub, p.PlayerID);
     for (const p of getBefore) useSelectionStore.getState().removePlayer(partnerClub, p.PlayerID);
 
@@ -552,7 +583,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       detail: `${myClub} trade ${giveNames} to ${partnerClub} for ${getNames}.${penalty.cultureImpact !== 0 ? ` ${penalty.message}` : ""}`,
     });
 
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, clubHistory: appendManyClubHistory(get().clubHistory, executed.historyEntries) });
     void get().saveNow();
     return outcome;
   },
@@ -575,7 +606,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       return;
     }
 
-    let players = executeTrade(ALL_PLAYERS, myClub, offer.fromClub, new Set(offer.theyWantPlayerIds), new Set(offer.theyGivePlayerIds));
+    const executed = executeTrade(ALL_PLAYERS, myClub, offer.fromClub, new Set(offer.theyWantPlayerIds), new Set(offer.theyGivePlayerIds), year);
+    let players = executed.players;
     for (const p of theyWant) useSelectionStore.getState().removePlayer(myClub, p.PlayerID);
     for (const p of theyGive) useSelectionStore.getState().removePlayer(offer.fromClub, p.PlayerID);
 
@@ -603,7 +635,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     });
     useTradeStore.getState().removeOffer(offerId);
 
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, clubHistory: appendManyClubHistory(get().clubHistory, executed.historyEntries) });
     void get().saveNow();
   },
 
@@ -619,13 +651,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     // Deterministic per (year, day) — same rule letAssistantManage follows.
     const seed = year * 1000 + day;
     const strategies = computeLeagueStrategies(buildLeaguePlayersByClub());
-    const { players, activity } = simulateLeagueTrades(ALL_PLAYERS, myClub, year, day, seed, strategies);
+    const { players, activity, historyEntries } = simulateLeagueTrades(ALL_PLAYERS, myClub, year, day, seed, strategies);
     loadPool(players);
     // Evaluated against the post-AI-trades roster — a fresh day's Inbox
     // offers should reflect what actually happened earlier that same day.
     const offers = generateInboundOffers(players, myClub, year, day, seed, strategies);
     useTradeStore.getState().logDay(activity, offers);
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, clubHistory: appendManyClubHistory(get().clubHistory, historyEntries) });
     void get().saveNow();
   },
 
@@ -711,7 +743,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     );
     loadPool([...ALL_PLAYERS, redirected.player]);
     useDraftStore.getState().logPick(redirected.record);
-    set({ poolVersion: get().poolVersion + 1, draftPickInventory: redirected.draftPickInventory });
+    const historyEntry = draftHistoryEntryFor(myClub, redirected.record, year, "National Draft");
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory: redirected.draftPickInventory, clubHistory: appendClubHistory(get().clubHistory, redirected.record.playerId, historyEntry) });
     void get().saveNow();
   },
 
@@ -719,10 +752,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const window = useDraftStore.getState().window;
     if (!window) return;
     const ladder = useSeasonStore.getState().season?.ladder;
-    const { window: next, draftedPlayers, draftPickInventory } = autoResolveDraftPicks(window, get().year, { maxPicks: 1 }, ladder, get().draftPickInventory);
+    const { window: next, draftedPlayers, draftPickInventory, historyEntries } = autoResolveDraftPicks(window, get().year, { maxPicks: 1 }, ladder, get().draftPickInventory);
     if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
     useDraftStore.getState().openWindow(next);
-    set({ poolVersion: get().poolVersion + 1, draftPickInventory });
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory, clubHistory: appendManyClubHistory(get().clubHistory, historyEntries) });
     void get().saveNow();
   },
 
@@ -731,10 +764,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     if (!window) return;
     const myClub = useGameStore.getState().myClub;
     const ladder = useSeasonStore.getState().season?.ladder;
-    const { window: next, draftedPlayers, draftPickInventory } = autoResolveDraftPicks(window, get().year, { stopWhenClub: myClub }, ladder, get().draftPickInventory);
+    const { window: next, draftedPlayers, draftPickInventory, historyEntries } = autoResolveDraftPicks(window, get().year, { stopWhenClub: myClub }, ladder, get().draftPickInventory);
     if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
     useDraftStore.getState().openWindow(next);
-    set({ poolVersion: get().poolVersion + 1, draftPickInventory });
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory, clubHistory: appendManyClubHistory(get().clubHistory, historyEntries) });
     void get().saveNow();
   },
 
@@ -742,10 +775,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const window = useDraftStore.getState().window;
     if (!window) return;
     const ladder = useSeasonStore.getState().season?.ladder;
-    const { window: next, draftedPlayers, draftPickInventory } = autoResolveDraftPicks(window, get().year, {}, ladder, get().draftPickInventory);
+    const { window: next, draftedPlayers, draftPickInventory, historyEntries } = autoResolveDraftPicks(window, get().year, {}, ladder, get().draftPickInventory);
     if (draftedPlayers.length > 0) loadPool([...ALL_PLAYERS, ...draftedPlayers]);
     useDraftStore.getState().openWindow(next);
-    set({ poolVersion: get().poolVersion + 1, draftPickInventory });
+    set({ poolVersion: get().poolVersion + 1, draftPickInventory, clubHistory: appendManyClubHistory(get().clubHistory, historyEntries) });
     void get().saveNow();
   },
 

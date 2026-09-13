@@ -4,6 +4,7 @@ import type { ClubStrategy } from "./listNeeds.ts";
 import type { Player } from "../types/player.ts";
 import { playerFullName } from "../types/player.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
+import { clubHistoryEntryForDelisting, clubHistoryEntryForFreeAgency, type ClubHistoryUpdate } from "./clubHistory.ts";
 
 /**
  * Contracts, salary cap & free agency — Phase 4 Slice 3 (ROADMAP.md).
@@ -355,16 +356,33 @@ export function reSign(player: Player, terms: ReSignTerms, currentYear: number):
   };
 }
 
-/** Flags a player `delisted` — see Player.delisted's own doc comment for exactly what this does and doesn't do. */
-export function delist(player: Player): Player {
-  return { ...player, delisted: true };
+/**
+ * Flags a player `delisted` — see Player.delisted's own doc comment for exactly what this does and
+ * doesn't do.
+ *
+ * Round 94, [[Season Grading, Post-Season Awards, and Player History]] — also returns the
+ * `ClubHistoryUpdate` this produces (see `engine/clubHistory.ts`), baked directly into this one
+ * function rather than left to each caller: `delist` already has 2 call sites (this file's own
+ * `simulateLeagueContracts` AI sweep, and `useSaveStore.ts`'s user-initiated `delistPlayer` action),
+ * same "one choke point, can't be forgotten" reasoning as `executeTrade`/`signFreeAgent`.
+ */
+export function delist(player: Player, year: number): { player: Player; historyEntry: ClubHistoryUpdate } {
+  return { player: { ...player, delisted: true }, historyEntry: { playerId: player.PlayerID, entry: clubHistoryEntryForDelisting(player.Team, year) } };
 }
 
-/** A free-agency signing: re-signs the player under new terms AND moves them to `signingClubName`. */
-export function signFreeAgent(player: Player, signingClubName: string, terms: ReSignTerms, currentYear: number): Player {
+/**
+ * A free-agency signing: re-signs the player under new terms AND moves them to `signingClubName`.
+ * Round 94: also returns the resulting `ClubHistoryUpdate` (`fromClub` = the player's own club BEFORE
+ * this signing, read off `player.Team` before `reSign`/the club reassignment below touch it).
+ */
+export function signFreeAgent(player: Player, signingClubName: string, terms: ReSignTerms, currentYear: number): { player: Player; historyEntry: ClubHistoryUpdate } {
+  const fromClub = player.Team;
   const club = clubByName(signingClubName);
   const resigned = reSign(player, terms, currentYear);
-  return { ...resigned, Team: signingClubName, ClubID: club?.ClubID ?? player.ClubID };
+  return {
+    player: { ...resigned, Team: signingClubName, ClubID: club?.ClubID ?? player.ClubID },
+    historyEntry: { playerId: player.PlayerID, entry: clubHistoryEntryForFreeAgency(fromClub, signingClubName, currentYear) },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +414,10 @@ export interface LeagueActivityEntry {
  * simplified stand-in for a real 17-club negotiation market — no bidding
  * *between* rival clubs for the same player is modelled (a disclosed
  * simplification, see ROADMAP.md's Phase 4 Slice 3 gaps).
+ *
+ * Round 94: also returns every `ClubHistoryUpdate` this sweep's delistings produce (see `delist`'s
+ * own doc comment) — the re-sign branch deliberately produces none, matching `clubHistory.ts`'s own
+ * "same-club re-signing isn't a movement worth logging" convention.
  */
 export function simulateLeagueContracts(
   players: readonly Player[],
@@ -403,9 +425,10 @@ export function simulateLeagueContracts(
   currentYear: number,
   day: number,
   seed: number,
-): { players: Player[]; activity: LeagueActivityEntry[] } {
+): { players: Player[]; activity: LeagueActivityEntry[]; historyEntries: ClubHistoryUpdate[] } {
   const rng = mulberry32(seed);
   const activity: LeagueActivityEntry[] = [];
+  const historyEntries: ClubHistoryUpdate[] = [];
 
   const next = players.map((p) => {
     if (p.Team === myClub || p.delisted) return p;
@@ -439,8 +462,10 @@ export function simulateLeagueContracts(
       clubName: p.Team,
       detail: status === "UFA" ? `${name} leaves ${p.Team} as an unrestricted free agent.` : `${p.Team} parts ways with ${name} (${status}).`,
     });
-    return delist(p);
+    const delisted = delist(p, currentYear);
+    historyEntries.push(delisted.historyEntry);
+    return delisted.player;
   });
 
-  return { players: next, activity };
+  return { players: next, activity, historyEntries };
 }

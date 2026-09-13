@@ -203,6 +203,10 @@ describe("serializeSave / deserializeSave", () => {
       // non-null value here (not null), same "prove JSON round-tripping" ethos as `talentScout`/
       // `lineCoaches` above — a plain number field, no Map/Set involved.
       developmentCoach: 31,
+      // Round 94, [[Season Grading, Post-Season Awards, and Player History]]. A real, non-empty
+      // history log entry (not {}), same "prove JSON round-tripping" ethos as `talentScout`/
+      // `lineCoaches`/`developmentCoach` above — plain data, no Map/Set involved.
+      clubHistory: { 1: [{ year: 2025, club: "Adelaide", eventType: "drafted", detail: "Drafted by Adelaide with National Draft pick #5." }] },
     };
   }
 

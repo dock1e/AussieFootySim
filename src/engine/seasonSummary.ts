@@ -8,6 +8,8 @@ import { isRoundPlayed, type Season, type PlayedMatch } from "./season.ts";
 import type { BoxScoreLine, MatchResult } from "./match.ts";
 import type { FinalsSeriesResult } from "./finals.ts";
 import type { RealSeasonEntry } from "../data/realSeasonHistory.ts";
+import type { SeasonAwards } from "./awards.ts";
+import type { SeasonGradeEntry } from "./seasonGrading.ts";
 
 /**
  * Season-wide (multi-match) summary helpers for the Aug 2026 round 50
@@ -389,6 +391,10 @@ export interface SeasonArchiveEntry {
   played?: PlayedMatch[];
   /** The 4-week finals bracket this season reached, or `null` if this club's season/the competition didn't have one recorded (shouldn't happen in practice — every season runs finals — but mirrors `Season.finals`'s own nullability rather than assuming). Same `result.events`-stripped box scores as `played`. `undefined` (as opposed to `null`) for an archive written before Round 64. */
   finals?: FinalsSeriesResult | null;
+  /** Round 94, [[Season Grading, Post-Season Awards, and Player History]] — this season's crowned Brownlow/Champion Player/Finals MVP/Norm Smith/Best & Fairest/All-Australian winners, computed once by `engine/awards.ts`'s `computeSeasonAwards` at the moment this season archives and frozen forever after (a later trade/delist doesn't retroactively change who won a past year's medal). `undefined` for an archive written before Round 94. */
+  awards?: SeasonAwards;
+  /** Round 94 — every rated player's Season Grade for this season, keyed by `PlayerID`, computed once by `engine/seasonGrading.ts`'s `computeSeasonGrades` at archive time and frozen forever after — see that file's own top doc comment for why a completed season's grade never gets recomputed against a later, differently-sized league. `undefined` for an archive written before Round 94. */
+  seasonGrades?: Record<number, SeasonGradeEntry>;
 }
 
 /** Strips the heavy tick-by-tick event log down to just the box score/score line a match needs once archived — see `SeasonArchiveEntry`'s own doc comment for the measured size blowout this avoids. */
@@ -396,14 +402,30 @@ function stripEventsForArchive(result: MatchResult): MatchResult {
   return { ...result, events: [] };
 }
 
-/** Builds one archive entry from a just-finished season — called from `saveGame.ts`'s `runOffSeasonOnSave`, the one moment a season's own data would otherwise be discarded outright (`season` gets set to `null` there). Round 64: now also keeps the `played`/`finals` match logs (box score, events stripped — see `SeasonArchiveEntry`'s own doc comment), not just the aggregated totals. */
-export function archiveSeason(season: Season, year: number): SeasonArchiveEntry {
+/**
+ * Builds one archive entry from a just-finished season — called from `saveGame.ts`'s
+ * `runOffSeasonOnSave`, the one moment a season's own data would otherwise be discarded outright
+ * (`season` gets set to `null` there). Round 64: now also keeps the `played`/`finals` match logs
+ * (box score, events stripped — see `SeasonArchiveEntry`'s own doc comment), not just the
+ * aggregated totals.
+ *
+ * Round 94: takes the already-computed `awards`/`seasonGrades` as optional parameters rather than
+ * computing them itself — `computeSeasonAwards`/`computeSeasonGrades` both need the full `players`
+ * pool (and, for grades, `priorArchives`) that this function was never plumbed to receive, and
+ * `runOffSeasonOnSave` already has both close at hand at its own call site. Omitting them (as every
+ * pre-round-94 call site implicitly does) leaves `awards`/`seasonGrades` `undefined` on the
+ * resulting entry, same "an old/lighter call site just doesn't get the new field" convention
+ * `played`/`finals` themselves established at round 64.
+ */
+export function archiveSeason(season: Season, year: number, awards?: SeasonAwards, seasonGrades?: Record<number, SeasonGradeEntry>): SeasonArchiveEntry {
   return {
     year,
     ladder: season.ladder,
     playerTotals: [...seasonPlayerTotals(season).values()],
     played: season.played.map((m) => ({ ...m, result: stripEventsForArchive(m.result) })),
     finals: season.finals ? { ...season.finals, matches: season.finals.matches.map((m) => ({ ...m, result: stripEventsForArchive(m.result) })) } : season.finals,
+    awards,
+    seasonGrades,
   };
 }
 

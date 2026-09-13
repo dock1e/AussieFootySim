@@ -7,6 +7,7 @@ import { playerFullName } from "../types/player.ts";
 import type { Archetype } from "../types/archetype.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
 import { ARCHETYPE_LINE, summariseLines, bandForGap, type Line, type LineSummary } from "../data/lines.ts";
+import { clubHistoryEntryForTrade, type ClubHistoryUpdate } from "./clubHistory.ts";
 
 /**
  * Trade Period — Phase 4 Slice 4 (ROADMAP.md). Engine.md "Trade AI &
@@ -388,15 +389,35 @@ export function resolveTradeOutcome(evaluation: TradeEvaluation, proposerClub: s
 // Executing an accepted trade
 // ---------------------------------------------------------------------------
 
-/** Returns a NEW player array with both sides' players swapped to their new clubs — never mutates its input, matching every other engine/*.ts pure-transform convention. */
-export function executeTrade(players: readonly Player[], proposerClub: string, recipientClub: string, proposerGivesIds: ReadonlySet<number>, proposerGetsIds: ReadonlySet<number>): Player[] {
+/**
+ * Returns a NEW player array with both sides' players swapped to their new clubs — never mutates its
+ * input, matching every other engine/*.ts pure-transform convention.
+ *
+ * Round 94, [[Season Grading, Post-Season Awards, and Player History]] — also returns the
+ * `ClubHistoryUpdate`s this trade produces (see `engine/clubHistory.ts`), one per moved player, from
+ * THEIR OWN point of view via `clubHistoryEntryForTrade` (not a second, mirrored entry — see that
+ * function's own doc comment for why). Baked directly into this one function, deliberately, rather
+ * than left to each caller to construct separately: `executeTrade` is already the single choke point
+ * BOTH a user-confirmed trade (`useSaveStore.ts`) and an AI-vs-AI trade (`simulateLeagueTrades` below)
+ * run through, so this is the one place a history entry can be produced exactly once, for every trade,
+ * with no call site able to forget it.
+ */
+export function executeTrade(players: readonly Player[], proposerClub: string, recipientClub: string, proposerGivesIds: ReadonlySet<number>, proposerGetsIds: ReadonlySet<number>, year: number): { players: Player[]; historyEntries: ClubHistoryUpdate[] } {
   const recipientClubId = clubByName(recipientClub)?.ClubID;
   const proposerClubId = clubByName(proposerClub)?.ClubID;
-  return players.map((p) => {
-    if (proposerGivesIds.has(p.PlayerID)) return { ...p, Team: recipientClub, ClubID: recipientClubId ?? p.ClubID };
-    if (proposerGetsIds.has(p.PlayerID)) return { ...p, Team: proposerClub, ClubID: proposerClubId ?? p.ClubID };
+  const historyEntries: ClubHistoryUpdate[] = [];
+  const nextPlayers = players.map((p) => {
+    if (proposerGivesIds.has(p.PlayerID)) {
+      historyEntries.push({ playerId: p.PlayerID, entry: clubHistoryEntryForTrade(proposerClub, recipientClub, year) });
+      return { ...p, Team: recipientClub, ClubID: recipientClubId ?? p.ClubID };
+    }
+    if (proposerGetsIds.has(p.PlayerID)) {
+      historyEntries.push({ playerId: p.PlayerID, entry: clubHistoryEntryForTrade(recipientClub, proposerClub, year) });
+      return { ...p, Team: proposerClub, ClubID: proposerClubId ?? p.ClubID };
+    }
     return p;
   });
+  return { players: nextPlayers, historyEntries };
 }
 
 // ---------------------------------------------------------------------------
@@ -576,11 +597,18 @@ function findComplementaryLines(linesA: readonly LineSummary[], linesB: readonly
  * "second-best at that line" players, executes it. No multi-player
  * packages, no picks, no deeper want-list modelling — see ROADMAP.md's
  * Phase 4 Slice 4 gaps.
+ *
+ * Round 94: also returns every `ClubHistoryUpdate` produced across the day's trades (see
+ * `executeTrade`'s own doc comment) — the caller (`saveGame.ts`'s off-season orchestration, or
+ * wherever this is invoked from) folds these into `SaveGameData.clubHistory` via
+ * `appendManyClubHistory`, same as the day's `activity` log already gets folded into the League
+ * Activity feed.
  */
-export function simulateLeagueTrades(players: readonly Player[], myClub: string, currentYear: number, day: number, seed: number, strategies: ReadonlyMap<string, ClubStrategy>): { players: Player[]; activity: LeagueActivityEntry[] } {
+export function simulateLeagueTrades(players: readonly Player[], myClub: string, currentYear: number, day: number, seed: number, strategies: ReadonlyMap<string, ClubStrategy>): { players: Player[]; activity: LeagueActivityEntry[]; historyEntries: ClubHistoryUpdate[] } {
   const rng = mulberry32(seed);
   let pool = [...players];
   const activity: LeagueActivityEntry[] = [];
+  const historyEntries: ClubHistoryUpdate[] = [];
   const rivalClubs = CLUBS.map((c) => c.name).filter((name) => name !== myClub);
   const order = fisherYatesShuffle(rivalClubs, rng);
   const leagueAvgOvr = leagueAverageOvrOf(pool);
@@ -613,7 +641,9 @@ export function simulateLeagueTrades(players: readonly Player[], myClub: string,
       const ratio = candidateForA.totalValue / Math.max(candidateForB.totalValue, 1);
       if (ratio < 1 - AI_TRADE_VALUE_TOLERANCE || ratio > 1 + AI_TRADE_VALUE_TOLERANCE) continue;
 
-      pool = executeTrade(pool, clubB, clubA, new Set([candidateForA.PlayerID]), new Set([candidateForB.PlayerID]));
+      const executed = executeTrade(pool, clubB, clubA, new Set([candidateForA.PlayerID]), new Set([candidateForB.PlayerID]), currentYear);
+      pool = executed.players;
+      historyEntries.push(...executed.historyEntries);
       activity.push({
         id: `${candidateForA.PlayerID}-${candidateForB.PlayerID}-d${day}`,
         day,
@@ -627,7 +657,7 @@ export function simulateLeagueTrades(players: readonly Player[], myClub: string,
       tradesDone++;
     }
   }
-  return { players: pool, activity };
+  return { players: pool, activity, historyEntries };
 }
 
 // ---------------------------------------------------------------------------

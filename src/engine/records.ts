@@ -3,7 +3,7 @@ import { playerFullName } from "../types/player.ts";
 import { getPlayerById, getPlayerByRealFullName } from "../data/loadPlayers.ts";
 import { realWorldRecordsFor, type RealWorldRecordEntry, type RecordCategory } from "../data/realWorldRecords.ts";
 import { debutYearFor } from "../data/realDebutDates.ts";
-import { allTimePlayerTotals, seasonPlayerTotals, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
+import { allTimePlayerTotals, seasonPlayerTotals, ALL_LEAGUE_STATS, type SeasonArchiveEntry, type SeasonPlayerTotals } from "./seasonSummary.ts";
 import type { Season } from "./season.ts";
 import { draftHistoryFor } from "../data/realDraftHistory.ts";
 
@@ -533,9 +533,28 @@ function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEn
   for (const entry of realEntries) {
     const linkedPlayer = getPlayerByRealFullName(entry.name);
     const simContribution = linkedPlayer ? simValueFor(linkedPlayer.PlayerID) : 0;
-    if (linkedPlayer && simContribution > 0) {
+    if (linkedPlayer) {
+      // Round 96, Tyler-reported: `player` used to only get attached when `simContribution > 0`,
+      // conflating two different questions — "has this real legend posted a nonzero SIM total in
+      // THIS ONE category yet" and "is this real legend actually loaded as a clickable Player in this
+      // save." Every category a player hasn't touched yet (which, before their own Round 1, is every
+      // category) fell into the bare-real `else` branch below with no `player` at all, so
+      // `Records.tsx`'s `row.player ? <PlayerLink> : row.name` silently fell back to unclickable plain
+      // text for a real, genuinely-loaded "Active" player — exactly what Tyler saw. `player` (and
+      // `consumedPlayerIds`) now attach whenever the name resolves to a loaded Player, regardless of
+      // this category's own contribution; `simContribution` itself stays `undefined` (not `0`) when
+      // there's genuinely nothing to add, so `simContributionCaption`'s existing "only show a split
+      // when there's a real save-side contribution" behaviour is unchanged, and `value` is
+      // arithmetically identical to the old bare-real case when `simContribution` is 0.
       consumedPlayerIds.add(linkedPlayer.PlayerID);
-      candidates.push({ name: entry.name, value: entry.value + simContribution, source: "real", real: entry, player: linkedPlayer, simContribution });
+      candidates.push({
+        name: entry.name,
+        value: entry.value + simContribution,
+        source: "real",
+        real: entry,
+        player: linkedPlayer,
+        simContribution: simContribution > 0 ? simContribution : undefined,
+      });
     } else {
       candidates.push({ name: entry.name, value: entry.value, source: "real", real: entry });
     }
@@ -869,3 +888,45 @@ export function writeupFor(row: RecordRow, category: RecordCategory, seasonArchi
   }
   return undefined;
 }
+
+/**
+ * Round 96, Tyler: "our little write up... is a bit corny. I think its better to remove it from this
+ * screen here and to put the writeups against the player profiles when we open them." The write-up
+ * mechanism itself (`combinedRecordFor` + `writeupFor` above) isn't changing — only WHERE it's shown.
+ * The Statistics tab's own hover/click-to-expand UI is removed entirely (see `Records.tsx`); this is
+ * the one new piece `PlayerProfileModal.tsx` needs to show the same write-up on a player's own profile
+ * instead, for whichever of the 25 `RecordCategory` values this player actually places highly enough
+ * in to be write-up-worthy — a player can headline the all-time board in a category the profile's own
+ * "Key Stats & Performance" table doesn't even list (Games Played, Finals Appearances, Coaches Votes),
+ * so this deliberately scans every category rather than just the profile's own 7 `KEY_STATS`.
+ *
+ * `topN` (25) is the "worth a write-up" cutoff — reuses this UI's own existing `PAGE_SIZE`/paginate-
+ * at-25 convention as the natural "front page" depth, deliberately narrower than the Statistics tab's
+ * own top-100 view: nobody ranked, say, 80th needs an unprompted write-up on their own profile. Picks
+ * the single BEST (lowest-rank) standing across every category a player appears in — a player who
+ * headlines several categories at once gets one write-up, not a wall of them, matching how a real
+ * player bio would lead with their single most notable record. Ties (the same best rank in two
+ * categories at once) keep whichever category `categoryOrder` lists first — an arbitrary but stable
+ * tie-break, same status as `HONOUR_PRESTIGE`'s own "real structure, no exact ranking given" ordering
+ * in `engine/playerProfileText.ts`.
+ */
+export function bestAllTimeStandingFor(
+  playerId: number,
+  categoryOrder: readonly RecordCategory[],
+  seasonArchives: readonly SeasonArchiveEntry[],
+  liveSeason: Season | null,
+): { category: RecordCategory; row: RecordRow } | null {
+  const WORTH_A_WRITEUP_TOP_N = 25;
+  let best: { category: RecordCategory; row: RecordRow } | null = null;
+  for (const category of categoryOrder) {
+    const rows = combinedRecordFor(category, seasonArchives, liveSeason, WORTH_A_WRITEUP_TOP_N);
+    const row = rows.find((r) => r.player?.PlayerID === playerId);
+    if (row && (!best || row.rank < best.row.rank)) {
+      best = { category, row };
+    }
+  }
+  return best;
+}
+
+/** Every `RecordCategory` in the Statistics tab's own display order — `Records.tsx`'s `CATEGORIES` built the same way from the same source; re-exported here too so `bestAllTimeStandingFor`'s caller (`PlayerProfileModal.tsx`) doesn't need its own copy of this one-liner. */
+export const ALL_RECORD_CATEGORIES: readonly RecordCategory[] = ["gamesPlayed", "finalsAppearances", ...ALL_LEAGUE_STATS.map((s) => s.key as RecordCategory)];

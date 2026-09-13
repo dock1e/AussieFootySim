@@ -164,7 +164,19 @@ export function PlayerDetailModal({ player, currentYear, onClose }: PlayerDetail
           {p.OriginClub}
         </div>
 
-        <div className="mt-4 grid gap-4 md:grid-cols-3">
+        {/*
+          Round 96, Tyler-reported: this used to be one `md:grid-cols-3` row, which squeezed the
+          13-column Season Stats table into a bare 1/3 of the modal's own `max-w-3xl` — nowhere near
+          enough room for 13 short numeric columns, so the table forced its own natural (wider)
+          content width and the WHOLE modal grew a horizontal scrollbar rather than just that one
+          section. Season Stats now spans the full width on its own row below Attributes/Contract
+          (which drop to a 2-column split instead of 3), giving it close to the modal's full ~3xl
+          width — comfortably enough for 13 short columns without scrolling on any normal window. The
+          inner `overflow-x-auto` is kept as a safety net for a genuinely narrow viewport, matching the
+          same "scroll the ONE wide table, never the whole modal" convention `PlayerProfileModal.tsx`'s
+          own tables already use, rather than a repeat of this exact bug.
+        */}
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div>
             <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Attributes</div>
             <div className="space-y-1.5">
@@ -235,35 +247,37 @@ export function PlayerDetailModal({ player, currentYear, onClose }: PlayerDetail
             </div>
           </div>
 
-          <div>
+          <div className="md:col-span-2">
             <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Season Stats</div>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-slate-500">
-                  {STAT_COLUMNS.map((c) => (
-                    <th key={c.key} className="px-1 py-1 text-right font-normal">
-                      {c.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-t border-base-700">
-                  {STAT_COLUMNS.map((c) => (
-                    <td key={c.key} className="px-1 py-1 text-right tabular-nums font-semibold">
-                      {p[c.key] as number}
-                    </td>
-                  ))}
-                </tr>
-                <tr className="text-slate-500">
-                  {STAT_COLUMNS.map((c) => (
-                    <td key={c.key} className="px-1 py-1 text-right tabular-nums">
-                      {PER_GAME_KEYS.has(c.key) && p.stat_GM > 0 ? ((p[c.key] as number) / p.stat_GM).toFixed(1) : "—"}
-                    </td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-max text-xs">
+                <thead>
+                  <tr className="text-slate-500">
+                    {STAT_COLUMNS.map((c) => (
+                      <th key={c.key} className="px-2 py-1 text-right font-normal">
+                        {c.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-base-700">
+                    {STAT_COLUMNS.map((c) => (
+                      <td key={c.key} className="px-2 py-1 text-right tabular-nums font-semibold">
+                        {p[c.key] as number}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr className="text-slate-500">
+                    {STAT_COLUMNS.map((c) => (
+                      <td key={c.key} className="px-2 py-1 text-right tabular-nums">
+                        {PER_GAME_KEYS.has(c.key) && p.stat_GM > 0 ? ((p[c.key] as number) / p.stat_GM).toFixed(1) : "—"}
+                      </td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             <div className="mt-1.5 text-[11px] text-slate-500">Top row: season totals. Bottom row: per game, where meaningful.</div>
           </div>
         </div>

@@ -1124,8 +1124,52 @@ function talentScore(p: Player): number {
   return p.OVR * 0.7 + p.POT * 0.3;
 }
 
+/**
+ * Round 96, Tyler-reported: Dougie Cochrane — `scoutingTiersForPool` correctly flagged him
+ * "Generational Talent" (`POT >= GENERATIONAL_POT_FLOOR`), but he still ranked 154th of ~195 by
+ * `talentScore` and predicted to pick 95-102, "wildly out of sync... for the generational talent."
+ * Root cause: `talentScore`'s 70/30 OVR/POT blend was built to rank an otherwise-similar pool of
+ * prospects, but a genuine ceiling talent is, almost by definition, exactly the profile it penalizes
+ * hardest — sky-high POT paired with a still-raw, unpolished current OVR (an 18-year-old who hasn't
+ * filled out physically or refined their game yet). A real club drafts that profile at the very top
+ * of the board on trajectory alone, current polish or not — which is precisely what
+ * `GENERATIONAL_POT_FLOOR`/`SUPERSTAR_POT_FLOOR` already encode as "a real, rare, extreme claim," yet
+ * that signal never reached `rankedPoolByTalent` before now, so it had zero effect on the one ranking
+ * that actually drives both `trueProspectRank` and `predictedDraftRange`.
+ *
+ * Fixed with a flat tier bonus, not a re-weighting of `talentScore` itself — re-weighting (e.g.
+ * flipping toward POT-heavy) would still leave no HARD guarantee for an extreme low-OVR/high-POT
+ * case, and would also quietly re-shuffle the other ~190 ordinary prospects `talentScore` was never
+ * reported wrong for. +40 (Generational) / +20 (Superstar) is large enough that even a very
+ * low-OVR floor-tier prospect's boosted score (worst case, `talentScore` near its practical floor for
+ * a prospect that still clears `GENERATIONAL_POT_FLOOR`, plus 40) clears the best realistic
+ * non-floor-tier prospect's own unboosted score (which tops out well under 90 given `SUPERSTAR_POT_FLOOR`
+ * itself sits at 75) — guaranteeing floor-tier prospects cluster at the very top of the order the way
+ * a real draft board would have them, while every prospect below those two tiers keeps today's exact
+ * relative ordering (the bonus is 0 for them, so nothing about Elite/Great/Good/Average/Sub-par
+ * changes). Deliberately does NOT touch the Draft board's "Overall"/"Potential" sort modes
+ * (`Draft.tsx`'s own `sortedRemaining`) — those are explicitly raw, unblended `p.OVR`/`p.POT` reads,
+ * working exactly as their labels promise; a raw-ability sort putting a raw young talent mid-pack is
+ * correct, not the bug Tyler found.
+ */
+const GENERATIONAL_RANK_BONUS = 40;
+const SUPERSTAR_RANK_BONUS = 20;
+
+/**
+ * Round 97 — factored out of `rankedPoolByTalent` unchanged, so `prospectScore` below (the AI's own
+ * drafting logic, previously a completely separate, tier-blind ranking) can share the exact same bonus
+ * rather than risk a second, silently-drifting calibration for "how much does a Generational Talent/
+ * Superstar's ceiling outweigh a still-raw current OVR." One number per tier, defined once.
+ */
+function tierRankBonus(tier: ScoutingTier | undefined): number {
+  if (tier === "Generational Talent") return GENERATIONAL_RANK_BONUS;
+  if (tier === "Superstar") return SUPERSTAR_RANK_BONUS;
+  return 0;
+}
+
 function rankedPoolByTalent(pool: readonly Player[]): { id: number; score: number }[] {
-  return pool.map((p) => ({ id: p.PlayerID, score: talentScore(p) })).sort((a, b) => b.score - a.score);
+  const tiers = scoutingTiersForPool(pool);
+  return pool.map((p) => ({ id: p.PlayerID, score: talentScore(p) + tierRankBonus(tiers.get(p.PlayerID)) })).sort((a, b) => b.score - a.score);
 }
 
 /** True (unfogged) rank within the pool by a blended OVR/POT talent score — the "real" likely draft position every mock outlet jitters around. */
@@ -1668,7 +1712,22 @@ export function likelyNeedForClub(clubName: string, playersByClub: ReadonlyMap<s
  * Rebuild clubs weight potential (and need) higher, Contend clubs weight
  * immediate quality and need higher, Balanced sits between.
  */
-export function prospectScore(prospect: Player, clubName: string, strategy: ClubStrategy, playersByClub: ReadonlyMap<string, Player[]>): number {
+/**
+ * Round 97, Tyler-reported: "I'm at pick 44 and Cody Walker is still available despite being a top 5
+ * pick." Root cause — this function's own "talent" term (`OVR * (1 - potWeight) + POT * potWeight`) was
+ * a completely separate, tier-blind blend from the one the board's own "Predicted pick" column and
+ * Scouting Tier actually use (`talentScore` + round 96's `tierRankBonus`, via `rankedPoolByTalent`). A
+ * Generational Talent/Superstar prospect with a still-raw current OVR — precisely Cochrane's round-96
+ * profile, and precisely Walker's here (a real Father-Son prospect) — scored low by THIS function even
+ * though the board correctly flagged them elite, so AI clubs kept passing him over using a ranking that
+ * disagreed with what the coach sees on screen. Fixed by adding the identical `tierRankBonus` used by
+ * `rankedPoolByTalent` into this function's own talent term (via an optional `tier` param, resolved once
+ * per pool by the caller — see `bestAvailableProspect`/`autoResolvePick` below — never recomputed per
+ * prospect, matching `scoutingTiersForPool`'s own "whole-pool function" doc comment). `tier` defaults to
+ * `undefined` (zero bonus) so every existing call site/test that doesn't pass one keeps its prior score
+ * exactly, for a non-floor-tier prospect.
+ */
+export function prospectScore(prospect: Player, clubName: string, strategy: ClubStrategy, playersByClub: ReadonlyMap<string, Player[]>, tier?: ScoutingTier): number {
   const line = ARCHETYPE_LINE[prospect.archetype as Archetype];
   const clubPlayers = playersByClub.get(clubName) ?? [];
   const leagueAvgOvr = leagueAvgOvrFrom(playersByClub);
@@ -1677,17 +1736,29 @@ export function prospectScore(prospect: Player, clubName: string, strategy: Club
   const needBonus = band === "red" ? 14 : band === "amber" ? 5 : 0;
 
   const potWeight = strategy === "Rebuild" ? 0.5 : strategy === "Contend" ? 0.15 : 0.3;
-  const talent = prospect.OVR * (1 - potWeight) + prospect.POT * potWeight;
+  const talent = prospect.OVR * (1 - potWeight) + prospect.POT * potWeight + tierRankBonus(tier);
   const needWeight = strategy === "Contend" ? 1.3 : 1;
   return talent + needBonus * needWeight;
 }
 
-/** The single best-scoring prospect still in `pool` for `clubName` right now, or `null` if `pool` is empty. */
-export function bestAvailableProspect(pool: readonly Player[], clubName: string, strategy: ClubStrategy, playersByClub: ReadonlyMap<string, Player[]>): Player | null {
+/**
+ * The single best-scoring prospect still in `pool` for `clubName` right now, or `null` if `pool` is
+ * empty. Round 97 — `tierByPlayerId` is optional (omitting it reproduces every prior round's behaviour
+ * exactly) but every real call site now passes one, resolved once per draft night off the fixed full
+ * pool (see `autoResolveDraftPicks` in useSaveStore.ts) — the same "compute once, look up per prospect"
+ * convention Draft.tsx's own `tierByPlayerId` already established, not a per-prospect recomputation.
+ */
+export function bestAvailableProspect(
+  pool: readonly Player[],
+  clubName: string,
+  strategy: ClubStrategy,
+  playersByClub: ReadonlyMap<string, Player[]>,
+  tierByPlayerId?: ReadonlyMap<number, ScoutingTier>,
+): Player | null {
   let best: Player | null = null;
   let bestScore = -Infinity;
   for (const p of pool) {
-    const s = prospectScore(p, clubName, strategy, playersByClub);
+    const s = prospectScore(p, clubName, strategy, playersByClub, tierByPlayerId?.get(p.PlayerID));
     if (s > bestScore) {
       bestScore = s;
       best = p;
@@ -1742,8 +1813,16 @@ export function redirectDraftedPlayerToClub(player: Player, clubName: string): P
  * than "AI"-branded. Returns `null` if `pool` is empty (should never happen
  * given `DRAFT_POOL_SIZE > TOTAL_DRAFT_PICKS`, guarded anyway).
  */
-export function autoResolvePick(pool: readonly Player[], clubName: string, pickNumber: number, year: number, strategy: ClubStrategy, playersByClub: ReadonlyMap<string, Player[]>): { player: Player; record: DraftPickRecord } | null {
-  const chosen = bestAvailableProspect(pool, clubName, strategy, playersByClub);
+export function autoResolvePick(
+  pool: readonly Player[],
+  clubName: string,
+  pickNumber: number,
+  year: number,
+  strategy: ClubStrategy,
+  playersByClub: ReadonlyMap<string, Player[]>,
+  tierByPlayerId?: ReadonlyMap<number, ScoutingTier>,
+): { player: Player; record: DraftPickRecord } | null {
+  const chosen = bestAvailableProspect(pool, clubName, strategy, playersByClub, tierByPlayerId);
   if (!chosen) return null;
   const player = draftPlayer(chosen, clubName, pickNumber, year);
   const round = Math.floor((pickNumber - 1) / CLUBS.length) + 1;

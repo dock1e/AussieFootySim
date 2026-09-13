@@ -26,6 +26,7 @@ import type { Player } from "../types/player";
 import { playerFullName } from "../types/player";
 import { PlayerDetailModal, money } from "./PlayerDetailModal";
 import { StatusPill, type PillTone } from "./StatusPill";
+import { PlayerLink } from "./PlayerLink";
 
 /**
  * Contracts, salary cap & free agency — Phase 4 Slice 3 (ROADMAP.md).
@@ -244,7 +245,18 @@ function CapRow({ row, isMyClub, expanded, onToggle, players }: { row: ClubCapRo
       {expanded && (
         <tr className="border-b border-base-700/60 bg-base-900/40 last:border-0">
           <td colSpan={8} className="px-4 py-2 text-xs text-slate-400">
-            Top 5 cap hits: {top5.map((p) => `${p.lname} (${money(p.totalValue)})`).join(", ") || "—"}
+            {/* Round 95, Tyler: "launch the player profile from anywhere the player name is displayed."
+                Was a single `.join(", ")`-ed string — rebuilt per-player so each name is a PlayerLink.
+                This row has no onClick of its own (only the summary row above it does), so a plain
+                default PlayerLink needs no stopPropagation/as="span" here. */}
+            Top 5 cap hits:{" "}
+            {top5.length > 0
+              ? top5.map((p, i) => (
+                  <span key={p.PlayerID}>
+                    <PlayerLink player={p}>{p.lname}</PlayerLink> ({money(p.totalValue)}){i < top5.length - 1 ? ", " : ""}
+                  </span>
+                ))
+              : "—"}
           </td>
         </tr>
       )}
@@ -360,7 +372,8 @@ function NegotiationModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div className="w-full max-w-md rounded-card border border-base-600 bg-base-800 p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-1 font-display text-xl italic">
-          {isOwnPlayer ? "Re-sign" : "Make Offer to"} {playerFullName(player)}
+          {/* Round 95, Tyler: "launch the player profile from anywhere the player name is displayed." */}
+          {isOwnPlayer ? "Re-sign" : "Make Offer to"} <PlayerLink player={player}>{playerFullName(player)}</PlayerLink>
         </div>
         <div className="mb-4 text-xs text-slate-400">
           Stated ask: <span className="tabular-nums font-semibold text-slate-200">{money(ask)}/yr</span> &middot; Offers used: {offersUsed}/{maxOffers}
@@ -398,7 +411,7 @@ function NegotiationModal({
         {outcome?.result === "countered" && (
           <div className="mt-3 rounded-lg bg-base-700/60 p-3 text-sm">
             <div className="mb-2">
-              {playerFullName(player)} counters at <span className="tabular-nums font-semibold">{money(outcome.counterSalaryPerYear)}/yr</span>.
+              <PlayerLink player={player}>{playerFullName(player)}</PlayerLink> counters at <span className="tabular-nums font-semibold">{money(outcome.counterSalaryPerYear)}/yr</span>.
             </div>
             <div className="flex gap-2">
               <button onClick={() => acceptCounter(outcome.counterSalaryPerYear)} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">

@@ -5,7 +5,7 @@ import type { ScoutFocusArea, MatchDayCoachRole } from "../types/coach";
 import type { SeasonArchiveEntry } from "../engine/seasonSummary";
 import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
-import { generateProspectPool, draftPlayer, autoResolvePick, primaryTieFor, redirectDraftedPlayerToClub, SCOUT_BUDGET_PER_DRAFT, DRAFT_ROUNDS, type DraftPickRecord } from "../engine/draft";
+import { generateProspectPool, draftPlayer, autoResolvePick, primaryTieFor, redirectDraftedPlayerToClub, scoutingTiersForPool, SCOUT_BUDGET_PER_DRAFT, DRAFT_ROUNDS, type DraftPickRecord } from "../engine/draft";
 import { resolveDraftOrder, seedDraftPickInventory, canClubMatchBid, forfeitPicksForBid, ladderPositionOf, type DraftPick } from "../engine/draftPicks";
 import type { LadderRow } from "../engine/ladder";
 import { selectCombineInvitees, computeCombineResults } from "../engine/combine";
@@ -266,6 +266,11 @@ function autoResolveDraftPicks(
 ): { window: DraftWindow; draftedPlayers: Player[]; draftPickInventory: DraftPick[]; historyEntries: { playerId: number; entry: ClubHistoryEntry }[] } {
   const playersByClub = buildLeaguePlayersByClub();
   let strategies: Map<string, ClubStrategy> = computeLeagueStrategies(playersByClub);
+  // Round 97 — resolved once off the fixed full `window.pool`, never the shrinking `remaining` pool,
+  // so the AI's own view of who's a Generational Talent/Superstar never disagrees with the tier the
+  // board itself shows for that same prospect all night (see `prospectScore`'s own doc comment for why
+  // this is threaded through at all: it used to be a completely separate, tier-blind ranking).
+  const tierByPlayerId = scoutingTiersForPool(window.pool);
   const picks = [...window.picks];
   const pickedIds = new Set(picks.map((p) => p.playerId));
   let currentPickIndex = window.currentPickIndex;
@@ -280,7 +285,7 @@ function autoResolveDraftPicks(
     if (opts.maxPicks !== undefined && made >= opts.maxPicks) break;
 
     const remaining = window.pool.filter((p) => !pickedIds.has(p.PlayerID));
-    const result = autoResolvePick(remaining, clubOnClock, currentPickIndex + 1, year, strategies.get(clubOnClock) ?? "Balanced", playersByClub);
+    const result = autoResolvePick(remaining, clubOnClock, currentPickIndex + 1, year, strategies.get(clubOnClock) ?? "Balanced", playersByClub, tierByPlayerId);
     if (!result) break; // pool exhausted — shouldn't happen given DRAFT_POOL_SIZE > TOTAL_DRAFT_PICKS, guarded anyway
 
     // Round 88: may re-credit `result` to a Father-Son/Academy-tied club instead of `clubOnClock` —

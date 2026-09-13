@@ -11,6 +11,31 @@ import type { Player } from "../types/player";
 import type { Archetype } from "../types/archetype";
 import type { Position } from "../types/archetype";
 
+/**
+ * Round 99 bugfix: `id` used to be declared *inside* this function and reset
+ * to 1 on every call, so `makeClubPool("Home")` and `makeClubPool("Away")`
+ * produced players with IDENTICAL PlayerIDs (only `Team` differed) — a
+ * violation of the real invariant (types/club.ts's own doc comment, and
+ * every live PlayerID in actual game data) that PlayerIDs are globally
+ * unique across every club, not just unique within one. Since neither
+ * `pickBest22` nor `autoFillLineup` reads `Team` at all, two identically-
+ * numbered 40-player pools made both sides deterministically select the
+ * exact same relative players — collapsing `MatchResult.boxScore` (keyed by
+ * raw PlayerID, see match.ts's `lineFor`/`startMatch`'s `for (const p of
+ * [...home.players, ...away.players]) lineFor(ctx, p)` pre-seed loop) from
+ * 46 real entries (23 home + 23 away, post round-8's interchange-bench
+ * change) down to 23, and making `ev.playerIds.includes(someHomePlayerId)`
+ * spuriously also match the away player who happened to share that same
+ * number — exactly the false FB/FF defensive-50 involvement inversion the
+ * "Phase 8" tests below were seeing (not a real involvementWeight/ownZone
+ * regression — that logic checks out by hand against zones.ts's own
+ * ZONE_FOR_POSITION table). Hoisting the counter to module scope, so it
+ * keeps incrementing across every call in this file instead of resetting,
+ * restores the real global-uniqueness invariant with no other change to the
+ * pool's archetype/OVR distribution.
+ */
+let nextTestPlayerId = 1;
+
 /** Builds a full, valid 40-player club pool spread realistically across the four lines, so pickBest22 has enough of each to fill its targets. */
 function makeClubPool(clubName: string): Player[] {
   const archetypesByLine: Record<string, Archetype[]> = {
@@ -21,12 +46,11 @@ function makeClubPool(clubName: string): Player[] {
   };
   const allArchetypes = Object.values(archetypesByLine).flat();
   const players: Player[] = [];
-  let id = 1;
   for (let i = 0; i < 40; i++) {
     const archetype = allArchetypes[i % allArchetypes.length];
     players.push(
       makePlayer({
-        PlayerID: id++,
+        PlayerID: nextTestPlayerId++,
         Team: clubName,
         fname: `Test${i}`,
         lname: `Player${i}`,
@@ -40,11 +64,11 @@ function makeClubPool(clubName: string): Player[] {
 }
 
 describe("pickBest22", () => {
-  it("selects exactly 22 unique players from a full club pool", () => {
+  it("selects exactly 23 unique players from a full club pool (round 8 bugfix: 22 -> 23, matching the 2026 AFL interchange-bench rule change — see team.ts's pickBest22 doc comment)", () => {
     const pool = makeClubPool("Testers");
     const team = pickBest22("Testers", pool);
-    expect(team.players).toHaveLength(22);
-    expect(new Set(team.players.map((p) => p.PlayerID)).size).toBe(22);
+    expect(team.players).toHaveLength(23);
+    expect(new Set(team.players.map((p) => p.PlayerID)).size).toBe(23);
   });
 
   it("tops up from best-available OVR if a line is under-strength", () => {
@@ -52,7 +76,8 @@ describe("pickBest22", () => {
     // artificially thin (only 2 players) to force the top-up path.
     const pool = makeClubPool("Thin").filter((p) => p.archetype !== "Key Defender" && p.archetype !== "Medium Defender");
     const team = pickBest22("Thin", pool);
-    expect(team.players.length).toBeLessThanOrEqual(22);
+    // Round 8 bugfix: cap raised 22 -> 23 (see pickBest22's own doc comment).
+    expect(team.players.length).toBeLessThanOrEqual(23);
     expect(new Set(team.players.map((p) => p.PlayerID)).size).toBe(team.players.length);
   });
 });
@@ -85,9 +110,12 @@ describe("simulateMatch", () => {
     expect(totalBehinds).toBe(result.home.behinds + result.away.behinds);
   });
 
-  it("gives every one of the 44 selected players a box score line", () => {
+  it("gives every one of the 46 selected players a box score line", () => {
+    // Round 99 bugfix: was asserting 44 (22+22, pre-round-8) against a
+    // makeClubPool that also collided home/away PlayerIDs (see that
+    // function's own doc comment) — the real, current count is 46 (23+23).
     const result = simulateMatch(home, away, mulberry32(3), 3);
-    expect(Object.keys(result.boxScore)).toHaveLength(44);
+    expect(Object.keys(result.boxScore)).toHaveLength(46);
   });
 
   it("recordEvents: false skips the log without changing the result", () => {
@@ -264,8 +292,8 @@ describe("Phase 8: position-weighted involvement (engine/involvement.ts wired in
   const home = lineupToMatchTeam("Home", autoFillLineup(homePool), homePool);
   const away = lineupToMatchTeam("Away", autoFillLineup(awayPool), awayPool);
 
-  it("lineupToMatchTeam actually populates real position data for a full 22", () => {
-    expect(home.positions?.size).toBe(22);
+  it("lineupToMatchTeam actually populates real position data for a full 23 (round 8 bugfix: 22 -> 23)", () => {
+    expect(home.positions?.size).toBe(23);
     expect(findByPosition(home, "FB")).toBeDefined();
     expect(findByPosition(home, "FF")).toBeDefined();
   });

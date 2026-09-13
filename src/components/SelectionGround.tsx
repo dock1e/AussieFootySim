@@ -3,6 +3,7 @@ import type { Player } from "../types/player";
 import type { Archetype, Position, Suitability } from "../types/archetype";
 import { suitabilityFor, POSITIONS } from "../types/archetype";
 import type { Lineup } from "../engine/selection";
+import { PlayerLink } from "./PlayerLink";
 
 /**
  * The visual ground diagram for the Selection Committee — Phase 7 Slice B
@@ -171,7 +172,11 @@ function Slot({
       {occupant ? (
         <>
           <span className="max-w-full truncate text-[11px] font-semibold leading-tight text-slate-100">
-            #{occupant.jumperNumber} {occupant.lname}
+            {/* Round 95, Tyler: "launch the player profile from anywhere the player name is displayed."
+                This whole chip is already a click target (click removes the occupant from this slot —
+                see SelectionCommittee.tsx's handleSlotClick), so as="span" + PlayerLink's own
+                stopPropagation keeps a click on just the name from also triggering that removal. */}
+            #{occupant.jumperNumber} <PlayerLink player={occupant} as="span">{occupant.lname}</PlayerLink>
           </span>
           <span className="text-[9px] tabular-nums text-slate-400">{occupant.OVR} OVR</span>
         </>

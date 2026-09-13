@@ -4,6 +4,7 @@ import { generateFixture, matchesInRound, SEASON_ROUNDS } from "./fixture";
 import { initSeason, simulateRound, runFinals, isRoundPlayed, isHomeAndAwayComplete, nextUnplayedRound } from "./season";
 import { simulateMatch } from "./match";
 import { mulberry32 } from "./rng";
+import { generateMatchCoachesVotes, applyVotesToBoxScore, applyBrownlowVotesToBoxScore } from "./coachesVotes";
 import { MIN_CONDITION } from "./progression";
 import { makePlayer } from "../testUtils/makePlayer";
 import type { Player } from "../types/player";
@@ -256,10 +257,18 @@ describe("season with in-season condition/fatigue tracking", () => {
       const home = teams.get(m.homeClubId)!;
       const away = teams.get(m.awayClubId)!;
       const seed = season.seed + nextRound * 1000 + i; // mirrors season.ts's private matchSeed()
-      const expected = simulateMatch(home, away, mulberry32(seed), seed, {
+      const rawExpected = simulateMatch(home, away, mulberry32(seed), seed, {
         homeCondition: season.condition,
         awayCondition: season.condition,
       });
+      // Round 99 bugfix: this reproduction stopped at the raw simulateMatch call, but rounds 90/91
+      // ([[Coaches Votes and MVP Award]], the Brownlow-style 3-2-1) added a 3-step post-processing pass
+      // INSIDE simulateRound's own per-match loop that mutates the stored boxScore afterwards — this
+      // test was never updated to match, so `actual` (which includes that post-processing) could never
+      // equal a bare `rawExpected` again once those rounds shipped. Mirrors season.ts's exact sequence.
+      const coachesVotes = generateMatchCoachesVotes(rawExpected, home, away);
+      const withCoachesVotes = applyVotesToBoxScore(rawExpected.boxScore, coachesVotes);
+      const expected = { ...rawExpected, boxScore: applyBrownlowVotesToBoxScore(withCoachesVotes, coachesVotes.objectiveRanking) };
       const actual = seasonAfterRound11.played.find((p) => p.round === nextRound && p.homeClubId === m.homeClubId)!.result;
       expect(actual).toEqual(expected);
     }

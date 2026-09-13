@@ -48,12 +48,19 @@ describe("archetypeZoneWeight", () => {
 
 describe("involvementWeight", () => {
   it("a real assigned position outside the player's own archetype zone still floors the weight at Very suitable (home side)", () => {
-    // A Small Forward's own archetype reads low in defensive 50 (zone 0) -
-    // but if the coach has actually played them at CHB this week, that real
-    // placement should count for at least as much as the archetype default.
+    // Round 99 bugfix: this used position "CHB" as the example — but
+    // zones.ts's ZONE_FOR_POSITION puts CHB in zone 1 ("Back-half"), not zone
+    // 0 ("Defensive 50"), so `involvementWeight("home", player, 0, "CHB")`
+    // could never have hit the floor branch (ZONE_FOR_POSITION["CHB"] !==
+    // relative) — the test always fell through to the plain archetype read,
+    // which happened to equal archetypeOnly exactly. "FB" (zone 0, same as
+    // BP) is the real zone-0 example. A Small Forward's own archetype reads
+    // low ("Barely suitable") in defensive 50 (zone 0) - but if the coach has
+    // actually played them at FB this week, that real placement should count
+    // for at least as much as the archetype default.
     const player = makePlayer({ PlayerID: 1, archetype: "Small Forward" });
     const archetypeOnly = involvementWeight("home", player, 0);
-    const withRealPosition = involvementWeight("home", player, 0, "CHB");
+    const withRealPosition = involvementWeight("home", player, 0, "FB");
     expect(withRealPosition).toBeGreaterThan(archetypeOnly);
     expect(withRealPosition).toBe(SUITABILITY_RANK["Very suitable"]);
   });
@@ -98,7 +105,16 @@ describe("involvementWeight", () => {
     });
 
     it("an away player's real assigned position (e.g. FB) floors the weight at raw zone 4, not raw zone 0", () => {
-      const player = makePlayer({ PlayerID: 1, archetype: "Small Forward" }); // low archetype fit either way
+      // Round 99 bugfix: "Small Forward" isn't actually "low fit either way"
+      // - SUITABILITY_MAP lists FP as its "very" position, and FP is zone 4,
+      // so archetypeZoneWeight("Small Forward", 4) is already "Very suitable"
+      // on its own, with or without the FB floor. That made atOwnForward50
+      // equal (not less than) atOwnDefensive50 - both 3. "Inside Mid" has no
+      // very/somewhat entry touching FB/BP (zone 0) or FF/FP (zone 4), so it
+      // reads the flat, genuinely-low "Barely suitable" default at both ends
+      // (see types/archetype.ts's suitabilityFor) - a real "low fit either
+      // way" archetype, matching what this test was always trying to show.
+      const player = makePlayer({ PlayerID: 1, archetype: "Inside Mid" }); // low archetype fit either way (peaks at zone 2, midfield)
       const atOwnDefensive50 = involvementWeight("away", player, 4, "FB"); // raw zone 4 == away's own def 50
       const atOwnForward50 = involvementWeight("away", player, 0, "FB"); // raw zone 0 == away's own fwd 50 - unrelated to FB
       expect(atOwnDefensive50).toBe(SUITABILITY_RANK["Very suitable"]);

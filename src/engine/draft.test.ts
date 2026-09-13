@@ -281,6 +281,39 @@ describe("prospectScore / bestAvailableProspect", () => {
   it("bestAvailableProspect returns null for an empty pool", () => {
     expect(bestAvailableProspect([], clubName, "Balanced", thinAtRuck)).toBeNull();
   });
+
+  // Round 97, Tyler-reported: a real Father-Son prospect (Cody Walker, predicted picks 4-5) was still
+  // on the board at pick 44 — the AI's own `prospectScore` never consulted `scoutingTiersForPool`'s
+  // "Generational Talent"/"Superstar" floors the way the board's own Predicted-pick sort already does,
+  // so a still-raw-OVR ceiling talent scored low here even though the board correctly flagged them
+  // elite. These reproduce that exact shape synthetically.
+  it("a Generational Talent tier outscores a much higher-OVR non-tiered rival, the same shape as the real Cody Walker report", () => {
+    const emptyClub = new Map<string, Player[]>([[clubName, []]]);
+    const generational = makePlayer({ PlayerID: 210, archetype: "Outside Mid", OVR: 40, POT: 85 });
+    const polishedButCapped = makePlayer({ PlayerID: 211, archetype: "Outside Mid", OVR: 70, POT: 65 });
+    const genScore = prospectScore(generational, clubName, "Balanced", emptyClub, "Generational Talent");
+    const polishedScore = prospectScore(polishedButCapped, clubName, "Balanced", emptyClub, undefined);
+    expect(genScore).toBeGreaterThan(polishedScore);
+  });
+
+  it("prospectScore without a tier reproduces the exact pre-round-97 score (backward compatible)", () => {
+    const prospect = makePlayer({ PlayerID: 212, archetype: "Inside Mid", OVR: 55, POT: 60 });
+    const withoutTierArg = prospectScore(prospect, clubName, "Balanced", thinAtRuck);
+    const withUndefinedTier = prospectScore(prospect, clubName, "Balanced", thinAtRuck, undefined);
+    expect(withoutTierArg).toBe(withUndefinedTier);
+  });
+
+  it("bestAvailableProspect picks the tier-boosted prospect over a higher-OVR rival once tierByPlayerId is passed", () => {
+    const emptyClub = new Map<string, Player[]>([[clubName, []]]);
+    const generational = makePlayer({ PlayerID: 220, archetype: "Outside Mid", OVR: 40, POT: 85 });
+    const polishedButCapped = makePlayer({ PlayerID: 221, archetype: "Outside Mid", OVR: 70, POT: 65 });
+    const tierByPlayerId = new Map([[220, "Generational Talent" as const]]);
+    const best = bestAvailableProspect([generational, polishedButCapped], clubName, "Balanced", emptyClub, tierByPlayerId);
+    expect(best?.PlayerID).toBe(220);
+    // Without the tier map, the higher-OVR prospect wins instead — proving the map is what flips it.
+    const bestUnaware = bestAvailableProspect([generational, polishedButCapped], clubName, "Balanced", emptyClub);
+    expect(bestUnaware?.PlayerID).toBe(221);
+  });
 });
 
 describe("draftPlayer", () => {
@@ -324,6 +357,16 @@ describe("autoResolvePick", () => {
 
   it("returns null for an empty pool", () => {
     expect(autoResolvePick([], clubName, 1, 2026, "Balanced", playersByClub)).toBeNull();
+  });
+
+  // Round 97 — same fix, threaded all the way through the real call path `autoResolveDraftPicks`
+  // (useSaveStore.ts) actually uses.
+  it("drafts the Generational Talent tier prospect over a higher-OVR rival when tierByPlayerId is passed", () => {
+    const generational = makePlayer({ PlayerID: 500, archetype: "Outside Mid", OVR: 40, POT: 85 });
+    const polishedButCapped = makePlayer({ PlayerID: 501, archetype: "Outside Mid", OVR: 70, POT: 65 });
+    const tierByPlayerId = new Map([[500, "Generational Talent" as const]]);
+    const result = autoResolvePick([generational, polishedButCapped], clubName, 44, 2026, "Balanced", playersByClub, tierByPlayerId);
+    expect(result?.player.PlayerID).toBe(500);
   });
 });
 

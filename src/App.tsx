@@ -59,7 +59,11 @@ const SCREEN_LABELS: Record<Screen, string> = {
   season: "Season",
   match: "Match",
   listNeeds: "List Needs",
-  combine: "Combine",
+  // Round 97, Tyler: the Talent Scout hiring/focus panel moved here from the Draft screen (see
+  // Combine.tsx's own doc comment) — "Combine" no longer names everything this tab now covers, so it's
+  // relabelled the same way "records" was relabelled "Statistics" back in round 58: the `Screen` key
+  // stays `combine` (no route/state churn), only the user-facing label changes.
+  combine: "Talent Scouting",
   contracts: "Contracts",
   trade: "Trade",
   draft: "Draft",
@@ -80,6 +84,13 @@ export default function App() {
     // resetting to that group's first screen every click.
     setScreen((prev) => (group.screens.includes(prev) ? prev : group.screens[0]));
   }
+  // Round 99 — the Draft screen's new "three-column cockpit" layout (Draft.tsx's own doc comment)
+  // needs a full-height, non-scrolling shell (Tyler: "no page scroll... no dead space to the right")
+  // that the shared `max-w-6xl`-capped, `min-h-screen`-scrollable shell below can't provide. Gated
+  // specifically on `screen === "draft"` (not on draft-window state) so every other screen's shell is
+  // completely untouched, and only active at `lg:` and above — below that this screen falls back to
+  // the exact same scrollable, capped-width shell every other screen already uses.
+  const isDraftCockpit = screen === "draft";
   const myClub = useGameStore((s) => s.myClub);
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
@@ -112,8 +123,10 @@ export default function App() {
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-6xl px-4 py-6">
-      <header className="mb-6">
+    <div
+      className={`mx-auto min-h-screen max-w-6xl px-4 py-6 ${isDraftCockpit ? "lg:flex lg:h-screen lg:max-w-none lg:flex-col lg:overflow-hidden lg:py-4" : ""}`}
+    >
+      <header className={`mb-6 ${isDraftCockpit ? "lg:mb-3 lg:shrink-0" : ""}`}>
         {/* Logo + SaveMenu get their own row, deliberately separate from nav
             below — see the regression this fixed: with both in one
             `flex-wrap` row, nav growing to 11 tabs (Position Switch) was
@@ -165,7 +178,7 @@ export default function App() {
         </nav>
       </header>
 
-      <main key={poolVersion}>
+      <main key={poolVersion} className={isDraftCockpit ? "lg:min-h-0 lg:flex-1 lg:overflow-hidden" : undefined}>
         {screen === "dashboard" && (
           <Dashboard
             onGoToSelection={() => setScreen("selection")}

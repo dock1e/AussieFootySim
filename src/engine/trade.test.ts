@@ -18,7 +18,7 @@ import {
   generateInboundOffers,
 } from "./trade";
 import { makePlayer } from "../testUtils/makePlayer";
-import { clubByName } from "../types/club";
+import { clubByName, CLUBS } from "../types/club";
 import type { ClubStrategy } from "./listNeeds";
 
 /**
@@ -90,10 +90,22 @@ describe("consentTier", () => {
   });
 
   it("can differ for the very same player across two different destinations (rolled per pairing, not per player)", () => {
-    const p = makePlayer({ PlayerID: 1, loyaltyTend: 99, OriginClub: "Brisbane Lions", Team: "Brisbane Lions", Age: 32 });
-    // Confirmed refuse vs Adelaide above; assert it is NOT hard-coded to
-    // refuse everywhere by checking it differs somewhere in the league.
-    const tiers = new Set(["Adelaide", "Carlton", "Collingwood", "Essendon", "Fremantle", "Geelong", "Hawthorn", "Melbourne"].map((c) => consentTier(p, c)));
+    // Round 99 bugfix: this test originally reused the "confirmed refuse vs Adelaide" player above
+    // (loyaltyTend 99, veteran, still at origin -> baseline resistance 0.9) and sampled only 8 named
+    // clubs. That baseline sits so close to the 1.0 ceiling that only the jitter term's most extreme
+    // ~3% tail can ever pull resistance below the 0.76 refuse floor — across 8 samples, ALL landing on
+    // "refuse" was actually the statistically LIKELY outcome (~77%), not evidence of a bug. It reproduced
+    // deterministically (same seeds every run) as `tiers.size === 1` once actually executed via
+    // `npm test`, which nobody had done in a while.
+    // Fixed by rebalancing the fixture to a baseline resistance of ~0.602 — almost exactly on the
+    // 0.6 reluctant/willing boundary (stillAtOrigin 0.25 + veteran 0.15 + loyalty 40/99*0.5 ~= 0.202) —
+    // so the jitter term's own +-0.15 spread straddles that boundary close to 50/50, and never reaches
+    // the 0.76 refuse floor at all (max possible resistance here is ~0.752). Checked against every real
+    // club (not a curated 8) so the odds of all of them landing on the same side by chance are
+    // astronomically small if per-destination variance is genuinely working — which is the one thing
+    // this test exists to prove.
+    const p = makePlayer({ PlayerID: 777, loyaltyTend: 40, OriginClub: "Carlton", Team: "Carlton", Age: 30 });
+    const tiers = new Set(CLUBS.map((c) => consentTier(p, c.name)));
     expect(tiers.size).toBeGreaterThan(1);
   });
 });
@@ -191,7 +203,12 @@ describe("resolveTradeOutcome / findCounterOfferAddition", () => {
 
   it("counters a Close-but-short offer by finding a cheap sufficient addition from the proposer's roster", () => {
     const players = [
-      makePlayer({ PlayerID: 1, Team: "Proposer", totalValue: 100_000, loyaltyTend: 0 }), // the original lowball offer
+      // Round 99 bugfix: was totalValue 100_000 — for a 500_000 ask that's a -0.8 ratio, landing on
+      // "Below fair value" (ratio < -0.3), not "Close but short" (-0.3 to -0.05) — the assertion below
+      // could never have passed against verdictFromRatio's own thresholds. 380_000 gives -0.24, solidly
+      // inside the "Close but short" band, matching this test's actual intent (an offer that's short but
+      // rescuable, not one so far off it's rejected outright).
+      makePlayer({ PlayerID: 1, Team: "Proposer", totalValue: 380_000, loyaltyTend: 0 }), // the original short-but-rescuable offer
       makePlayer({ PlayerID: 2, Team: "Proposer", totalValue: 350_000, loyaltyTend: 0 }), // should be found as the sweetener
       makePlayer({ PlayerID: 3, Team: "Recipient", totalValue: 500_000, loyaltyTend: 0 }),
     ];

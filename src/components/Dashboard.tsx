@@ -548,7 +548,14 @@ function NextOpponentsCard({
                     <div className="text-slate-500">Their best recent form</div>
                     {opponentTop.map((p) => (
                       <div key={p.player.PlayerID} className="truncate">
-                        {playerFullName(p.player)} &middot; {p.rating.toFixed(0)} RTG
+                        {/* Round 95, Tyler: "launch the player profile from anywhere the player name is
+                            displayed." Nested inside this card's own onScoutClub button, so as="span" +
+                            PlayerLink's built-in stopPropagation keeps a name click from also opening
+                            club scouting. */}
+                        <PlayerLink player={p.player} as="span">
+                          {playerFullName(p.player)}
+                        </PlayerLink>{" "}
+                        &middot; {p.rating.toFixed(0)} RTG
                       </div>
                     ))}
                   </div>
@@ -626,7 +633,16 @@ function ActionsCard({
         {emergingTalent.length > 0 && (
           <div className="rounded-lg bg-base-800 p-2.5 text-sm">
             <span className="font-medium">Emerging talent to watch: </span>
-            {emergingTalent.map((p) => `${playerFullName(p)} (${p.Age}, ${p.POT} POT)`).join(", ")}
+            {/* Round 95, Tyler: "launch the player profile from anywhere the player name is displayed."
+                Was a single `.join(", ")`-ed string — rebuilt as per-player elements (still comma-separated)
+                so each name is individually a PlayerLink; nothing else in this card is clickable, so a
+                plain default PlayerLink (no stopPropagation/as="span" needed) is enough here. */}
+            {emergingTalent.map((p, i) => (
+              <span key={p.PlayerID}>
+                <PlayerLink player={p}>{playerFullName(p)}</PlayerLink> ({p.Age}, {p.POT} POT)
+                {i < emergingTalent.length - 1 ? ", " : ""}
+              </span>
+            ))}
           </div>
         )}
         {lineupSet && contractsOutThisYear === 0 && emergingTalent.length === 0 && (
@@ -724,7 +740,8 @@ function LeagueLeadersCard({
               </div>
               {ourBest && (
                 <div className="mt-1.5 text-xs text-slate-500">
-                  Our best: {playerFullName(ourBest.player)}, {Math.round(ourBest.value)} ({ourBest.rank}
+                  {/* Round 95, Tyler: "launch the player profile from anywhere the player name is displayed." */}
+                  Our best: <PlayerLink player={ourBest.player}>{playerFullName(ourBest.player)}</PlayerLink>, {Math.round(ourBest.value)} ({ourBest.rank}
                   {ordinalSuffix(ourBest.rank)})
                 </div>
               )}

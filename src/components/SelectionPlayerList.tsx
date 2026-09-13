@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { Player } from "../types/player";
 import { POSITIONS } from "../types/archetype";
 import type { Lineup } from "../engine/selection";
+import { PlayerLink } from "./PlayerLink";
 
 /**
  * The player-picking half of the Selection Committee ground diagram — Phase
@@ -113,7 +114,13 @@ export function SelectionPlayerList({ players, lineup, selectedPlayerId, onSelec
               >
                 <td className="px-2.5 py-1.5 tabular-nums text-slate-400">{p.jumperNumber}</td>
                 <td className="px-2.5 py-1.5 font-medium">
-                  {p.fname} {p.lname}
+                  {/* Round 95, Tyler: "launch the player profile from anywhere the player name is
+                      displayed." `as="span"` + PlayerLink's own built-in stopPropagation is load-bearing
+                      here, not decorative — this whole row is already a click target for onSelect(p)
+                      (row-select-to-place), so opening the profile must not also select the row. */}
+                  <PlayerLink player={p} as="span">
+                    {p.fname} {p.lname}
+                  </PlayerLink>
                 </td>
                 <td className="px-2.5 py-1.5 text-slate-400">{p.archetype}</td>
                 <td className="px-2.5 py-1.5 tabular-nums">{p.Age}</td>

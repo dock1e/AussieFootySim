@@ -9,6 +9,7 @@ import { Modal } from "./Modal";
 import { ClubBadgeByName } from "./ClubBadge";
 import { PlayerLink } from "./PlayerLink";
 import { seasonPlayerTotals, allTimePlayerTotals, toAverageMap, realSeasonEntryToTotals, ALL_LEAGUE_STATS, LEADERBOARD_STAT_FIELDS, type LeagueStat, type SeasonPlayerTotals, type SeasonArchiveEntry } from "../engine/seasonSummary";
+import { bestAllTimeStandingFor, writeupFor, ALL_RECORD_CATEGORIES } from "../engine/records";
 import { simCareerSpan } from "../engine/records";
 import { draftHistoryFor, type DraftHistoryEntry } from "../data/realDraftHistory";
 import { realSeasonHistoryFor } from "../data/realSeasonHistory";
@@ -119,7 +120,26 @@ import {
  * entirely, untouched this round). The new "Summary" section (`profileSummaryFor`) is the write-up ask —
  * see that function's own top doc comment for why it's a new, tiered blurb generator rather than a reuse
  * of `records.ts`'s leaderboard-calibrated write-up templates.
+ *
+ * Round 96, Tyler: "our little write up [on the Statistics tab]... is a bit corny. I think its better
+ * to remove it from this screen here and to put the writeups against the player profiles when we open
+ * them." That write-up mechanism — `records.ts`'s `combinedRecordFor`/`writeupFor`, the SAME one just
+ * disclosed above as deliberately NOT reused for the Summary blurb — moves here as a new "All-Time
+ * Standing" section instead of being deleted outright: `Records.tsx` no longer shows it at all (see
+ * that file's own updated comment). `bestAllTimeStandingFor` (new) finds this player's single best
+ * (lowest-rank) placing across every `RecordCategory`, not just this profile's own 7 `KEY_STATS`, so a
+ * player who headlines Games Played or Finals Appearances still gets their write-up even though neither
+ * stat has its own benchmarking row above. Renders nothing for the large majority of rostered players
+ * who don't crack any category's own top 25 — same "don't show an empty section" rule the Draft & Club
+ * History section below already follows for a player with no draft entry.
  */
+
+/** Round 96 — mirrors `Records.tsx`'s own `CATEGORY_LABEL` (built the same way, off the same `ALL_LEAGUE_STATS` source, so a category can never read differently between the two screens) rather than importing it directly — `Records.tsx` is a page component, not a shared data module. */
+const RECORD_CATEGORY_LABEL: Record<string, string> = {
+  gamesPlayed: "Games Played",
+  finalsAppearances: "Finals Appearances",
+  ...Object.fromEntries(ALL_LEAGUE_STATS.map((s) => [s.key, s.label])),
+};
 
 const KEY_STATS: LeagueStat[] = ["disposals", "kicks", "handballs", "marks", "tackles", "clearances", "fantasyPoints"];
 
@@ -294,6 +314,18 @@ function PlayerProfileContent({
     [player, combinedCareerTotals, highestGrade, simHonours],
   );
 
+  // Round 96, Tyler: moved the Statistics tab's own leaderboard write-up onto the profile — see this
+  // file's own top doc comment. `null` for the large majority of players who don't crack any of the 25
+  // RecordCategory leaderboards' own top 25.
+  const allTimeStanding = useMemo(
+    () => bestAllTimeStandingFor(player.PlayerID, ALL_RECORD_CATEGORIES, seasonArchives, season),
+    [player, seasonArchives, season],
+  );
+  const allTimeWriteup = useMemo(() => {
+    if (!allTimeStanding) return undefined;
+    return writeupFor(allTimeStanding.row, allTimeStanding.category, seasonArchives, season, year, false);
+  }, [allTimeStanding, seasonArchives, season, year]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-card border border-base-700 bg-base-800/60 px-4 py-3 text-sm">
@@ -351,6 +383,18 @@ function PlayerProfileContent({
         <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Summary</div>
         <p className="text-sm leading-relaxed text-slate-300">{profileBlurb}</p>
       </section>
+
+      {allTimeStanding && allTimeWriteup && (
+        <section>
+          <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">
+            All-Time Standing
+            <span className="ml-1.5 normal-case tracking-normal text-slate-500">
+              — {RECORD_CATEGORY_LABEL[allTimeStanding.category] ?? allTimeStanding.category}, #{allTimeStanding.row.rank} all-time
+            </span>
+          </div>
+          <p className="text-sm leading-relaxed text-slate-300">{allTimeWriteup}</p>
+        </section>
+      )}
 
       {draftEntries.length > 0 && (
         <section>

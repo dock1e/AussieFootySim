@@ -6,6 +6,8 @@ import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
 import type { Archetype } from "../types/archetype";
 import { playerFullName, type Player } from "../types/player";
 import { PlayerDetailModal } from "./PlayerDetailModal";
+import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
+import { gradeForOvr, SCOUT_FOCUS_AREAS, type Coach, type ScoutFocusArea } from "../types/coach";
 
 /**
  * The National Combine — Phase 4 "Slice 6" (ROADMAP.md, closes gap #55).
@@ -16,6 +18,14 @@ import { PlayerDetailModal } from "./PlayerDetailModal";
  * presentation plus the same "Pathway -> State" disclosed substitution
  * Draft.tsx already made (no recruitment-pathway data exists anywhere in
  * this codebase — see draft.ts's own doc comment for why).
+ *
+ * **Round 97** — Tyler: "The Talent Scout section of this draft page should move under what is
+ * currently called 'Combine'. We should then rename 'Combine' to 'Talent Scouting'." `TalentScoutPanel`
+ * (moved from Draft.tsx verbatim, unchanged) now renders here instead — this tab is where a coach hires
+ * and directs their Talent Scout, and the Combine board itself is one of the things that scout's own
+ * accuracy affects. Draft.tsx keeps reading `talentScout`/`ASSISTANT_COACH_POOL` for its own
+ * `assignedScout`/`focusArea` derivation (the board and Prospect Profile still need accuracy-adjusted
+ * reads), it just no longer renders the hiring UI itself — assignment now happens exclusively here.
  */
 
 const TEST_COLUMNS = ["sprint20m", "beepTest", "agility505", "verticalLeap", "kickEfficiency"] as const;
@@ -31,6 +41,14 @@ export function Combine() {
   const currentYear = useSaveStore((s) => s.year);
   const runCombine = useSaveStore((s) => s.runCombine);
   const window_ = useCombineStore((s) => s.window);
+
+  // Round 97 — moved from Draft.tsx verbatim (see this file's own doc comment above).
+  const talentScout = useSaveStore((s) => s.talentScout);
+  const assignTalentScout = useSaveStore((s) => s.assignTalentScout);
+  const setScoutFocusArea = useSaveStore((s) => s.setScoutFocusArea);
+  const assignedScout: Coach | null = talentScout ? (ASSISTANT_COACH_POOL.find((c) => c.id === talentScout.coachId) ?? null) : null;
+  const focusArea: ScoutFocusArea | null = talentScout?.focusArea ?? null;
+  const scoutPanel = <TalentScoutPanel assignedScout={assignedScout} focusArea={focusArea} onAssign={assignTalentScout} onFocus={setScoutFocusArea} />;
 
   const [lineFilter, setLineFilter] = useState<Line | "All">("All");
   const [selected, setSelected] = useState<Player | null>(null);
@@ -48,21 +66,25 @@ export function Combine() {
 
   if (!window_) {
     return (
-      <div className="card text-center">
-        <div className="mb-2 font-display text-xl italic">The {currentYear} National Combine hasn&rsquo;t run yet.</div>
-        <p className="mx-auto mb-4 max-w-md text-sm text-slate-400">
-          Invites the top {`80`} draft-eligible prospects to 5 physical tests (20m sprint, beep test, agility, vertical leap, kicking
-          efficiency) and re-ranks them off a composite score — a real athletic gut-check ahead of the {currentYear} National Draft.
-        </p>
-        <button onClick={runCombine} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
-          Run the {currentYear} National Combine
-        </button>
+      <div className="space-y-6">
+        {scoutPanel}
+        <div className="card text-center">
+          <div className="mb-2 font-display text-xl italic">The {currentYear} National Combine hasn&rsquo;t run yet.</div>
+          <p className="mx-auto mb-4 max-w-md text-sm text-slate-400">
+            Invites the top {`80`} draft-eligible prospects to 5 physical tests (20m sprint, beep test, agility, vertical leap, kicking
+            efficiency) and re-ranks them off a composite score — a real athletic gut-check ahead of the {currentYear} National Draft.
+          </p>
+          <button onClick={runCombine} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
+            Run the {currentYear} National Combine
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {scoutPanel}
       <div className="card flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-xs uppercase tracking-wide text-slate-400">{currentYear} National Combine</div>
@@ -185,5 +207,90 @@ function resultFor(results: Record<number, CombineTestResult>, p: Player): Combi
       standoutTest: "sprint20m",
       weakestTest: "sprint20m",
     }
+  );
+}
+
+/**
+ * Round 83 — [[Assistant Coaching System]]'s Talent Scout integration. Lets
+ * the coach assign anyone from the full `ASSISTANT_COACH_POOL` (84 coaches —
+ * every one of them has SOME Talent Scout rating, not just the 3 whose
+ * primary role is Talent Scout, per that pool's own "every role gets a
+ * rating" design) as the club's Talent Scout, and optionally direct them at
+ * one of the 6 `SCOUT_FOCUS_AREAS`. Deliberately a standalone panel here
+ * rather than part of a general coaching-staff screen — no such screen
+ * exists yet (the other 5 coaching roles have no gameplay hook at all this
+ * round), so this is scoped to exactly the one save-state field
+ * (`SaveGameData.talentScout`) round 83 actually adds.
+ *
+ * **Round 97** — moved here from Draft.tsx verbatim (component body unchanged), per Tyler's own
+ * instruction to move Talent Scout hiring off the Draft screen and onto this one instead.
+ */
+function TalentScoutPanel({
+  assignedScout,
+  focusArea,
+  onAssign,
+  onFocus,
+}: {
+  assignedScout: Coach | null;
+  focusArea: ScoutFocusArea | null;
+  onAssign: (coachId: number | null) => void;
+  onFocus: (focusArea: ScoutFocusArea | null) => void;
+}) {
+  // Sorted once per render by Talent Scout OVR descending, purely so the
+  // strongest real fits (Andy Collins, Murray Davis, Toby Windsor — the 3
+  // with Talent Scout as their primary role — and any other well-graded
+  // generalist) surface at the top of the dropdown rather than the coach
+  // hunting through 84 names in pool-authoring order.
+  const sortedScouts = [...ASSISTANT_COACH_POOL].sort((a, b) => b.ratings["Talent Scout"].ovr - a.ratings["Talent Scout"].ovr);
+  const accuracyPct = assignedScout ? Math.round((assignedScout.ratings["Talent Scout"].ovr / 99) * 100) : null;
+
+  return (
+    <div className="card">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs uppercase tracking-wide text-slate-400">Talent Scout</span>
+        <select
+          value={assignedScout?.id ?? ""}
+          onChange={(e) => onAssign(e.target.value === "" ? null : Number(e.target.value))}
+          className="rounded-lg bg-base-700 px-2 py-1 text-xs font-semibold text-slate-200"
+        >
+          <option value="">No scout hired (baseline accuracy)</option>
+          {sortedScouts.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name} — {gradeForOvr(c.ratings["Talent Scout"].ovr)} ({c.ratings["Talent Scout"].ovr} OVR)
+            </option>
+          ))}
+        </select>
+      </div>
+      {assignedScout ? (
+        <>
+          <p className="mb-2 text-xs text-slate-400">{assignedScout.bio}</p>
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs uppercase tracking-wide text-slate-500">Focus:</span>
+            <button
+              onClick={() => onFocus(null)}
+              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${focusArea === null ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+            >
+              General (league-wide)
+            </button>
+            {SCOUT_FOCUS_AREAS.map((area) => (
+              <button
+                key={area}
+                onClick={() => onFocus(area)}
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${focusArea === area ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+              >
+                {area}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">
+            {focusArea
+              ? `Full ${accuracyPct}% accuracy applies to ${focusArea} prospects only — every other archetype falls back to baseline accuracy.`
+              : `Full ${accuracyPct}% accuracy applies league-wide (no focus set). Setting a focus concentrates it into one area at the cost of the rest.`}
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-slate-500">Using your club&rsquo;s baseline recruiting accuracy. Hire a Talent Scout above to sharpen your scouting reads — or, with a poor hire, blunt them.</p>
+      )}
+    </div>
   );
 }

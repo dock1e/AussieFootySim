@@ -1,4 +1,4 @@
-import { getPlayerById } from "../data/loadPlayers.ts";
+import { getPlayerById, ALL_PLAYERS } from "../data/loadPlayers.ts";
 import { realSeasonHistoryFor } from "../data/realSeasonHistory.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
 import type { Archetype } from "../types/archetype.ts";
@@ -29,6 +29,13 @@ import { toAverageMap, LEADERBOARD_STAT_FIELDS, realSeasonEntryToTotals, type Le
  * archived match can show the wrong opponent name for that one match. Same
  * honest-boundary call `records.ts` already made for `startClub`/`endClub` —
  * not re-litigated here, just reused.
+ *
+ * Round 95 bugfix, Tyler-reported (a player profile's "Key Stats & Performance" Career Avg/Tier
+ * reading blank despite a real, populated career): `withRealCareerHistory` used to only ever enrich a
+ * player ALREADY present in its `simTotals` input — invisible to a real player with genuine pre-save
+ * history but zero sim games recorded anywhere yet (every real player, before this save's own Round 1
+ * has been played; also possible later for anyone who simply hasn't featured). See the function's own
+ * doc comment below for the fix.
  */
 
 // --- Locating a specific historical match -----------------------------------
@@ -176,14 +183,24 @@ export function bestSingleGameInYear(playerId: number, stat: LeagueStat, year: n
  * still doesn't enter the cohort, an accepted boundary carried over from the existing map rather
  * than a new one introduced here.
  */
+/** A zero-games starting point for a player who has no sim entry at all yet — same "fabricate only the shape, never the values" local-duplicate pattern `PlayerProfileModal.tsx`'s own `sumYearRows` already uses for the identical zero-out, rather than exporting `seasonSummary.ts`'s private `emptyTotals` across a file boundary for one caller. */
+function emptySimTotals(playerId: number): SeasonPlayerTotals {
+  const totals = { playerId, gamesPlayed: 0, fantasyPoints: 0 } as SeasonPlayerTotals;
+  for (const key of LEADERBOARD_STAT_FIELDS) totals[key] = 0;
+  return totals;
+}
+
 export function withRealCareerHistory(simTotals: Map<number, SeasonPlayerTotals>): Map<number, SeasonPlayerTotals> {
   const result = new Map<number, SeasonPlayerTotals>();
-  for (const [id, sim] of simTotals) {
+  const seen = new Set<number>();
+
+  const mergeOne = (id: number, sim: SeasonPlayerTotals) => {
+    seen.add(id);
     const player = getPlayerById(id);
     const realRows = player ? realSeasonHistoryFor(player.realFullName ?? playerFullName(player)) : [];
     if (realRows.length === 0) {
       result.set(id, sim);
-      continue;
+      return;
     }
     const merged: SeasonPlayerTotals = { ...sim };
     for (const entry of realRows) {
@@ -194,7 +211,27 @@ export function withRealCareerHistory(simTotals: Map<number, SeasonPlayerTotals>
       for (const key of LEADERBOARD_STAT_FIELDS) merged[key] += t[key];
     }
     result.set(id, merged);
+  };
+
+  for (const [id, sim] of simTotals) mergeOne(id, sim);
+
+  // Round 95 bugfix, Tyler-reported: a real player with genuine pre-save history but ZERO sim games
+  // recorded ANYWHERE in this save yet (the everyday case pre-Round-1, before anyone's played a
+  // single match — also possible later for a player who simply hasn't featured) was invisible to the
+  // loop above entirely, since it only ever enriches an entry ALREADY in `simTotals`. `allTimePlayerTotals`
+  // (this function's own caller) only ever produces an entry from archived seasons or the live season's
+  // own box scores — so with nothing archived and no games played yet, that map is empty, and every
+  // real player's Career Avg/Tier on "Key Stats & Performance" went silently blank, not just one
+  // player's — despite their real career being exactly what that section exists to show. Backfilling a
+  // zero-games sim baseline for every `ALL_PLAYERS` entry not already covered (but only when real rows
+  // actually exist — a fictional player with neither sim nor real games correctly stays absent, no
+  // fabricated debut) closes the gap the same way the loop above already treats a mid-save case.
+  for (const player of ALL_PLAYERS) {
+    if (seen.has(player.PlayerID)) continue;
+    if (realSeasonHistoryFor(player.realFullName ?? playerFullName(player)).length === 0) continue;
+    mergeOne(player.PlayerID, emptySimTotals(player.PlayerID));
   }
+
   return result;
 }
 

@@ -1,9 +1,9 @@
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { ClubBadgeByName } from "./ClubBadge";
 import { PlayerLink } from "./PlayerLink";
-import { combinedRecordFor, seasonGroupTable, writeupFor, type RecordRow, type SeasonStatRow } from "../engine/records";
+import { combinedRecordFor, seasonGroupTable, type RecordRow, type SeasonStatRow } from "../engine/records";
 import { hasRealWorldData, type RecordCategory } from "../data/realWorldRecords";
 import { SINGLE_GAME_GOALS, SINGLE_GAME_DISPOSALS } from "../data/afltablesBigLists";
 import { gameHighsFor } from "../data/afltablesGameHighs";
@@ -263,25 +263,12 @@ const PAGE_SIZE = 25;
 export function Records() {
   const season = useSeasonStore((s) => s.season);
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
-  const year = useSaveStore((s) => s.year);
 
   const [group, setGroup] = useState<StatGroup>("General");
   const [category, setCategory] = useState<RecordCategory>("gamesPlayed");
   const [mode, setMode] = useState<Mode>("season");
   const [archetypeFilter, setArchetypeFilter] = useState<Archetype | "all">("all");
   const [teamFilter, setTeamFilter] = useState<string>("all");
-  const [expandedRank, setExpandedRank] = useState<number | null>(1);
-  /**
-   * Round 89, ROADMAP item #32 — "write-up hover popup." `expandedRank` (click-toggled) is kept
-   * exactly as-is — it's still what a touch tap sets, since touch devices don't have a meaningful
-   * hover state to preview from. `hoveredRank` is purely additive: on desktop, moving the mouse over
-   * a row shows its write-up immediately via `activeRank` below, with NO click required; moving away
-   * falls back to whatever `expandedRank` last was (the row 1 default, or the last-clicked row) —
-   * so a desktop user can still click to "pin" a row open while looking elsewhere on the page, and a
-   * touch user's tap-to-show behaviour is completely unchanged.
-   */
-  const [hoveredRank, setHoveredRank] = useState<number | null>(null);
-  const activeRank = hoveredRank ?? expandedRank;
   const [page, setPage] = useState(0);
 
   const label = CATEGORY_LABEL[category];
@@ -309,12 +296,6 @@ export function Records() {
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const pagedRows = filteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
-  const expandedRow = allRows.find((r) => r.rank === activeRank);
-  const expandedWriteup = useMemo(() => {
-    if (!expandedRow) return undefined;
-    return writeupFor(expandedRow, category, seasonArchives, season, year, false);
-  }, [expandedRow, category, seasonArchives, season, year]);
-
   // --- This Season: Round 62 sortable multi-column table, one per stat group ---
   const seasonRows = useMemo((): SeasonStatRow[] => {
     if (mode !== "season" || !season) return [];
@@ -336,31 +317,15 @@ export function Records() {
   const seasonTotalPages = Math.max(1, Math.ceil(seasonFilteredRows.length / PAGE_SIZE));
   const seasonPagedRows = seasonFilteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
-  const expandedSeasonRow = seasonFilteredRows.find((r) => r.rank === activeRank);
-  const expandedSeasonWriteup = useMemo(() => {
-    if (!expandedSeasonRow || !season) return undefined;
-    const pseudoRow: RecordRow = {
-      rank: expandedSeasonRow.rank,
-      source: "sim",
-      name: expandedSeasonRow.name,
-      value: expandedSeasonRow.values[category] ?? 0,
-      player: expandedSeasonRow.player,
-      club: expandedSeasonRow.club,
-    };
-    return writeupFor(pseudoRow, category, seasonArchives, season, year, true);
-  }, [expandedSeasonRow, category, seasonArchives, season, year]);
-
   const groupCategories = CATEGORIES.filter((c) => CATEGORY_GROUP[c] === group);
 
   function selectCategory(next: RecordCategory) {
     setCategory(next);
-    setExpandedRank(1);
     setPage(0);
   }
 
   function selectMode(next: Mode) {
     setMode(next);
-    setExpandedRank(1);
     setPage(0);
   }
 
@@ -494,17 +459,10 @@ export function Records() {
           <div className="space-y-0.5 text-sm">
             {pagedRows.length === 0 && <div className="px-3 py-2 text-slate-500">No players match this filter.</div>}
             {pagedRows.map((row) => {
-              const expanded = activeRank === row.rank;
               const isTop5 = row.rank <= 5;
               const isGoat = row.rank === 1;
               return (
-                <div key={row.rank}>
-                  <button
-                    onClick={() => setExpandedRank(expandedRank === row.rank ? null : row.rank)}
-                    onMouseEnter={() => setHoveredRank(row.rank)}
-                    onMouseLeave={() => setHoveredRank(null)}
-                    className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${tierRowClasses(row.rank)}`}
-                  >
+                <div key={row.rank} className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${tierRowClasses(row.rank)}`}>
                     <span className="flex min-w-0 items-center gap-2">
                       <span className={`w-8 tabular-nums ${tierRankClasses(row.rank)}`}>{row.rank}</span>
                       {row.club && <ClubBadgeByName name={row.club} size="sm" />}
@@ -530,8 +488,6 @@ export function Records() {
                       <span className={`tabular-nums ${isGoat ? "text-base font-bold" : ""}`}>{row.value.toLocaleString()}</span>
                       {isTop5 && <span className="hidden text-[11px] text-slate-500 sm:inline">{unit}</span>}
                     </span>
-                  </button>
-                  {expanded && <p className="px-3 pb-2 text-xs text-slate-400">{expandedWriteup ?? "No write-up available yet for this player."}</p>}
                 </div>
               );
             })}
@@ -590,46 +546,29 @@ export function Records() {
                 </tr>
               </thead>
               <tbody>
-                {seasonPagedRows.map((row) => {
-                  const expanded = activeRank === row.rank;
-                  return (
-                    <Fragment key={row.rank}>
-                      <tr
-                        onClick={() => setExpandedRank(expandedRank === row.rank ? null : row.rank)}
-                        onMouseEnter={() => setHoveredRank(row.rank)}
-                        onMouseLeave={() => setHoveredRank(null)}
-                        className="cursor-pointer odd:bg-base-800/50 hover:bg-base-800"
+                {seasonPagedRows.map((row) => (
+                  <tr key={row.rank} className="odd:bg-base-800/50">
+                    <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">{row.rank}</td>
+                    <td className="px-2 py-1.5">
+                      <span className="flex min-w-0 items-center gap-2">
+                        {row.club && <ClubBadgeByName name={row.club} size="sm" />}
+                        <span className="truncate">
+                          <PlayerLink player={row.player} as="span">
+                            {row.name}
+                          </PlayerLink>
+                        </span>
+                      </span>
+                    </td>
+                    {groupCategories.map((c) => (
+                      <td
+                        key={c}
+                        className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums ${category === c ? "font-semibold text-accent-light" : "text-slate-300"}`}
                       >
-                        <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">{row.rank}</td>
-                        <td className="px-2 py-1.5">
-                          <span className="flex min-w-0 items-center gap-2">
-                            {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                            <span className="truncate">
-                              <PlayerLink player={row.player} as="span">
-                                {row.name}
-                              </PlayerLink>
-                            </span>
-                          </span>
-                        </td>
-                        {groupCategories.map((c) => (
-                          <td
-                            key={c}
-                            className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums ${category === c ? "font-semibold text-accent-light" : "text-slate-300"}`}
-                          >
-                            {(row.values[c] ?? 0).toLocaleString()}
-                          </td>
-                        ))}
-                      </tr>
-                      {expanded && (
-                        <tr>
-                          <td colSpan={groupCategories.length + 2} className="px-3 pb-2 pt-0 text-xs text-slate-400">
-                            {expandedSeasonWriteup ?? "No write-up available yet for this player."}
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
+                        {(row.values[c] ?? 0).toLocaleString()}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}

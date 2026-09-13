@@ -15,6 +15,7 @@ import {
   likelyNeedForClub,
   SCOUT_HEADLINE_ATTRIBUTES,
   DRAFT_ROUNDS,
+  SCOUT_BUDGET_PER_DRAFT,
   scoutingTiersForPool,
   scoutingReportFor,
   scoutingSummaryFor,
@@ -25,18 +26,22 @@ import {
   type MockOutlet,
   type ScoutingTier,
   type PredictedDraftRange,
+  type DraftPickRecord,
 } from "../engine/draft";
 import type { DraftWindow } from "../engine/saveGame";
 import type { RealProspectTie } from "../data/realProspects";
 import { ARCHETYPE_LINE, LINES, type Line } from "../data/lines";
 import type { Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
-import { ALL_PLAYERS } from "../data/loadPlayers";
+import { ALL_PLAYERS, getPlayerById } from "../data/loadPlayers";
 import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
-import { gradeForOvr, SCOUT_FOCUS_AREAS, type Coach, type ScoutFocusArea } from "../types/coach";
+import type { Coach, ScoutFocusArea } from "../types/coach";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
 import { StatusPill, type PillTone } from "./StatusPill";
 import { Modal } from "./Modal";
+import { ListNeeds } from "./ListNeeds";
+import { PlayerLink } from "./PlayerLink";
+import { ClubBadgeByName } from "./ClubBadge";
 
 /**
  * National Draft — Phase 4 Slice 5 (ROADMAP.md). User Interface.md's Draft
@@ -107,6 +112,99 @@ import { Modal } from "./Modal";
  * exactly as fast to use — no modal round-trip needed just to spend one more scouting-budget reveal);
  * the modal is a bigger, considered "look this prospect over" view layered on top, matching how
  * rostered players already get both a click-to-select context AND a dedicated `PlayerProfileModal`.
+ *
+ * **Round 97** — Tyler: "use your Claude Design features to rework the draft page... I want to reduce
+ * the blank wasted space... that way the draft screen is focuses on the draft picks and the players
+ * available." Three changes: (1) `TalentScoutPanel` moved off this screen entirely, onto the renamed
+ * "Talent Scouting" tab (`Combine.tsx`) — this file keeps reading `talentScout` (still needed for
+ * `accuracyFor`'s fog-of-war math below) but no longer renders the hiring UI itself. (2) The old bottom
+ * row of 3 cards (Recent picks / Upcoming selections / Your draft picks tonight — frequently mostly
+ * empty, e.g. "No picks yet") is replaced by `PickTicker`, one compact horizontal strip folded into the
+ * header card right under "ON THE CLOCK" — recent picks, the live pick, and upcoming picks all visible
+ * together without scrolling past the board, with `myClub`'s own entries visually flagged rather than
+ * needing their own separate card. (3) The board gains a 4th sort mode ("Tier", sorting by the same true
+ * unfogged tier `predictedDraftRange` itself uses — matching the "sort key is the true value, display
+ * stays fogged" precedent "Overall"/"Potential" already established, see `SortMode`'s own doc comment)
+ * and a Scouting Confidence filter (`minConfidence`), both matching the existing pill-button visual
+ * language rather than introducing a new control style.
+ *
+ * **Round 98** — Tyler's own UI review of this screen once round 97 was live: "the player details on
+ * the right hand side appears to be bolted on the side and the overall layout of the screen is
+ * unbalanced," plus 6 more concrete asks. Fixes, in order: (1) the sidebar now gets its own "Scouting
+ * profile" header (visual parity with the board's "Draft board (N available)" header) and a real
+ * bordered empty-state placeholder instead of one stray line of text. (2) The board/sidebar grid gains
+ * `items-start` — CSS Grid's default `align-items: stretch` was coupling the two columns' heights, so
+ * opening a prospect's (taller) profile visibly grew the board card too even though the board's own
+ * table has a fixed `max-h-[32rem]` cap; each card now sizes to its own content, permanently. (3) The
+ * "Sort:" pill row is gone — `SortableHeader` turns the Predicted pick/Scout OVR/Pot./Scouting tier
+ * columns themselves into the sort control, matching the click-a-column-header convention
+ * `Records.tsx`'s own This-Season table already established, and incidentally fixes a pre-existing
+ * alignment bug (the "Predicted pick" header lacked the `text-right` its own data cells had). (4) Every
+ * drafted player's name — both in "Your picks tonight" and in `PickTicker`'s recent-picks chips — is now
+ * a `PlayerLink`, opening that player's profile via `getPlayerById(playerId)` the same way every other
+ * screen's roster names already do (upcoming-pick chips have no player yet, so stay plain). (5) "ON THE
+ * CLOCK" wording is gone from both the header title and `PickTicker`'s live-pick chip (now "Picking
+ * now"/"Your pick now") — Tyler: "I have no intention of bringing in a clock feature," so the UI no
+ * longer implies one exists. (6) A new always-visible "List Needs" header button opens `<ListNeeds />`
+ * (already a zero-required-props, fully self-contained component) inside the existing `Modal` primitive
+ * — Tyler: "relevant to my decision making," so it's reachable without leaving the draft board.
+ *
+ * **Round 99** — Tyler shared a Claude Design mockup ("Three-column cockpit") and asked for this
+ * screen's layout and hierarchy to be reworked to match it: "Keep all existing data, logic and
+ * colours — this is layout and hierarchy only." (His own numbered spec text actually described the
+ * mockup's OTHER option — a bottom-docked inspector tray — but his screenshot and explicit follow-up
+ * answer confirmed the true three-side-by-side-columns option was the one he wanted; built to match
+ * the screenshot/mockup, not the text, wherever the two disagreed.) Changes:
+ *
+ * - The screen is now a full-height, non-scrolling app shell at `lg:` and above (App.tsx's shared
+ *   shell gets a narrow, screen-scoped `isDraftCockpit` branch for this) — a merged status bar up top,
+ *   a 3-column cockpit below it, and only the board's own rows and the two side columns scroll
+ *   internally. Below `lg`, this screen deliberately falls back to its pre-round-99 scrollable,
+ *   stacked layout unchanged — the mockup is a desktop cockpit, and a phone-width viewport was never
+ *   part of Tyler's ask.
+ * - The old header card + `PickTicker` merge into one status bar: a pick-number badge and round/club
+ *   line on the left, `PickTicker` (now non-wrapping — it scrolls horizontally instead of wrapping to
+ *   a second line, satisfying "no wrapping to a second line" without silently clipping chips) filling
+ *   the middle, and every existing action button (List Needs, Next Pick, Skip to My Pick, Finish
+ *   Draft) on the right. The mockup's own version of this bar also shows a scout-budget figure here —
+ *   omitted, since the mockup's real 3-column layout (unlike the bottom-tray option) already places
+ *   Scout Budget in the left sidebar, and showing the same figure twice added nothing.
+ * - The right-hand "Scouting profile" column survives entirely — Tyler's screenshot/mockup choice
+ *   keeps it, unlike the bottom-tray option his text described — but is now genuinely docked: a
+ *   pinned name/meta header (extracted into a new `ProspectHeader`, shared with `ProspectProfile` so
+ *   the two never drift), a scrollable middle carrying every existing section (Summary, Scouting
+ *   tier, OVR/Potential tiles, Attributes, Scouting report, Plays like, Predicted range, Mock draft
+ *   outlets — nothing cut), and a Draft-button footer pinned to the bottom so the primary action is
+ *   never scrolled out of view. `ProspectProfile` gained a `hideHeader` flag for this split; every
+ *   other caller (`ProspectProfileModal`) is untouched and renders exactly as it always has.
+ * - A new left sidebar holds the Position/Min-Confidence/Combine-only filters (moved out of the old
+ *   strip above the board — same `lineFilter`/`minConfidence`/`combineOnly` state, no new filter was
+ *   invented), a real Scout Budget stat (`window_.scoutingBudgetRemaining` of `SCOUT_BUDGET_PER_DRAFT`,
+ *   the real constant, not a placeholder), and "Your picks tonight" (moved from the old header row).
+ *   Position counts reflect the Combine/Confidence filters already applied (a small, deliberate reorder
+ *   of the existing filter chain — combine → confidence → line, was line → combine → confidence — so
+ *   the sidebar can show "how many prospects at this position, given my other filters" instead of a
+ *   raw unfiltered count; the set of prospects the board ends up showing is unchanged either way).
+ *   The mockup's own "Hide drafted" toggle has no backing feature anywhere in this codebase and was
+ *   left out rather than faked.
+ * - The board itself moves from a semantic `<table>` to CSS Grid rows sharing one literal
+ *   `grid-template-columns` between the header and every data row (`BOARD_GRID_COLS`) — the mockup's
+ *   own construction and the most direct way to satisfy "columns align exactly," with ARIA
+ *   `table`/`row`/`columnheader`/`cell` roles standing in for the semantics the `<table>` used to give
+ *   for free. Columns are the mockup's own fixed widths, every one centre-aligned except Prospect
+ *   (left-aligned) and Confidence (now a small tier-coloured bar under the percentage, reusing
+ *   `good`/`warn`/`bad` — no new colours). Column headers are noticeably narrower than round 98's, so
+ *   long values (a handful of archetypes) can truncate to an ellipsis with a hover title — a
+ *   consequence of Tyler's own literal pixel widths that round 96 had deliberately avoided by letting
+ *   the table run wide; that trade-off reverses back here because this round's explicit ask is strict
+ *   column alignment, not a wide scrolling table.
+ * - `SortableHeader`'s active-sort tint moves from `accent` (orange) to `primary` (purple). Not
+ *   asked for explicitly, but the mockup uses one purple thread for every "active/selected/current"
+ *   signal on the page (the selected board row, the live pick chip, the primary CTA) and `accent`
+ *   orange is documented elsewhere in this codebase as reserved for a "look at this, something
+ *   exceptional" role — keeping the sort-active header orange would have fought that hierarchy rather
+ *   than served it. Flagged here as the one visual-language call made without being asked, rather than
+ *   silently folded in — everything else above maps onto data/logic/tokens that already existed.
  */
 
 const HEADLINE_ATTR_LABELS: Record<RatedAttribute, string> = {
@@ -136,8 +234,98 @@ function revealedFor(window: DraftWindow, playerId: number): RatedAttribute[] {
   return (window.revealed[playerId] ?? []) as RatedAttribute[];
 }
 
-/** Round 77 board sort modes — "predicted" (the new default) sorts by `predictedDraftRange`'s own midpoint; "overall"/"potential" sort by the prospect's true (unfogged) OVR/POT directly, same "sort key is the true value, DISPLAY stays fogged" split the old default sort already used via `scoutOvrBand`. */
-type SortMode = "predicted" | "overall" | "potential";
+/** Round 97 — shared by the "predicted" sort and as the tie-breaker inside "tier" sort; pulled out of
+ * the old inline `midA`/`midB` sort-comparator locals now that two sort modes need the same midpoint. */
+function predictedMidpoint(playerId: number, rangeByPlayerId: ReadonlyMap<number, PredictedDraftRange>): number {
+  const range = rangeByPlayerId.get(playerId);
+  return range ? (range.low + range.high) / 2 : Number.MAX_SAFE_INTEGER;
+}
+
+/** Round 77 board sort modes — "predicted" (the new default) sorts by `predictedDraftRange`'s own midpoint; "overall"/"potential" sort by the prospect's true (unfogged) OVR/POT directly, same "sort key is the true value, DISPLAY stays fogged" split the old default sort already used via `scoutOvrBand`.
+ *
+ * Round 97 adds "tier" — Tyler: "sort and order the players by... Scouting Tier." Sorts by the
+ * prospect's true `ScoutingTier` (via `tierByPlayerId`, the same whole-pool map the board's Scouting
+ * Tier column and the AI's own draft logic now share, see draft.ts's `tierRankBonus`), Generational
+ * Talent first — same true-value-even-though-display-stays-fogged precedent as "overall"/"potential"
+ * above. Ties within a tier fall back to predicted-pick midpoint so the ordering stays meaningful.
+ */
+type SortMode = "predicted" | "overall" | "potential" | "tier";
+
+/** Round 97 — Tyler: "filter based on the scouting confidence." Coarse bands match this board's
+ * existing pill-button filter language (Line/Combine-only) rather than a raw numeric slider. 0 = no
+ * filter (every prospect, scouted or not, since an un-scouted prospect's confidence reads as 0%). */
+const CONFIDENCE_LEVELS = [0, 50, 70, 90] as const;
+
+/** Round 98, Tyler: "even the Sort Buttons - do these need to be buttons or can these be sortable by
+ * clicking on the column headers." Shared sortable column-header cell for the draft board — mirrors
+ * Records.tsx's own sortable-column convention (cursor-pointer, hover highlight, active-state tint,
+ * small `▾` indicator) rather than inventing a new visual language for "click to sort." Every mode here
+ * keeps the same fixed "best prospects first" direction it always had as a pill button — Tyler asked
+ * for clickable headers, not a new ascending/descending toggle.
+ *
+ * Round 99 — the board moved from a `<table>` to CSS Grid rows (see `BOARD_GRID_COLS`), so this renders
+ * a `role="columnheader"` div instead of a `<th>`; default alignment flips from "left" to "center" to
+ * match the mockup's "every column is text-align:center except Prospect" rule, and the active-state
+ * tint moves from `accent` (orange) to `primary` (purple) — see this file's Round 99 doc comment for
+ * why. */
+function SortableHeader({
+  label,
+  active,
+  onClick,
+  align = "center",
+  title,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  align?: "left" | "center" | "right";
+  title: string;
+}) {
+  return (
+    <div
+      role="columnheader"
+      aria-sort={active ? "descending" : "none"}
+      onClick={onClick}
+      title={title}
+      className={`flex cursor-pointer items-center whitespace-nowrap px-2 py-2 hover:text-primary-light ${
+        align === "left" ? "justify-start text-left" : align === "right" ? "justify-end text-right" : "justify-center text-center"
+      } ${active ? "bg-primary/15 text-primary-light" : ""}`}
+    >
+      {label}
+      {active && <span className="ml-0.5">▾</span>}
+    </div>
+  );
+}
+
+/** Round 99 — one literal grid-template-columns string shared by the board's header row and every data
+ * row (Tyler: "single grid template shared by the header row and every data row so columns align
+ * exactly"), copied from the chosen mockup's own board rather than from Tyler's typed pixel values
+ * (which described the mockup's other, unchosen option). */
+const BOARD_GRID_COLS = "grid-cols-[36px_74px_minmax(110px,1fr)_48px_96px_76px_50px_84px_58px]";
+
+/** Round 99 — display label for the board's own "Sorted: X" hint, replacing round 98's separate "Sort:"
+ * pill row now that the columns themselves are the sort control. */
+const SORT_MODE_LABEL: Record<SortMode, string> = {
+  predicted: "Predicted",
+  overall: "Overall",
+  potential: "Potential",
+  tier: "Tier",
+};
+
+/** Round 99 — the mockup's "Confidence renders as a small bar plus the percentage." Tier-coloured via
+ * the existing `good`/`warn`/`bad` tokens (no new colours), thresholds matching this file's own
+ * `CONFIDENCE_LEVELS` bands. */
+function ConfidenceBar({ value }: { value: number }) {
+  const tone = value >= 70 ? "bg-good" : value >= 50 ? "bg-warn" : "bg-bad";
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className="text-xs tabular-nums">{value}%</span>
+      <div className="h-1 w-10 overflow-hidden rounded-full bg-base-700">
+        <div className={`h-full ${tone}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+      </div>
+    </div>
+  );
+}
 
 export function Draft() {
   const myClub = useGameStore((s) => s.myClub);
@@ -149,9 +337,10 @@ export function Draft() {
   const skipToMyPick = useSaveStore((s) => s.skipToMyPick);
   const finishDraft = useSaveStore((s) => s.finishDraft);
   const scoutAttribute = useSaveStore((s) => s.scoutAttribute);
+  // Round 97 — the Talent Scout hiring UI itself (`assignTalentScout`/`setScoutFocusArea`) moved to
+  // Combine.tsx ("Talent Scouting"); this file still reads `talentScout` below since the assigned
+  // scout's accuracy keeps feeding every fog-of-war surface on this screen (`accuracyFor`).
   const talentScout = useSaveStore((s) => s.talentScout);
-  const assignTalentScout = useSaveStore((s) => s.assignTalentScout);
-  const setScoutFocusArea = useSaveStore((s) => s.setScoutFocusArea);
   const window_ = useDraftStore((s) => s.window);
   const combineWindow_ = useCombineStore((s) => s.window);
   const ladder = useSeasonStore((s) => s.season?.ladder);
@@ -163,10 +352,14 @@ export function Draft() {
   // predicted draft order and players should be able to sort the list by
   // Overall and Potential too."
   const [sortMode, setSortMode] = useState<SortMode>("predicted");
+  // Round 97 — Tyler: "filter based on the scouting confidence." 0 = "Any" = no filter.
+  const [minConfidence, setMinConfidence] = useState<(typeof CONFIDENCE_LEVELS)[number]>(0);
   // Round 94 Part 2 — which prospect's full profile modal is open, if any. Independent of
   // `selectedId` (the sidebar's own compact scouting-workstation selection) — a coach can browse the
   // fuller modal without losing or changing their board selection underneath it.
   const [profileModalId, setProfileModalId] = useState<number | null>(null);
+  // Round 98 — Tyler: "the list needs screen should be openable or expandable from my draft screen."
+  const [listNeedsOpen, setListNeedsOpen] = useState(false);
 
   // Round 83 — [[Assistant Coaching System]]'s Talent Scout integration.
   // `assignedScout`/`focusArea` are resolved once here and threaded into
@@ -175,7 +368,6 @@ export function Draft() {
   const assignedScout: Coach | null = talentScout ? (ASSISTANT_COACH_POOL.find((c) => c.id === talentScout.coachId) ?? null) : null;
   const focusArea: ScoutFocusArea | null = talentScout?.focusArea ?? null;
   const accuracyFor = (p: Player) => scoutAccuracyFor(p, assignedScout, focusArea);
-  const scoutPanel = <TalentScoutPanel assignedScout={assignedScout} focusArea={focusArea} onAssign={assignTalentScout} onFocus={setScoutFocusArea} />;
 
   // Only meaningful if this year's Combine actually ran — a stale prior-year
   // window (or none at all) just means no prospect gets tagged, same as if
@@ -212,7 +404,6 @@ export function Draft() {
   if (!window_) {
     return (
       <div className="space-y-6">
-        {scoutPanel}
         <div className="card text-center">
           <div className="mb-2 font-display text-xl italic">The {currentYear} National Draft hasn&rsquo;t started yet.</div>
           <p className="mx-auto mb-4 max-w-md text-sm text-slate-400">
@@ -235,251 +426,375 @@ export function Draft() {
 
   const pickedIds = new Set(window_.picks.map((p) => p.playerId));
   const remaining = window_.pool.filter((p) => !pickedIds.has(p.PlayerID));
-  const lineFiltered = lineFilter === "All" ? remaining : remaining.filter((p) => ARCHETYPE_LINE[p.archetype as Archetype] === lineFilter);
-  const filteredRemaining = combineOnly && combineInvitedIds ? lineFiltered.filter((p) => combineInvitedIds.has(p.PlayerID)) : lineFiltered;
-  const sortedRemaining = [...filteredRemaining].sort((a, b) => {
+  // Round 99 — reordered from line→combine→confidence to combine→confidence→line (the RESULT,
+  // `sortedRemaining`, is identical either way — set intersection doesn't care about order) so the new
+  // sidebar's per-position counts can reflect "how many prospects at this position, given my other
+  // filters" via `confidenceFiltered` below, rather than a raw unfiltered count.
+  const combineFiltered = combineOnly && combineInvitedIds ? remaining.filter((p) => combineInvitedIds.has(p.PlayerID)) : remaining;
+  // Round 97 — Tyler: "filter based on the scouting confidence." `scoutConfidence` needs the same
+  // revealed-count + accuracy inputs the board's own Conf column already computes per row; recomputed
+  // here at filter time too (same acceptable "cheap enough for ~195 rows" tradeoff `accuracyFor` already
+  // makes) rather than restructuring the whole board into a single pre-computed-row-object pipeline.
+  const confidenceFiltered =
+    minConfidence === 0
+      ? combineFiltered
+      : combineFiltered.filter((p) => scoutConfidence(p, revealedFor(window_, p.PlayerID).length, accuracyFor(p)) >= minConfidence);
+  const lineFiltered =
+    lineFilter === "All" ? confidenceFiltered : confidenceFiltered.filter((p) => ARCHETYPE_LINE[p.archetype as Archetype] === lineFilter);
+  // Round 99 — sidebar Position-filter counts, computed off `confidenceFiltered` (combine+confidence
+  // applied, line not yet applied) so each button shows how many prospects that line would show given
+  // the other active filters.
+  const lineCounts = (["All", ...LINES] as const).map((line) => ({
+    line,
+    count: line === "All" ? confidenceFiltered.length : confidenceFiltered.filter((p) => ARCHETYPE_LINE[p.archetype as Archetype] === line).length,
+  }));
+  // Round 97 — true tier rank for "tier" sort mode; `tierByPlayerId` is computed off true POT/OVR (see
+  // its own doc comment above), so this resolves even for a prospect with zero revealed attributes,
+  // matching the "sort key is the true value" precedent "overall"/"potential" already established.
+  const tierRank = (playerId: number): number => {
+    const tier = tierByPlayerId.get(playerId);
+    return tier ? TIER_RANK[tier] : 99;
+  };
+  const sortedRemaining = [...lineFiltered].sort((a, b) => {
     if (sortMode === "overall") return b.OVR - a.OVR;
     if (sortMode === "potential") return b.POT - a.POT;
-    const rangeA = predictedRangeByPlayerId.get(a.PlayerID);
-    const rangeB = predictedRangeByPlayerId.get(b.PlayerID);
-    const midA = rangeA ? (rangeA.low + rangeA.high) / 2 : Number.MAX_SAFE_INTEGER;
-    const midB = rangeB ? (rangeB.low + rangeB.high) / 2 : Number.MAX_SAFE_INTEGER;
-    return midA - midB;
+    if (sortMode === "tier") {
+      const rankDiff = tierRank(a.PlayerID) - tierRank(b.PlayerID);
+      if (rankDiff !== 0) return rankDiff;
+      return predictedMidpoint(a.PlayerID, predictedRangeByPlayerId) - predictedMidpoint(b.PlayerID, predictedRangeByPlayerId);
+    }
+    return predictedMidpoint(a.PlayerID, predictedRangeByPlayerId) - predictedMidpoint(b.PlayerID, predictedRangeByPlayerId);
   });
   const selected = selectedId !== null ? (remaining.find((p) => p.PlayerID === selectedId) ?? null) : null;
 
   const myPicks = window_.picks.filter((p) => p.clubName === myClub);
-  const upcoming = window_.order.slice(window_.currentPickIndex, window_.currentPickIndex + 5);
+  // Round 97 — excludes the current on-the-clock pick (that's `clubOnClock`, shown separately/highlighted
+  // in `PickTicker`); previously included it as `upcoming[0]`, double-counting it against the header's own
+  // "ON THE CLOCK" line.
+  const upcoming = window_.order.slice(window_.currentPickIndex + 1, window_.currentPickIndex + 5);
 
   return (
-    <div className="space-y-6">
-      {scoutPanel}
-      <div className="card flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="text-xs uppercase tracking-wide text-slate-400">
-            {currentYear} National Draft · Round {round}/{DRAFT_ROUNDS}
+    <div className="flex flex-col gap-4 lg:h-full lg:min-h-0 lg:gap-3">
+      {/* Round 99 — the old header card + `PickTicker` merged into one status bar. Stacks vertically on
+          mobile (same info, just not squeezed into a fixed 64px strip); becomes the mockup's literal
+          64px non-wrapping bar at `lg:` and above. */}
+      <div className="flex flex-col gap-2 rounded-card border border-base-700 bg-base-800 p-3 lg:h-16 lg:flex-row lg:items-center lg:gap-3 lg:py-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 lg:shrink-0 lg:flex-nowrap lg:justify-start">
+          <div className="flex items-center gap-2.5">
+            <div className="flex shrink-0 flex-col items-center justify-center rounded-lg bg-primary px-2.5 py-1 leading-none text-white">
+              <span className="text-base font-bold tabular-nums">{isComplete ? "—" : window_.currentPickIndex + 1}</span>
+              <span className="text-[9px] uppercase tracking-wide opacity-80">Pick</span>
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-[11px] uppercase tracking-wide text-slate-400">
+                {currentYear} National Draft · Round {round}/{DRAFT_ROUNDS}
+              </div>
+              <div className="truncate font-display text-base italic">{isComplete ? "Draft complete" : `${clubOnClock} is picking`}</div>
+            </div>
           </div>
-          <div className="font-display text-xl italic">{isComplete ? "Draft complete" : `ON THE CLOCK — Pick ${window_.currentPickIndex + 1} · ${clubOnClock}`}</div>
         </div>
+
         {!isComplete && (
-          <div className="flex flex-wrap gap-2">
-            {!isMyTurn && (
-              <button onClick={autoResolveNextPick} className="rounded-lg bg-base-700 px-3 py-1.5 text-xs font-semibold hover:bg-base-600">
-                Next Pick
-              </button>
-            )}
-            {!isMyTurn && (
-              <button onClick={skipToMyPick} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
-                Skip to My Pick
-              </button>
-            )}
+          <div className="min-w-0 lg:flex-1">
+            <PickTicker
+              recentPicks={window_.picks}
+              currentPickNumber={window_.currentPickIndex + 1}
+              clubOnClock={clubOnClock}
+              upcomingClubs={upcoming}
+              myClub={myClub}
+              playersByClub={playersByClub}
+            />
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:flex-nowrap">
+          {/* Round 98 — Tyler: "the list needs screen should be openable or expandable from my draft
+              screen as this is relevant to my decision making." Always visible (not gated on
+              `!isComplete`) — reviewing needs stays useful even after the draft wraps up. */}
+          <button onClick={() => setListNeedsOpen(true)} className="rounded-lg bg-base-700 px-3 py-1.5 text-xs font-semibold hover:bg-base-600">
+            List Needs
+          </button>
+          {!isComplete && !isMyTurn && (
+            <button onClick={autoResolveNextPick} className="rounded-lg bg-base-700 px-3 py-1.5 text-xs font-semibold hover:bg-base-600">
+              Next Pick
+            </button>
+          )}
+          {!isComplete && !isMyTurn && (
+            <button onClick={skipToMyPick} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
+              Skip to My Pick
+            </button>
+          )}
+          {!isComplete && (
             <button onClick={finishDraft} className="rounded-lg bg-base-700 px-3 py-1.5 text-xs font-semibold hover:bg-base-600">
               Finish Draft
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {isComplete ? (
-        <div className="card text-center">
-          <div className="mb-1 font-display text-xl italic">The {currentYear} National Draft is complete.</div>
-          <div className="text-sm text-slate-400">
-            {myClub} made {myPicks.length} pick{myPicks.length === 1 ? "" : "s"}. Pre-Season Draft and Pre-Season Investment aren&rsquo;t built yet.
+        <div className="flex flex-1 items-center justify-center">
+          <div className="card max-w-md text-center">
+            <div className="mb-1 font-display text-xl italic">The {currentYear} National Draft is complete.</div>
+            <div className="text-sm text-slate-400">
+              {myClub} made {myPicks.length} pick{myPicks.length === 1 ? "" : "s"}. Pre-Season Draft and Pre-Season Investment aren&rsquo;t built yet.
+            </div>
           </div>
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
-          <div className="card">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="text-xs uppercase tracking-wide text-slate-400">Draft board ({remaining.length} available)</span>
-              <div className="ml-auto flex flex-wrap items-center gap-1">
-                {combineInvitedIds && (
-                  <button
-                    onClick={() => setCombineOnly((v) => !v)}
-                    title="Show only this year's National Combine invitees"
-                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${combineOnly ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
-                  >
-                    COMBINE ONLY
-                  </button>
-                )}
-                {(["All", ...LINES] as const).map((line) => (
+        <div className="grid gap-3 overflow-hidden rounded-card border border-base-700 bg-base-800 lg:min-h-0 lg:flex-1 lg:grid-cols-[216px_minmax(0,1fr)_372px]">
+          {/* Left sidebar — Round 99: Position/Min Confidence/Combine-only filters relocated here from
+              the old strip above the board (same `lineFilter`/`minConfidence`/`combineOnly` state);
+              Scout Budget and Your Picks Tonight relocated here from the old header row. */}
+          <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto border-b border-base-700 p-3 text-sm lg:border-b-0 lg:border-r">
+            <div>
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Position</div>
+              <div className="flex flex-col gap-0.5">
+                {lineCounts.map(({ line, count }) => (
                   <button
                     key={line}
                     onClick={() => setLineFilter(line)}
-                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${lineFilter === line ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
+                    className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs font-semibold ${
+                      lineFilter === line ? "bg-primary text-white" : "text-slate-300 hover:bg-base-700"
+                    }`}
                   >
-                    {line}
+                    <span>{line}</span>
+                    <span className={lineFilter === line ? "text-white/80" : "text-slate-500"}>{count}</span>
                   </button>
                 ))}
               </div>
             </div>
-            <div className="mb-3 flex flex-wrap items-center gap-1.5">
-              <span className="text-xs uppercase tracking-wide text-slate-500">Sort:</span>
-              {(
-                [
-                  ["predicted", "Predicted"],
-                  ["overall", "Overall"],
-                  ["potential", "Potential"],
-                ] as const
-              ).map(([mode, label]) => (
-                <button
-                  key={mode}
-                  onClick={() => setSortMode(mode)}
-                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${sortMode === mode ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
-                >
-                  {label}
-                </button>
-              ))}
+
+            <div>
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Min Confidence</div>
+              <div className="grid grid-cols-4 gap-1">
+                {CONFIDENCE_LEVELS.map((level) => (
+                  <button
+                    key={level}
+                    onClick={() => setMinConfidence(level)}
+                    title={level === 0 ? "Any scouting confidence" : `At least ${level}% scouting confidence`}
+                    className={`rounded-lg px-1 py-1.5 text-center text-[11px] font-semibold ${
+                      minConfidence === level ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"
+                    }`}
+                  >
+                    {level === 0 ? "Any" : `${level}%`}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="max-h-[32rem] overflow-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="sticky top-0 bg-base-900">
-                  <tr className="text-xs uppercase tracking-wide text-slate-500">
-                    <th className="py-1.5 pr-2">#</th>
-                    <th className="py-1.5 pr-2">Predicted pick</th>
-                    <th className="py-1.5 pr-2">Prospect</th>
-                    <th className="py-1.5 pr-2">State</th>
-                    <th className="py-1.5 pr-2">Archetype</th>
-                    <th className="py-1.5 pr-2 text-right">Scout OVR</th>
-                    <th className="py-1.5 pr-2 text-right">Pot.</th>
-                    <th className="py-1.5 pr-2">Scouting tier</th>
-                    <th className="py-1.5 pr-2 text-right">Conf</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedRemaining.map((p, i) => {
-                    const revealed = revealedFor(window_, p.PlayerID);
-                    const accuracy = accuracyFor(p);
-                    const band = scoutOvrBand(p, revealed.length, accuracy);
-                    const conf = scoutConfidence(p, revealed.length, accuracy);
-                    const tie = primaryTieFor(p);
+
+            {combineInvitedIds && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Combine only</span>
+                <button
+                  onClick={() => setCombineOnly((v) => !v)}
+                  role="switch"
+                  aria-checked={combineOnly}
+                  title="Show only this year's National Combine invitees"
+                  className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${combineOnly ? "bg-primary" : "bg-base-700"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${combineOnly ? "translate-x-4" : "translate-x-0.5"}`}
+                  />
+                </button>
+              </div>
+            )}
+
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Scout Budget</div>
+              <div className="text-2xl font-bold tabular-nums">{window_.scoutingBudgetRemaining}</div>
+              <div className="mb-1.5 text-[11px] text-slate-500">of {SCOUT_BUDGET_PER_DRAFT} left</div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-base-700">
+                <div
+                  className="h-full bg-primary"
+                  style={{ width: `${Math.max(0, Math.min(100, (window_.scoutingBudgetRemaining / SCOUT_BUDGET_PER_DRAFT) * 100))}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Your Picks Tonight</div>
+              {myPicks.length === 0 ? (
+                <div className="text-xs text-slate-600">No picks yet.</div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {myPicks.map((rec) => {
+                    // Round 98 — Tyler: "for the 'My picks tonight'... I should have the option to open
+                    // the player profile by clicking their names." Same `getPlayerById`-fallback pattern
+                    // as PickTicker's recent-picks chips.
+                    const pickedPlayer = getPlayerById(rec.playerId);
                     return (
-                      <tr
-                        key={p.PlayerID}
-                        onClick={() => setSelectedId(p.PlayerID)}
-                        className={`cursor-pointer border-t border-base-700 hover:bg-base-800 ${selectedId === p.PlayerID ? "bg-base-800" : ""}`}
-                      >
-                        <td className="py-1.5 pr-2 text-slate-500">{i + 1}</td>
-                        <td className="py-1.5 pr-2 text-right tabular-nums text-accent-light">
-                          {(() => {
-                            const range = predictedRangeByPlayerId.get(p.PlayerID);
-                            if (!range) return "—";
-                            return range.low === range.high ? range.low : `${range.low}-${range.high}`;
-                          })()}
-                        </td>
-                        <td className="py-1.5 pr-2 font-medium">
-                          <span className="inline-flex items-center gap-1.5">
-                            {playerFullName(p)}
-                            {combineInvitedIds?.has(p.PlayerID) && <StatusPill label="COMBINE" tone="info" />}
-                            {tie && <TieBadge tie={tie} />}
-                          </span>
-                        </td>
-                        <td className="py-1.5 pr-2 text-slate-400">{p.homeState}</td>
-                        <td className="py-1.5 pr-2 text-slate-400">{p.archetype}</td>
-                        <td className="py-1.5 pr-2 text-right tabular-nums">
-                          {band.low}-{band.high}
-                        </td>
-                        <td className="py-1.5 pr-2 text-right tabular-nums">{revealed.length === 0 ? "?" : potentialLetterGrade(p.POT)}</td>
-                        <td className="py-1.5 pr-2">
-                          {revealed.length === 0 ? <span className="text-slate-500">?</span> : <ScoutingTierLabel tier={tierByPlayerId.get(p.PlayerID)} />}
-                        </td>
-                        <td className="py-1.5 pr-2 text-right tabular-nums">{conf}%</td>
-                      </tr>
+                      <div key={rec.pickNumber} className="truncate text-xs text-slate-300">
+                        <span className="text-slate-500">
+                          R{rec.round}/P{rec.pickNumber}
+                        </span>{" "}
+                        {pickedPlayer ? <PlayerLink player={pickedPlayer}>{rec.playerName}</PlayerLink> : rec.playerName}
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
+                </div>
+              )}
+            </div>
+          </aside>
+
+          {/* Middle — Round 99: the board, moved from a `<table>` to CSS Grid rows sharing
+              `BOARD_GRID_COLS` between the header and every data row so columns align exactly. Filter
+              chips that used to live in this header moved to the sidebar; this header is now just the
+              count + the sort-discoverability hint 1a's own mockup keeps here. */}
+          <div className="flex min-h-0 flex-col overflow-hidden p-3">
+            <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-wide text-slate-400">Draft board ({remaining.length} available)</span>
+              <span className="truncate text-[10px] normal-case tracking-normal text-slate-600">
+                Sorted: {SORT_MODE_LABEL[sortMode]} ▾ · Click a column header to sort
+              </span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-base-700" role="table">
+              <div
+                role="row"
+                className={`sticky top-0 z-10 grid ${BOARD_GRID_COLS} h-[34px] items-center border-b border-base-700 bg-base-900 text-[11px] uppercase tracking-wide text-slate-500`}
+              >
+                <div role="columnheader" className="flex items-center justify-center px-2">
+                  #
+                </div>
+                <SortableHeader
+                  label="Pred."
+                  active={sortMode === "predicted"}
+                  onClick={() => setSortMode("predicted")}
+                  title="Sort by predicted draft position (best prospects first)"
+                />
+                <div role="columnheader" className="flex items-center px-2 text-left">
+                  Prospect
+                </div>
+                <div role="columnheader" className="flex items-center justify-center px-2">
+                  State
+                </div>
+                <div role="columnheader" className="flex items-center justify-center px-2">
+                  Archetype
+                </div>
+                <SortableHeader
+                  label="OVR"
+                  active={sortMode === "overall"}
+                  onClick={() => setSortMode("overall")}
+                  title="Sort by true overall rating — the displayed band stays fogged"
+                />
+                <SortableHeader
+                  label="Pot."
+                  active={sortMode === "potential"}
+                  onClick={() => setSortMode("potential")}
+                  title="Sort by true potential — the displayed grade stays fogged"
+                />
+                <SortableHeader
+                  label="Tier"
+                  active={sortMode === "tier"}
+                  onClick={() => setSortMode("tier")}
+                  title="Sort by true scouting tier — the displayed tier stays fogged until scouted"
+                />
+                <div role="columnheader" className="flex items-center justify-center px-2">
+                  Conf
+                </div>
+              </div>
+              <div role="rowgroup">
+                {sortedRemaining.map((p, i) => {
+                  const revealed = revealedFor(window_, p.PlayerID);
+                  const accuracy = accuracyFor(p);
+                  const band = scoutOvrBand(p, revealed.length, accuracy);
+                  const conf = scoutConfidence(p, revealed.length, accuracy);
+                  const tie = primaryTieFor(p);
+                  return (
+                    <div
+                      key={p.PlayerID}
+                      role="row"
+                      onClick={() => setSelectedId(p.PlayerID)}
+                      className={`grid ${BOARD_GRID_COLS} h-[38px] cursor-pointer items-center border-b border-base-800 text-sm hover:bg-base-800/70 ${
+                        selectedId === p.PlayerID ? "bg-primary/15" : i % 2 === 0 ? "bg-base-900" : "bg-base-800/40"
+                      }`}
+                    >
+                      <div role="cell" className="px-2 text-center text-slate-500">
+                        {i + 1}
+                      </div>
+                      <div role="cell" className="px-2 text-center tabular-nums text-accent-light">
+                        {(() => {
+                          const range = predictedRangeByPlayerId.get(p.PlayerID);
+                          if (!range) return "—";
+                          return range.low === range.high ? range.low : `${range.low}-${range.high}`;
+                        })()}
+                      </div>
+                      <div role="cell" className="flex min-w-0 items-center gap-1.5 px-2">
+                        <span className="truncate font-medium">{playerFullName(p)}</span>
+                        {combineInvitedIds?.has(p.PlayerID) && <StatusPill label="COMBINE" tone="info" />}
+                        {tie && <TieBadge tie={tie} />}
+                      </div>
+                      <div role="cell" className="truncate px-2 text-center text-slate-400">
+                        {p.homeState}
+                      </div>
+                      <div role="cell" className="truncate px-2 text-center text-slate-400" title={p.archetype}>
+                        {p.archetype}
+                      </div>
+                      <div role="cell" className="px-2 text-center tabular-nums">
+                        {band.low}-{band.high}
+                      </div>
+                      <div role="cell" className="px-2 text-center tabular-nums">
+                        {revealed.length === 0 ? "?" : potentialLetterGrade(p.POT)}
+                      </div>
+                      <div role="cell" className="flex items-center justify-center px-2">
+                        {revealed.length === 0 ? <span className="text-slate-500">?</span> : <CompactTierLabel tier={tierByPlayerId.get(p.PlayerID)} />}
+                      </div>
+                      <div role="cell" className="flex items-center justify-center px-2">
+                        <ConfidenceBar value={conf} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
-          <div className="card">
-            {selected ? (
-              <ProspectProfile
-                prospect={selected}
-                pool={window_.pool}
-                tier={tierByPlayerId.get(selected.PlayerID)}
-                revealedAttrs={revealedFor(window_, selected.PlayerID)}
-                budgetRemaining={window_.scoutingBudgetRemaining}
-                scoutAccuracy={accuracyFor(selected)}
-                onScout={(attr) => scoutAttribute(selected.PlayerID, attr)}
-                onDraft={
-                  isMyTurn
-                    ? () => {
-                        confirmDraftPick(selected.PlayerID);
-                        setSelectedId(null);
-                      }
-                    : undefined
-                }
-                onOpenProfile={() => setProfileModalId(selected.PlayerID)}
-              />
-            ) : (
-              <div className="text-sm text-slate-500">Select a prospect from the board to see their scouting profile.</div>
+          {/* Right — Round 99: the docked scouting column survives (Tyler's screenshot/mockup choice
+              keeps it), now genuinely docked — a pinned `ProspectHeader`, a scrollable body carrying the
+              rest of `ProspectProfile` unabridged, and a Draft-button footer pinned to the bottom. */}
+          <div className="flex min-h-0 flex-col overflow-hidden border-t border-base-700 lg:border-l lg:border-t-0">
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {selected ? (
+                <div className="space-y-4">
+                  <ProspectHeader
+                    prospect={selected}
+                    revealedAttrs={revealedFor(window_, selected.PlayerID)}
+                    scoutAccuracy={accuracyFor(selected)}
+                    onOpenProfile={() => setProfileModalId(selected.PlayerID)}
+                  />
+                  <ProspectProfile
+                    prospect={selected}
+                    pool={window_.pool}
+                    tier={tierByPlayerId.get(selected.PlayerID)}
+                    revealedAttrs={revealedFor(window_, selected.PlayerID)}
+                    budgetRemaining={window_.scoutingBudgetRemaining}
+                    scoutAccuracy={accuracyFor(selected)}
+                    onScout={(attr) => scoutAttribute(selected.PlayerID, attr)}
+                    hideHeader
+                  />
+                </div>
+              ) : (
+                <div className="flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-base-700 px-4 py-10 text-center text-sm text-slate-500">
+                  Select a prospect from the board to see their scouting profile.
+                </div>
+              )}
+            </div>
+            {selected && isMyTurn && (
+              <div className="shrink-0 border-t border-base-700 p-3">
+                <button
+                  onClick={() => {
+                    confirmDraftPick(selected.PlayerID);
+                    setSelectedId(null);
+                  }}
+                  className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
+                >
+                  Draft {playerFullName(selected)}
+                </button>
+              </div>
             )}
           </div>
         </div>
       )}
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="card">
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Recent picks</div>
-          {window_.picks.length === 0 ? (
-            <div className="text-sm text-slate-500">No picks yet.</div>
-          ) : (
-            <div className="space-y-1.5 text-sm">
-              {[...window_.picks]
-                .slice(-6)
-                .reverse()
-                .map((rec) => (
-                  <div key={rec.pickNumber} className="flex justify-between gap-2">
-                    <span className="shrink-0 text-slate-400">
-                      Pick {rec.pickNumber} · {rec.clubName}
-                    </span>
-                    <span className="truncate text-right font-medium">{rec.playerName}</span>
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
-
-        <div className="card">
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Upcoming selections</div>
-          {upcoming.length === 0 ? (
-            <div className="text-sm text-slate-500">Draft&rsquo;s finished.</div>
-          ) : (
-            <div className="space-y-1.5 text-sm">
-              {upcoming.map((club, i) => {
-                const need = likelyNeedForClub(club, playersByClub);
-                return (
-                  <div key={i} className="flex justify-between gap-2">
-                    <span className="shrink-0 text-slate-400">
-                      Pick {window_.currentPickIndex + i + 1} · {club}
-                    </span>
-                    <span className="text-right text-xs text-slate-500">{need ? `Likely: ${need}` : "Best available"}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="card">
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Your draft picks tonight ({myClub})</div>
-          {myPicks.length === 0 ? (
-            <div className="text-sm text-slate-500">No picks made yet.</div>
-          ) : (
-            <div className="space-y-1.5 text-sm">
-              {myPicks.map((rec) => (
-                <div key={rec.pickNumber} className="flex justify-between gap-2">
-                  <span className="shrink-0 text-slate-400">
-                    Round {rec.round} · Pick {rec.pickNumber}
-                  </span>
-                  <span className="truncate text-right font-medium">{rec.playerName}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
 
       {profileModalId !== null &&
         (() => {
@@ -507,6 +822,132 @@ export function Draft() {
             />
           );
         })()}
+
+      {/* Round 98, Tyler: "the list needs screen should be openable or expandable from my draft screen
+          as this is relevant to my decision making." `<ListNeeds />` (zero props) is already fully
+          self-contained — the footer's own nav-shortcut buttons simply don't render without them, and
+          nothing else about it needs wiring to work standalone inside this Modal. */}
+      {listNeedsOpen && (
+        <Modal title="List Needs" onClose={() => setListNeedsOpen(false)}>
+          <ListNeeds />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** Round 97 — sort-order rank for the "Tier" sort mode; mirrors `TIER_TONE`'s own best-to-worst
+ * ordering (Generational Talent first) rather than inventing a separate scale. */
+const TIER_RANK: Record<ScoutingTier, number> = {
+  "Generational Talent": 0,
+  Superstar: 1,
+  Elite: 2,
+  Great: 3,
+  Good: 4,
+  Average: 5,
+  "Sub-par": 6,
+};
+
+/**
+ * Round 97 — Tyler: "When our draft picks are, especially our next pick is, who has been selected by
+ * other clubs before us and who are the next subsequent picks" + "I want to reduce the blank wasted
+ * space." Replaces the old bottom row of 3 cards (Recent picks / Upcoming selections / Your draft picks
+ * tonight — frequently mostly empty walls of "No picks yet") with one compact horizontal strip folded
+ * directly under the header's "ON THE CLOCK" line: the last few picks made, the live pick highlighted,
+ * then the next few picks on deck, all in one glance with no separate cards or scrolling required.
+ * `myClub`'s own picks (past or upcoming) get the same "bg-accent/10 ring-1 ring-accent/40"-style
+ * highlight ring `SeasonHub.tsx`'s own fixture list already uses for "this is you" rows, rather than a
+ * 4th "your picks" card — they're already visible in-line at their actual spot in the order. A hover
+ * tooltip on each upcoming chip surfaces `likelyNeedForClub`'s existing "likely position of need" read,
+ * preserving that information from the old "Upcoming selections" card without spending extra vertical
+ * space on it.
+ */
+function PickTicker({
+  recentPicks,
+  currentPickNumber,
+  clubOnClock,
+  upcomingClubs,
+  myClub,
+  playersByClub,
+}: {
+  recentPicks: DraftPickRecord[];
+  currentPickNumber: number;
+  clubOnClock: string | null;
+  upcomingClubs: string[];
+  myClub: string;
+  playersByClub: ReadonlyMap<string, Player[]>;
+}) {
+  const recent = recentPicks.slice(-4);
+  return (
+    // Round 99 — folded into the merged status bar's middle slot. At `lg:` and above, `flex-nowrap` +
+    // `overflow-x-auto` satisfies the mockup's "one horizontal row... no wrapping to a second line" by
+    // scrolling instead of wrapping or silently clipping; below `lg:` the status bar is no longer a
+    // fixed-height strip, so wrapping stays allowed there (same as every other pre-round-99 screen). The
+    // `border-t`/`pt-3` this used to need to separate itself from the header card above are gone now
+    // that it isn't stacked under one anymore.
+    <div className="flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:overflow-x-auto">
+      {/* Round 98 — Tyler: "for... the other players picked by other clubs I should have the option to
+          open the player profile by clicking their names." Same `getPlayerById`-fallback pattern as
+          "Your picks tonight" above. */}
+      {recent.map((rec) => {
+        const pickedPlayer = getPlayerById(rec.playerId);
+        return (
+          <div
+            key={rec.pickNumber}
+            title={`Pick ${rec.pickNumber} · ${rec.clubName}`}
+            className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 ${
+              rec.clubName === myClub ? "bg-primary/10 ring-1 ring-primary/40" : "bg-base-800"
+            }`}
+          >
+            <span className="text-[10px] text-slate-500">#{rec.pickNumber}</span>
+            <ClubBadgeByName name={rec.clubName} size="sm" />
+            {pickedPlayer ? (
+              <PlayerLink player={pickedPlayer} className="max-w-[8rem] truncate text-xs font-medium">
+                {rec.playerName}
+              </PlayerLink>
+            ) : (
+              <span className="max-w-[8rem] truncate text-xs font-medium">{rec.playerName}</span>
+            )}
+          </div>
+        );
+      })}
+
+      {recent.length > 0 && clubOnClock && <span className="text-slate-600">→</span>}
+
+      {clubOnClock && (
+        <div
+          className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 ${
+            clubOnClock === myClub ? "bg-primary text-white" : "bg-accent/10 ring-1 ring-accent/40"
+          }`}
+        >
+          <span className="text-[10px] uppercase tracking-wide opacity-80">#{currentPickNumber}</span>
+          <ClubBadgeByName name={clubOnClock} size="sm" />
+          {/* Round 98 — Tyler: "The 'On the Clock' is not required. I have no intention of bringing in a
+              clock feature." Reworded to convey the same "whose turn" info without clock/timer framing. */}
+          <span className={`text-xs font-semibold ${clubOnClock === myClub ? "" : "text-accent-light"}`}>
+            {clubOnClock === myClub ? "Your pick now" : "Picking now"}
+          </span>
+        </div>
+      )}
+
+      {upcomingClubs.length > 0 && <span className="text-slate-600">→</span>}
+
+      {upcomingClubs.map((club, i) => {
+        const pickNumber = currentPickNumber + i + 1;
+        const need = likelyNeedForClub(club, playersByClub);
+        return (
+          <div
+            key={pickNumber}
+            title={`Pick ${pickNumber} · ${club}${need ? ` · Likely: ${need}` : ""}`}
+            className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 ${
+              club === myClub ? "bg-primary/10 ring-1 ring-primary/40" : "bg-base-800"
+            }`}
+          >
+            <span className="text-[10px] text-slate-500">#{pickNumber}</span>
+            <ClubBadgeByName name={club} size="sm" />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -526,6 +967,30 @@ function ScoutingTierLabel({ tier }: { tier: ScoutingTier | undefined }) {
   if (!tier) return <span className="text-slate-500">?</span>;
   const solid = tier === "Generational Talent" || tier === "Superstar";
   return <StatusPill label={tier} tone={TIER_TONE[tier]} variant={solid ? "solid" : "soft"} />;
+}
+
+/** Round 99 — short form of each `ScoutingTier` for the board's fixed 84px Tier column, where the full
+ * name (esp. "Generational Talent") won't fit. Same "abbreviate small, spell out big" precedent
+ * `TIE_TYPE_ABBR`/`TieBadge` already established two rounds ago — the full name is always one click away
+ * in the right-hand profile's own unabridged `ScoutingTierLabel`, and available here via `title`. */
+const TIER_ABBR: Record<ScoutingTier, string> = {
+  "Generational Talent": "Gen. Talent",
+  Superstar: "Superstar",
+  Elite: "Elite",
+  Great: "Great",
+  Good: "Good",
+  Average: "Average",
+  "Sub-par": "Sub-par",
+};
+
+function CompactTierLabel({ tier }: { tier: ScoutingTier | undefined }) {
+  if (!tier) return <span className="text-slate-500">?</span>;
+  const solid = tier === "Generational Talent" || tier === "Superstar";
+  return (
+    <span title={tier}>
+      <StatusPill label={TIER_ABBR[tier]} tone={TIER_TONE[tier]} variant={solid ? "solid" : "soft"} />
+    </span>
+  );
 }
 
 /** Round 88 — abbreviated type label for the compact `TieBadge`; spelled out in full wherever space allows instead (see `ProspectProfile`'s own tie line). */
@@ -572,6 +1037,57 @@ function PlaysLikeLine({ prospect }: { prospect: Player }) {
   );
 }
 
+/** Round 99 — extracted from `ProspectProfile`'s old inline header block so the cockpit's docked right
+ * column can pin this part while the rest of the profile scrolls beneath it (Tyler's mockup: a fixed
+ * name/meta header, a scrollable body, a fixed Draft-button footer). `ProspectProfile` still renders
+ * this internally by default (see its own `hideHeader` prop) — every existing caller keeps seeing
+ * exactly this same header in exactly the same spot, just via a shared component instead of inline JSX.
+ * The button label shortens "View full profile" → "Full profile" to match the mockup's own wording —
+ * same `onOpenProfile` handler, purely cosmetic. */
+function ProspectHeader({
+  prospect,
+  revealedAttrs,
+  scoutAccuracy,
+  onOpenProfile,
+}: {
+  prospect: Player;
+  revealedAttrs: RatedAttribute[];
+  scoutAccuracy: number;
+  onOpenProfile?: () => void;
+}) {
+  const band = scoutOvrBand(prospect, revealedAttrs.length, scoutAccuracy);
+  const conf = scoutConfidence(prospect, revealedAttrs.length, scoutAccuracy);
+  const width = Math.round((band.high - band.low) / 2);
+  const tie = primaryTieFor(prospect);
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="font-display text-lg italic">{playerFullName(prospect)}</div>
+        {onOpenProfile && (
+          <button onClick={onOpenProfile} className="shrink-0 rounded-lg bg-base-700 px-2.5 py-1 text-xs font-semibold hover:bg-base-600">
+            Full profile
+          </button>
+        )}
+      </div>
+      <div className="text-xs text-slate-400">
+        {prospect.archetype} · {prospect.homeState} · Age {prospect.Age} · {prospect.height}cm / {prospect.weight}kg
+      </div>
+      <div className="mt-1 text-xs text-accent-light">
+        ±{width} OVR read · {conf}% scouting confidence
+      </div>
+      {tie && (
+        <div className="mt-2 flex items-center gap-1.5">
+          <TieBadge tie={tie} />
+          <span className="text-xs text-slate-500">
+            {tie.type === "Father-Son" ? "Father-Son selection" : tie.type === "NGA" ? "Next Generation Academy" : "Academy"} tie to {tie.club} —
+            that club can bid-match to secure this pick.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProspectProfile({
   prospect,
   pool,
@@ -582,6 +1098,7 @@ function ProspectProfile({
   onScout,
   onDraft,
   onOpenProfile,
+  hideHeader,
 }: {
   prospect: Player;
   pool: Player[];
@@ -594,40 +1111,17 @@ function ProspectProfile({
   onDraft?: () => void;
   /** Round 94 Part 2 — opens `ProspectProfileModal` for this same prospect. Omitted (not just falsy) when `ProspectProfile` is itself already being rendered AS that modal's own body — a "view full profile" button that reopens the modal it's already inside of would be nonsensical. */
   onOpenProfile?: () => void;
+  /** Round 99 — true when the caller (the draft cockpit's docked right column) is rendering
+   * `ProspectHeader` itself, pinned, outside this component's own scroll region. Every other caller
+   * omits this and gets the header inline, exactly as before. */
+  hideHeader?: boolean;
 }) {
   const band = scoutOvrBand(prospect, revealedAttrs.length, scoutAccuracy);
-  const conf = scoutConfidence(prospect, revealedAttrs.length, scoutAccuracy);
-  const width = Math.round((band.high - band.low) / 2);
   const scouted = revealedAttrs.length > 0;
-  const tie = primaryTieFor(prospect);
 
   return (
     <div className="space-y-4">
-      <div>
-        <div className="flex items-start justify-between gap-2">
-          <div className="font-display text-lg italic">{playerFullName(prospect)}</div>
-          {onOpenProfile && (
-            <button onClick={onOpenProfile} className="shrink-0 rounded-lg bg-base-700 px-2.5 py-1 text-xs font-semibold hover:bg-base-600">
-              View full profile
-            </button>
-          )}
-        </div>
-        <div className="text-xs text-slate-400">
-          {prospect.archetype} · {prospect.homeState} · Age {prospect.Age} · {prospect.height}cm / {prospect.weight}kg
-        </div>
-        <div className="mt-1 text-xs text-accent-light">
-          ±{width} OVR read · {conf}% scouting confidence
-        </div>
-        {tie && (
-          <div className="mt-2 flex items-center gap-1.5">
-            <TieBadge tie={tie} />
-            <span className="text-xs text-slate-500">
-              {tie.type === "Father-Son" ? "Father-Son selection" : tie.type === "NGA" ? "Next Generation Academy" : "Academy"} tie to {tie.club} —
-              that club can bid-match to secure this pick.
-            </span>
-          </div>
-        )}
-      </div>
+      {!hideHeader && <ProspectHeader prospect={prospect} revealedAttrs={revealedAttrs} scoutAccuracy={scoutAccuracy} onOpenProfile={onOpenProfile} />}
 
       <div>
         {/* Round 94 Part 2, Tyler: "a section which shows the 1 or 2 sentence player writeup summary."
@@ -783,84 +1277,7 @@ function ProspectProfileModal({
   );
 }
 
-/**
- * Round 83 — [[Assistant Coaching System]]'s Talent Scout integration. Lets
- * the coach assign anyone from the full `ASSISTANT_COACH_POOL` (84 coaches —
- * every one of them has SOME Talent Scout rating, not just the 3 whose
- * primary role is Talent Scout, per that pool's own "every role gets a
- * rating" design) as the club's Talent Scout, and optionally direct them at
- * one of the 6 `SCOUT_FOCUS_AREAS`. Deliberately a standalone panel here
- * rather than part of a general coaching-staff screen — no such screen
- * exists yet (the other 5 coaching roles have no gameplay hook at all this
- * round), so this is scoped to exactly the one save-state field
- * (`SaveGameData.talentScout`) round 83 actually adds.
- */
-function TalentScoutPanel({
-  assignedScout,
-  focusArea,
-  onAssign,
-  onFocus,
-}: {
-  assignedScout: Coach | null;
-  focusArea: ScoutFocusArea | null;
-  onAssign: (coachId: number | null) => void;
-  onFocus: (focusArea: ScoutFocusArea | null) => void;
-}) {
-  // Sorted once per render by Talent Scout OVR descending, purely so the
-  // strongest real fits (Andy Collins, Murray Davis, Toby Windsor — the 3
-  // with Talent Scout as their primary role — and any other well-graded
-  // generalist) surface at the top of the dropdown rather than the coach
-  // hunting through 84 names in pool-authoring order.
-  const sortedScouts = [...ASSISTANT_COACH_POOL].sort((a, b) => b.ratings["Talent Scout"].ovr - a.ratings["Talent Scout"].ovr);
-  const accuracyPct = assignedScout ? Math.round((assignedScout.ratings["Talent Scout"].ovr / 99) * 100) : null;
-
-  return (
-    <div className="card">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs uppercase tracking-wide text-slate-400">Talent Scout</span>
-        <select
-          value={assignedScout?.id ?? ""}
-          onChange={(e) => onAssign(e.target.value === "" ? null : Number(e.target.value))}
-          className="rounded-lg bg-base-700 px-2 py-1 text-xs font-semibold text-slate-200"
-        >
-          <option value="">No scout hired (baseline accuracy)</option>
-          {sortedScouts.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name} — {gradeForOvr(c.ratings["Talent Scout"].ovr)} ({c.ratings["Talent Scout"].ovr} OVR)
-            </option>
-          ))}
-        </select>
-      </div>
-      {assignedScout ? (
-        <>
-          <p className="mb-2 text-xs text-slate-400">{assignedScout.bio}</p>
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-xs uppercase tracking-wide text-slate-500">Focus:</span>
-            <button
-              onClick={() => onFocus(null)}
-              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${focusArea === null ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
-            >
-              General (league-wide)
-            </button>
-            {SCOUT_FOCUS_AREAS.map((area) => (
-              <button
-                key={area}
-                onClick={() => onFocus(area)}
-                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${focusArea === area ? "bg-primary text-white" : "bg-base-700 text-slate-300 hover:bg-base-600"}`}
-              >
-                {area}
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-slate-500">
-            {focusArea
-              ? `Full ${accuracyPct}% accuracy applies to ${focusArea} prospects only — every other archetype falls back to baseline accuracy.`
-              : `Full ${accuracyPct}% accuracy applies league-wide (no focus set). Setting a focus concentrates it into one area at the cost of the rest.`}
-          </p>
-        </>
-      ) : (
-        <p className="text-xs text-slate-500">Using your club&rsquo;s baseline recruiting accuracy. Hire a Talent Scout above to sharpen your scouting reads — or, with a poor hire, blunt them.</p>
-      )}
-    </div>
-  );
-}
+// Round 97 — `TalentScoutPanel` (the [[Assistant Coaching System]] hiring UI from round 83) moved off
+// this file entirely, onto the renamed "Talent Scouting" tab (Combine.tsx) per Tyler's explicit
+// instruction: "The Talent Scout section of this draft page should move under what is currently called
+// 'Combine'." See Combine.tsx for the (byte-identical) moved component.

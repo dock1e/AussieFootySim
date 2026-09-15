@@ -1,5 +1,13 @@
 import type { BoxScoreLine, MatchEvent, MatchResult } from "./match.ts";
+import { LINE_FEEDBACK_FIELDS } from "./match.ts";
 import { fantasyPointsFor } from "./ratings.ts";
+import type { Archetype } from "../types/archetype.ts";
+import type { ContestType } from "./contestTypes.ts";
+import { MATCH_DAY_COACH_ROLES, type MatchDayCoachRole } from "../types/coach.ts";
+import { matchDayRoleForTacticGroup } from "./lineCoaching.ts";
+import { tacticGroupForSlot } from "./tactics.ts";
+import type { MatchTeam } from "./team.ts";
+import { isForward50, ownZone, type Side, type Zone } from "./zones.ts";
 
 /**
  * Pure post-match summary helpers — split out from FullTimeResult.tsx so
@@ -184,4 +192,109 @@ export function playerLinesByQuarter(events: MatchEvent[], ids: Iterable<number>
     });
   }
   return out;
+}
+
+// --- Quarter-scoped line coach win rates — Sep 2026 [[Quarter-Time Decision Room]] --------------
+
+export interface SubStatQuarterLine {
+  wins: number;
+  attempts: number;
+  rate: number;
+}
+
+export interface LineQuarterWinRate {
+  role: MatchDayCoachRole;
+  /** This line's own real sub-stat wins/attempts/rate for THIS quarter only, keyed by `ContestType` name — only sub-stats with a real attempt this quarter are present, so an untouched one never silently reads as a fabricated 0% or 100%. The raw `wins`/`attempts` are what a "2-7" style evidence line reads off directly; `rate` is what feeds `engine/lineCoaching.ts`'s `recommendedFocusFor` (pass `Object.fromEntries(Object.entries(subRates).map(([k, v]) => [k, v.rate]))`). */
+  subRates: Partial<Record<ContestType, SubStatQuarterLine>>;
+  /** Every listed sub-stat's attempts/wins blended together — same arithmetic `engine/match.ts`'s own `lineFeedbackFor` uses for its sentence, just quarter-scoped and returned as a number. 0.5 (neutral) when this line has recorded zero relevant attempts yet this quarter — same graceful default `lineFeedbackFor` itself already has. */
+  blended: number;
+}
+
+/**
+ * Real, quarter-scoped per-line contest form for `team` — built for the Quarter-Time Decision
+ * Room's ranked "What's Hurting Us"/"What's Working" cards, which react to what just happened this
+ * quarter, not the whole match. Reuses `match.ts`'s own `LINE_FEEDBACK_FIELDS` (the exact role ->
+ * sub-stat grouping `lineFeedbackFor` already uses) so there's one single source of truth for "which
+ * stats belong to which line," not a second, driftable copy — this function only adds the
+ * quarter-scoping and keeps each sub-stat separate instead of blending on the way in.
+ *
+ * No spoiler-safety concern here (unlike `quarterlyPoints`): a break only ever happens after
+ * `quarter`'s own ticks are fully simulated and revealed, so filtering `events` to `ev.quarter ===
+ * quarter` is always looking at real, already-shown history, never a future quarter.
+ */
+export function lineQuarterWinRates(events: MatchEvent[], quarter: 1 | 2 | 3 | 4, team: MatchTeam): LineQuarterWinRate[] {
+  const ids = team.players.map((p) => p.PlayerID);
+  const byPlayer = playerLinesByQuarter(events, ids);
+
+  return MATCH_DAY_COACH_ROLES.map((role) => {
+    const roleIds = team.players
+      .filter((p) => matchDayRoleForTacticGroup(tacticGroupForSlot(team.positions?.get(p.PlayerID), p.archetype as Archetype)) === role)
+      .map((p) => p.PlayerID);
+
+    const subRates: Partial<Record<ContestType, SubStatQuarterLine>> = {};
+    let totalAttempts = 0;
+    let totalWins = 0;
+    for (const field of LINE_FEEDBACK_FIELDS[role]) {
+      let attempts = 0;
+      let wins = 0;
+      for (const id of roleIds) {
+        const q = byPlayer[id]?.find((l) => l.quarter === quarter);
+        if (!q) continue;
+        attempts += (q.line[field.attempts] as number) ?? 0;
+        wins += (q.line[field.wins] as number) ?? 0;
+      }
+      if (attempts > 0) subRates[field.name] = { wins, attempts, rate: wins / attempts };
+      totalAttempts += attempts;
+      totalWins += wins;
+    }
+    return { role, subRates, blended: totalAttempts > 0 ? totalWins / totalAttempts : 0.5 };
+  });
+}
+
+// --- Forward-entry origin thirds — Sep 2026 [[Quarter-Time Decision Room]] -----------------------
+
+export interface ForwardEntryOriginThirds {
+  defensive: number;
+  midfield: number;
+  forward: number;
+  /** Total genuine new forward-50 arrivals counted this quarter — 0 is a real reading ("didn't reach forward 50 at all this quarter"), not missing data. */
+  total: number;
+}
+
+/**
+ * For every genuinely NEW arrival of `side`'s own forward 50 this quarter (a transition into
+ * `isForward50`, not sustained forward-50 play already under way), walks back through that same
+ * unbroken `side`-possession spell to the zone (in `side`'s own attacking-direction terms, via
+ * `ownZone`) it started from, and buckets that start zone into three real ground-thirds
+ * (defensive = their own zones 0-1, midfield = zone 2, forward = zones 3-4). A genuinely computed
+ * answer to "where is this team's forward-50 ball actually coming from" — no engine field records
+ * an inside-50 entry's origin directly, so this is built from the real per-tick `zone`/`possession`
+ * every `MatchEvent` already carries. See [[Quarter-Time Decision Room]]'s own "What's real" section.
+ * Same no-spoiler reasoning as `lineQuarterWinRates` above — quarter-scoped, always past history.
+ */
+export function forwardEntryOriginThirds(events: MatchEvent[], quarter: number, side: Side): ForwardEntryOriginThirds {
+  const quarterEvents = events.filter((ev) => ev.quarter === quarter);
+  let defensive = 0,
+    midfield = 0,
+    forward = 0;
+
+  let spellStartZone: Zone | null = null;
+  let wasForward50 = false;
+  for (const ev of quarterEvents) {
+    if (ev.possession !== side) {
+      spellStartZone = null; // possession changed hands - the next spell starts fresh
+      wasForward50 = false;
+      continue;
+    }
+    if (spellStartZone === null) spellStartZone = ev.zone;
+    const nowForward50 = isForward50(ev.zone, side);
+    if (nowForward50 && !wasForward50) {
+      const own = ownZone(side, spellStartZone);
+      if (own <= 1) defensive++;
+      else if (own === 2) midfield++;
+      else forward++;
+    }
+    wasForward50 = nowForward50;
+  }
+  return { defensive, midfield, forward, total: defensive + midfield + forward };
 }

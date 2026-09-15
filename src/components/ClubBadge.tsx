@@ -17,13 +17,19 @@ import { clubById, clubByName, type Club } from "../types/club";
  * bad/missing id degrades the same way the old dot did rather than
  * crashing or showing a confusing empty swatch.
  */
-export function ClubBadge({ club, size = "md" }: { club: Club | undefined; size?: "sm" | "md" }) {
+/**
+ * Sep 2026 — [[LiveMatch Cockpit Rebuild]]: added `"lg"` for the new
+ * scoreboard band's 40px Barlow Condensed score, which otherwise dwarfs the
+ * old `"md"` badge (`text-xs`) sitting next to it. Purely additive — every
+ * existing `"sm"`/`"md"` call site (and the `md` default) renders
+ * byte-identically to before this size existed.
+ */
+export function ClubBadge({ club, size = "md" }: { club: Club | undefined; size?: "sm" | "md" | "lg" }) {
   if (!club) return null;
+  const sizeClass = size === "sm" ? "px-1.5 py-0.5 text-[10px]" : size === "lg" ? "px-2.5 py-1 text-sm" : "px-2 py-0.5 text-xs";
   return (
     <span
-      className={`inline-flex shrink-0 items-center justify-center rounded font-bold uppercase tracking-wide ${
-        size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-xs"
-      }`}
+      className={`inline-flex shrink-0 items-center justify-center rounded font-bold uppercase tracking-wide ${sizeClass}`}
       style={{ backgroundColor: club.primaryColor, color: club.secondaryColor }}
       title={club.name}
     >
@@ -33,11 +39,11 @@ export function ClubBadge({ club, size = "md" }: { club: Club | undefined; size?
 }
 
 /** Convenience wrapper for the common case of only having a `ClubID` (ladder rows, fixtures). */
-export function ClubBadgeById({ clubId, size }: { clubId: number | undefined; size?: "sm" | "md" }) {
+export function ClubBadgeById({ clubId, size }: { clubId: number | undefined; size?: "sm" | "md" | "lg" }) {
   return <ClubBadge club={clubId !== undefined ? clubById(clubId) : undefined} size={size} />;
 }
 
 /** Convenience wrapper for the common case of only having a club name string (match-sim `MatchTeam.name`, `Player.Team`). */
-export function ClubBadgeByName({ name, size }: { name: string | undefined; size?: "sm" | "md" }) {
+export function ClubBadgeByName({ name, size }: { name: string | undefined; size?: "sm" | "md" | "lg" }) {
   return <ClubBadge club={name !== undefined ? clubByName(name) : undefined} size={size} />;
 }

@@ -215,7 +215,13 @@ interface BenchmarkRow {
   topCareer: SingleGameHigh | null;
 }
 
-function PlayerProfileContent({
+/**
+ * Sep 2026 round 103 — exported so `PlayerMatchDrawer.tsx`'s "Career profile" tab can reuse this
+ * verbatim (same real season/benchmarking/draft-history logic, one source of truth) rather than
+ * forking a second, driftable copy condensed for a narrower column — see that file's own doc
+ * comment and [[Full-Time Review and Unified Player Drawer]]'s own disclosed trade-off.
+ */
+export function PlayerProfileContent({
   player,
   seasonArchives,
   season,

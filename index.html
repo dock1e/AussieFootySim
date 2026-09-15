@@ -5,6 +5,19 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AussieFootySim</title>
+    <!-- Round 100 (Sep 2026) — Draft cockpit accent-polish pass: tailwind.config.js's `display` token has
+         named "Barlow Condensed" since long before this round, and `mono`/`barlow` (new this round) name
+         "IBM Plex Mono"/"Barlow" too, but nothing anywhere ever actually loaded any of the three — every
+         one of those font-family declarations was silently falling back to Oswald/system-ui/monospace the
+         whole time. Loading them for real (same Google Fonts request the Draft Screen Mockups.dc canvas
+         itself uses) is a pure improvement everywhere `font-display` was already used, not just this
+         round's new Draft-screen accents. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body class="bg-base-950 text-slate-100">
     <div id="root"></div>

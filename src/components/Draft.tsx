@@ -312,18 +312,51 @@ const SORT_MODE_LABEL: Record<SortMode, string> = {
   tier: "Tier",
 };
 
-/** Round 99 — the mockup's "Confidence renders as a small bar plus the percentage." Tier-coloured via
- * the existing `good`/`warn`/`bad` tokens (no new colours), thresholds matching this file's own
- * `CONFIDENCE_LEVELS` bands. */
+/** Round 100 — Draft cockpit accent polish (Tyler's "Prompt 1"): shared all-caps micro-label styling.
+ * Applied to plain text nodes across the filter rail, board headers, and inspector stat tiles, so a
+ * constant (matching `BOARD_GRID_COLS`/`SORT_MODE_LABEL`'s existing pattern) rather than a component. */
+const LABEL_CLASS = "font-mono uppercase text-[9.5px] tracking-[1.1px] text-[#6f7c93]";
+
+/** Round 100 — the mockup's own confidence-colour thresholds, extracted from its embedded data-binding
+ * script (`conf >= 48 ? "#22d3a7" : conf >= 40 ? "#f0c419" : "#ff6b6b"`) and matching Tyler's literal
+ * spec ("teal ≥48, yellow ≥40, red below"). Deliberately NOT the existing `good`/`warn`/`bad` tokens —
+ * those are 70/50-banded and used app-wide for a different semantic scale; recalibrating them here would
+ * silently shift every other screen's colour bands. These are new, one-off literals scoped to the Draft
+ * board only, applied via inline style since Tailwind can't resolve template-built arbitrary-value
+ * classes at build time (see this file's own colour-token notes elsewhere). */
+function confidenceColor(value: number): string {
+  return value >= 48 ? "#22d3a7" : value >= 40 ? "#f0c419" : "#ff6b6b";
+}
+
+/** Round 99 — the mockup's "Confidence renders as a small bar plus the percentage." Round 100: recoloured
+ * to the mockup's own teal/yellow/red thresholds (`confidenceColor` above) in place of the app's global
+ * good/warn/bad bands, per Tyler's explicit "Prompt 1" spec. */
 function ConfidenceBar({ value }: { value: number }) {
-  const tone = value >= 70 ? "bg-good" : value >= 50 ? "bg-warn" : "bg-bad";
+  const tone = confidenceColor(value);
   return (
     <div className="flex flex-col items-center gap-0.5">
       <span className="text-xs tabular-nums">{value}%</span>
       <div className="h-1 w-10 overflow-hidden rounded-full bg-base-700">
-        <div className={`h-full ${tone}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+        <div className="h-full" style={{ width: `${Math.max(0, Math.min(100, value))}%`, backgroundColor: tone }} />
       </div>
     </div>
+  );
+}
+
+/** Round 100 — Draft cockpit accent polish (Tyler's "Prompt 1") accent #3: compact board-only pill tags
+ * for Combine invites ("CMB", teal) and Father-Son/Academy/NGA ties (yellow), distinct from the existing
+ * full `TieBadge`/`StatusPill("COMBINE")` treatments this file already uses in the docked inspector
+ * column, where there's room for the full word and the destination club. The board's Prospect column is
+ * narrow (`minmax(110px,1fr)`), so these carry only a short label in the mockup's own literal colours. */
+function BoardPill({ label, tone }: { label: string; tone: "teal" | "yellow" }) {
+  const color = tone === "teal" ? "#22d3a7" : "#f0c419";
+  return (
+    <span
+      className="shrink-0 rounded px-1 py-0.5 font-mono text-[9px] font-semibold uppercase leading-none"
+      style={{ backgroundColor: `${color}26`, color }}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -478,15 +511,27 @@ export function Draft() {
       {/* Round 99 — the old header card + `PickTicker` merged into one status bar. Stacks vertically on
           mobile (same info, just not squeezed into a fixed 64px strip); becomes the mockup's literal
           64px non-wrapping bar at `lg:` and above. */}
-      <div className="flex flex-col gap-2 rounded-card border border-base-700 bg-base-800 p-3 lg:h-16 lg:flex-row lg:items-center lg:gap-3 lg:py-0">
+      {/* Round 100 — Tyler's "Prompt 1" accent #1: 60×44 pick-hero badge, purple→transparent gradient
+          wash, 3px purple left edge. The mockup's own literal 1a section builds this as a dedicated
+          216px sidebar (separate from the pick-order strip); Tyler's own text spec here explicitly
+          adapts that into an accent on round 99's already-built compact status bar instead ("don't
+          change the layout skeleton"), so the gradient/edge are layered onto the existing bar rather
+          than reproducing the mockup's different structure. Purple is the app's own `primary` token
+          (#6d5ce8), not the mockup's literal #7c5cf0 — see this file's colour-token notes. */}
+      <div
+        className="flex flex-col gap-2 rounded-card border border-l-[3px] border-base-700 border-l-primary bg-base-800 p-3 lg:h-16 lg:flex-row lg:items-center lg:gap-3 lg:py-0"
+        style={{ backgroundImage: "linear-gradient(90deg, rgba(109,92,232,.16), rgba(109,92,232,.02) 45%, transparent 65%)" }}
+      >
         <div className="flex flex-wrap items-center justify-between gap-2 lg:shrink-0 lg:flex-nowrap lg:justify-start">
           <div className="flex items-center gap-2.5">
-            <div className="flex shrink-0 flex-col items-center justify-center rounded-lg bg-primary px-2.5 py-1 leading-none text-white">
-              <span className="text-base font-bold tabular-nums">{isComplete ? "—" : window_.currentPickIndex + 1}</span>
-              <span className="text-[9px] uppercase tracking-wide opacity-80">Pick</span>
+            <div className="flex h-11 w-[60px] shrink-0 flex-col items-center justify-center rounded-lg bg-primary leading-none text-white">
+              <span className="font-display text-[22px] font-semibold tabular-nums">{isComplete ? "—" : window_.currentPickIndex + 1}</span>
+              <span className="font-mono text-[7.5px] uppercase tracking-wide opacity-80">Pick</span>
             </div>
             <div className="min-w-0">
-              <div className="truncate text-[11px] uppercase tracking-wide text-slate-400">
+              {/* Round 100 — matches the mockup's own "ROUND 4 OF 5 · ON THE CLOCK" label styling
+                  (9.5px IBM Plex Mono, #6f7c93) via `LABEL_CLASS`, completing accent #1. */}
+              <div className={`truncate ${LABEL_CLASS}`}>
                 {currentYear} National Draft · Round {round}/{DRAFT_ROUNDS}
               </div>
               <div className="truncate font-display text-base italic">{isComplete ? "Draft complete" : `${clubOnClock} is picking`}</div>
@@ -548,7 +593,9 @@ export function Draft() {
               Scout Budget and Your Picks Tonight relocated here from the old header row. */}
           <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto border-b border-base-700 p-3 text-sm lg:border-b-0 lg:border-r">
             <div>
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Position</div>
+              {/* Round 100 — Tyler's "Prompt 1" closing typography directive applied to every all-caps
+                  rail label: IBM Plex Mono, 9.5px, 1.1px tracking, #6f7c93 (`LABEL_CLASS`). */}
+              <div className={`mb-1.5 ${LABEL_CLASS}`}>Position</div>
               <div className="flex flex-col gap-0.5">
                 {lineCounts.map(({ line, count }) => (
                   <button
@@ -559,14 +606,16 @@ export function Draft() {
                     }`}
                   >
                     <span>{line}</span>
-                    <span className={lineFilter === line ? "text-white/80" : "text-slate-500"}>{count}</span>
+                    {/* Round 100 — accent #4: counts already sat at the row's right edge (`justify-between`);
+                        the missing accent was the mockup's monospace treatment on the figure itself. */}
+                    <span className={`font-mono ${lineFilter === line ? "text-white/80" : "text-slate-500"}`}>{count}</span>
                   </button>
                 ))}
               </div>
             </div>
 
             <div>
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Min Confidence</div>
+              <div className={`mb-1.5 ${LABEL_CLASS}`}>Min Confidence</div>
               <div className="grid grid-cols-4 gap-1">
                 {CONFIDENCE_LEVELS.map((level) => (
                   <button
@@ -585,7 +634,7 @@ export function Draft() {
 
             {combineInvitedIds && (
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Combine only</span>
+                <span className={LABEL_CLASS}>Combine only</span>
                 <button
                   onClick={() => setCombineOnly((v) => !v)}
                   role="switch"
@@ -600,20 +649,31 @@ export function Draft() {
               </div>
             )}
 
-            <div>
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Scout Budget</div>
-              <div className="text-2xl font-bold tabular-nums">{window_.scoutingBudgetRemaining}</div>
-              <div className="mb-1.5 text-[11px] text-slate-500">of {SCOUT_BUDGET_PER_DRAFT} left</div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-base-700">
+            {/* Round 100 — accent #4: "Scout Budget is a tile with a big yellow number and a progress
+                bar," replacing the old bare stacked text with the mockup's own `#151d2e` card treatment
+                and its literal #f0c419 yellow (same one-off yellow as the board's Academy/Father-Son
+                pill and the mid confidence-bar band, for a consistent accent colour across the screen). */}
+            <div className="rounded-lg border border-white/5 bg-[#151d2e] p-2.5">
+              <div className={`mb-1 ${LABEL_CLASS}`}>Scout Budget</div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-display text-2xl font-bold tabular-nums" style={{ color: "#f0c419" }}>
+                  {window_.scoutingBudgetRemaining}
+                </span>
+                <span className="text-[11px] text-slate-500">of {SCOUT_BUDGET_PER_DRAFT} left</span>
+              </div>
+              <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-base-700">
                 <div
-                  className="h-full bg-primary"
-                  style={{ width: `${Math.max(0, Math.min(100, (window_.scoutingBudgetRemaining / SCOUT_BUDGET_PER_DRAFT) * 100))}%` }}
+                  className="h-full"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (window_.scoutingBudgetRemaining / SCOUT_BUDGET_PER_DRAFT) * 100))}%`,
+                    backgroundColor: "#f0c419",
+                  }}
                 />
               </div>
             </div>
 
             <div className="min-h-0 flex-1">
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Your Picks Tonight</div>
+              <div className={`mb-1.5 ${LABEL_CLASS}`}>Your Picks Tonight</div>
               {myPicks.length === 0 ? (
                 <div className="text-xs text-slate-600">No picks yet.</div>
               ) : (
@@ -643,7 +703,10 @@ export function Draft() {
               count + the sort-discoverability hint 1a's own mockup keeps here. */}
           <div className="flex min-h-0 flex-col overflow-hidden p-3">
             <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
-              <span className="text-xs uppercase tracking-wide text-slate-400">Draft board ({remaining.length} available)</span>
+              {/* Round 100 — Tyler's "Prompt 1" closing typography directive (IBM Plex Mono all-caps
+                  labels) applied to the board's own section title and column-header row, completing the
+                  same treatment already given the filter rail's labels. */}
+              <span className={LABEL_CLASS}>Draft board ({remaining.length} available)</span>
               <span className="truncate text-[10px] normal-case tracking-normal text-slate-600">
                 Sorted: {SORT_MODE_LABEL[sortMode]} ▾ · Click a column header to sort
               </span>
@@ -651,7 +714,7 @@ export function Draft() {
             <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-base-700" role="table">
               <div
                 role="row"
-                className={`sticky top-0 z-10 grid ${BOARD_GRID_COLS} h-[34px] items-center border-b border-base-700 bg-base-900 text-[11px] uppercase tracking-wide text-slate-500`}
+                className={`sticky top-0 z-10 grid ${BOARD_GRID_COLS} h-[34px] items-center border-b border-base-700 bg-base-900 ${LABEL_CLASS}`}
               >
                 <div role="columnheader" className="flex items-center justify-center px-2">
                   #
@@ -705,8 +768,12 @@ export function Draft() {
                       key={p.PlayerID}
                       role="row"
                       onClick={() => setSelectedId(p.PlayerID)}
+                      // Round 100 — Tyler's "Prompt 1" accent #3: literal zebra hex (#101725/#131a29) and
+                      // selected-row tint (rgba(124,92,240,.16), via `primary` at the mockup's own alpha)
+                      // in place of round 99's `base-900`/`base-800/40`/`bg-primary/15`, matching the
+                      // mockup's own embedded striping function exactly.
                       className={`grid ${BOARD_GRID_COLS} h-[38px] cursor-pointer items-center border-b border-base-800 text-sm hover:bg-base-800/70 ${
-                        selectedId === p.PlayerID ? "bg-primary/15" : i % 2 === 0 ? "bg-base-900" : "bg-base-800/40"
+                        selectedId === p.PlayerID ? "bg-primary/[.16]" : i % 2 === 0 ? "bg-[#131a29]" : "bg-[#101725]"
                       }`}
                     >
                       <div role="cell" className="px-2 text-center text-slate-500">
@@ -721,8 +788,8 @@ export function Draft() {
                       </div>
                       <div role="cell" className="flex min-w-0 items-center gap-1.5 px-2">
                         <span className="truncate font-medium">{playerFullName(p)}</span>
-                        {combineInvitedIds?.has(p.PlayerID) && <StatusPill label="COMBINE" tone="info" />}
-                        {tie && <TieBadge tie={tie} />}
+                        {combineInvitedIds?.has(p.PlayerID) && <BoardPill label="CMB" tone="teal" />}
+                        {tie && <BoardPill label={TIE_TYPE_ABBR[tie.type]} tone="yellow" />}
                       </div>
                       <div role="cell" className="truncate px-2 text-center text-slate-400">
                         {p.homeState}
@@ -780,16 +847,45 @@ export function Draft() {
               )}
             </div>
             {selected && isMyTurn && (
-              <div className="shrink-0 border-t border-base-700 p-3">
+              <div className="shrink-0 border-t border-base-700 bg-base-950 p-3">
+                {/* Round 100 — Tyler's "Prompt 1" accent #5: full-width gradient Draft button (primary →
+                    primary-dark, the mockup's own two-stop treatment using this app's actual token hex
+                    rather than the mockup's literal slightly-different purple) plus Shortlist/Pass
+                    beneath. Shortlist/Pass render — satisfying "add the missing visual accent" — but
+                    stay disabled with a disclosing tooltip: a grep of this codebase turns up no
+                    shortlist/watchlist/pass mechanic anywhere to wire them to, and this same file's own
+                    round-99 precedent (the mockup's "Hide drafted" toggle) was to own a gap like this
+                    rather than fake a working control. Flagged in this round's addendum for Tyler to
+                    weigh in on building the real thing. */}
                 <button
                   onClick={() => {
                     confirmDraftPick(selected.PlayerID);
                     setSelectedId(null);
                   }}
-                  className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
+                  className="w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg"
+                  style={{
+                    backgroundImage: "linear-gradient(90deg, #6d5ce8, #5443c4)",
+                    boxShadow: "0 2px 12px rgba(109,92,232,.35)",
+                  }}
                 >
                   Draft {playerFullName(selected)}
                 </button>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  <button
+                    disabled
+                    title="Shortlisting isn't wired up yet — this is a placeholder for a future round."
+                    className="cursor-not-allowed rounded-lg border border-white/10 bg-[#1a2233] px-2 py-2 text-[11px] font-semibold text-slate-300 opacity-50"
+                  >
+                    Add to Shortlist
+                  </button>
+                  <button
+                    disabled
+                    title="Passing isn't wired up yet — this is a placeholder for a future round."
+                    className="cursor-not-allowed rounded-lg border border-white/10 bg-[#1a2233] px-2 py-2 text-[11px] font-semibold text-slate-300 opacity-50"
+                  >
+                    Pass
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -885,21 +981,28 @@ function PickTicker({
     // fixed-height strip, so wrapping stays allowed there (same as every other pre-round-99 screen). The
     // `border-t`/`pt-3` this used to need to separate itself from the header card above are gone now
     // that it isn't stacked under one anymore.
-    <div className="flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:overflow-x-auto">
+    <div className="scrollbar-none flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:overflow-x-auto">
       {/* Round 98 — Tyler: "for... the other players picked by other clubs I should have the option to
           open the player profile by clicking their names." Same `getPlayerById`-fallback pattern as
-          "Your picks tonight" above. */}
-      {recent.map((rec) => {
+          "Your picks tonight" above. Round 100 — Tyler's "Prompt 1" accent #2: past picks fade from 55%
+          to 75% opacity (oldest → most recent) rather than a flat opacity on every past chip, matching
+          the mockup's own graduated fade; `scrollbar-none` (see index.css) hides the track while keeping
+          the horizontal scroll Round 99 relied on to reach the live pick. */}
+      {recent.map((rec, i) => {
         const pickedPlayer = getPlayerById(rec.playerId);
+        const pastOpacity = 0.55 + (i / Math.max(recent.length - 1, 1)) * 0.2;
         return (
           <div
             key={rec.pickNumber}
             title={`Pick ${rec.pickNumber} · ${rec.clubName}`}
+            style={{ opacity: pastOpacity }}
             className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 ${
               rec.clubName === myClub ? "bg-primary/10 ring-1 ring-primary/40" : "bg-base-800"
             }`}
           >
-            <span className="text-[10px] text-slate-500">#{rec.pickNumber}</span>
+            {/* Round 100 — matches the mockup's own literal ticker-numeral spec (9.5px IBM Plex Mono,
+                #6f7c93) via the shared `LABEL_CLASS`. */}
+            <span className={LABEL_CLASS}>#{rec.pickNumber}</span>
             <ClubBadgeByName name={rec.clubName} size="sm" />
             {pickedPlayer ? (
               <PlayerLink player={pickedPlayer} className="max-w-[8rem] truncate text-xs font-medium">
@@ -920,12 +1023,15 @@ function PickTicker({
             clubOnClock === myClub ? "bg-primary text-white" : "bg-accent/10 ring-1 ring-accent/40"
           }`}
         >
-          <span className="text-[10px] uppercase tracking-wide opacity-80">#{currentPickNumber}</span>
+          {/* Round 100 — Tyler's "Prompt 1" accent #2: the pick number folds into the "#N · YOUR PICK"
+              copy below for the user's own live pick (matching the mockup's chip verbatim), so the
+              separate numeral badge only shows for the not-mine case, where that copy doesn't carry it. */}
+          {clubOnClock !== myClub && <span className={LABEL_CLASS}>#{currentPickNumber}</span>}
           <ClubBadgeByName name={clubOnClock} size="sm" />
           {/* Round 98 — Tyler: "The 'On the Clock' is not required. I have no intention of bringing in a
               clock feature." Reworded to convey the same "whose turn" info without clock/timer framing. */}
-          <span className={`text-xs font-semibold ${clubOnClock === myClub ? "" : "text-accent-light"}`}>
-            {clubOnClock === myClub ? "Your pick now" : "Picking now"}
+          <span className={`text-xs font-semibold ${clubOnClock === myClub ? "tracking-wide" : "text-accent-light"}`}>
+            {clubOnClock === myClub ? `#${currentPickNumber} · YOUR PICK` : "Picking now"}
           </span>
         </div>
       )}
@@ -940,10 +1046,13 @@ function PickTicker({
             key={pickNumber}
             title={`Pick ${pickNumber} · ${club}${need ? ` · Likely: ${need}` : ""}`}
             className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 ${
-              club === myClub ? "bg-primary/10 ring-1 ring-primary/40" : "bg-base-800"
+              // Round 100 — Tyler's "Prompt 1" accent #2: "your later picks get a dashed red border,"
+              // replacing the plain purple ring this used pre-round-100 so a future own-pick reads as
+              // "watch this one coming up" distinctly from a past own-pick's steady purple tint above.
+              club === myClub ? "border border-dashed border-[#ff6b6b] bg-base-800" : "bg-base-800"
             }`}
           >
-            <span className="text-[10px] text-slate-500">#{pickNumber}</span>
+            <span className={LABEL_CLASS}>#{pickNumber}</span>
             <ClubBadgeByName name={club} size="sm" />
           </div>
         );
@@ -1117,6 +1226,10 @@ function ProspectProfile({
   hideHeader?: boolean;
 }) {
   const band = scoutOvrBand(prospect, revealedAttrs.length, scoutAccuracy);
+  // Round 100 — Tyler's "Prompt 1" accent #5: the 3-up stat-tile row needs a Confidence figure alongside
+  // Scout OVR/Potential; `scoutConfidence` is the same call `ProspectHeader`/the board's `ConfidenceBar`
+  // already make for this prospect, just not previously surfaced here too.
+  const conf = scoutConfidence(prospect, revealedAttrs.length, scoutAccuracy);
   const scouted = revealedAttrs.length > 0;
 
   return (
@@ -1127,52 +1240,86 @@ function ProspectProfile({
         {/* Round 94 Part 2, Tyler: "a section which shows the 1 or 2 sentence player writeup summary."
             `scoutingSummaryFor` truncates the exact same text `scoutingReportFor` shows in full further
             down this panel — one source of truth, so the two can never disagree. */}
-        <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Summary</div>
+        <div className={`mb-1 ${LABEL_CLASS}`}>Summary</div>
         <p className="text-sm leading-relaxed text-slate-300">
           {scouted ? scoutingSummaryFor(prospect, tier) : "Scout at least one attribute to unlock a summary."}
         </p>
       </div>
 
       <div>
-        <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Scouting tier</div>
+        <div className={`mb-1 ${LABEL_CLASS}`}>Scouting tier</div>
         {scouted ? <ScoutingTierLabel tier={tier} /> : <span className="text-sm text-slate-500">Unknown until scouted</span>}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-center text-sm">
-        <div>
-          <div className="text-lg font-semibold tabular-nums">
+      {/* Round 100 — Tyler's "Prompt 1" accent #5: 3-up Scout OVR / Potential / Confidence tiles,
+          replacing the old 2-col plain-text pair. Card background/border and the 8.5px/.7px-tracking
+          mono label are the mockup's own literal values for this specific tile (its "all-caps labels"
+          directive elsewhere in this round is 9.5px/1.1px — `LABEL_CLASS` — but this tile's own markup
+          in the mockup is a deliberately smaller variant, kept as its own literal here rather than
+          forced into that shared constant). Confidence's number reuses `confidenceColor` — same
+          teal/yellow/red bands as the board's bar, so the colour language matches across the screen. */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-lg border border-white/5 bg-[#151d2e] p-2 text-center">
+          <div className="font-display text-lg font-bold leading-none">
             {band.low}-{band.high}
           </div>
-          <div className="text-xs text-slate-500">Scout OVR</div>
+          <div className="mt-1 font-mono text-[8.5px] uppercase tracking-[0.7px] text-[#6f7c93]">Scout OVR</div>
         </div>
-        <div>
-          <div className="text-lg font-semibold tabular-nums">{revealedAttrs.length === 0 ? "?" : potentialLetterGrade(prospect.POT)}</div>
-          <div className="text-xs text-slate-500">Potential</div>
+        <div className="rounded-lg border border-white/5 bg-[#151d2e] p-2 text-center">
+          <div className={`font-display text-lg font-bold leading-none ${revealedAttrs.length === 0 ? "text-[#4e5872]" : ""}`}>
+            {revealedAttrs.length === 0 ? "?" : potentialLetterGrade(prospect.POT)}
+          </div>
+          <div className="mt-1 font-mono text-[8.5px] uppercase tracking-[0.7px] text-[#6f7c93]">Potential</div>
+        </div>
+        <div className="rounded-lg border border-white/5 bg-[#151d2e] p-2 text-center">
+          <div className="font-display text-lg font-bold leading-none" style={{ color: confidenceColor(conf) }}>
+            {conf}%
+          </div>
+          <div className="mt-1 font-mono text-[8.5px] uppercase tracking-[0.7px] text-[#6f7c93]">Confidence</div>
         </div>
       </div>
 
+      {/* Round 100 — accent #5: "a yellow-tinted advisory box when scout budget is zero." Gated also on
+          this prospect actually having unrevealed attributes left — once every headline attribute is
+          already scouted, a budget-exhausted warning about THIS player has nothing left to warn about,
+          even if the club's season-wide budget is spent (a judgment call, flagged in this round's
+          addendum since Tyler's text didn't spell out that second condition). */}
+      {budgetRemaining <= 0 && revealedAttrs.length < SCOUT_HEADLINE_ATTRIBUTES.length && (
+        <div
+          className="rounded-lg border p-2.5 text-[11.5px] leading-relaxed"
+          style={{ backgroundColor: "rgba(240,196,25,.07)", borderColor: "rgba(240,196,25,.2)", color: "#e3d19a" }}
+        >
+          Scout budget exhausted for this draft — {SCOUT_HEADLINE_ATTRIBUTES.length - revealedAttrs.length} of {SCOUT_HEADLINE_ATTRIBUTES.length}{" "}
+          attributes will stay hidden for {playerFullName(prospect)}.
+        </div>
+      )}
+
       <div>
-        <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-slate-400">
+        <div className={`mb-2 flex items-center justify-between ${LABEL_CLASS}`}>
           <span>
             Attributes ({revealedAttrs.length}/{SCOUT_HEADLINE_ATTRIBUTES.length} revealed)
           </span>
           <span className="text-slate-500">Scout budget: {budgetRemaining} left</span>
         </div>
-        <div className="space-y-1.5">
+        {/* Round 100 — accent #5: attributes rebuilt as a 2-up grid of small cards, each carrying a
+            compact "+1" chip in place of the old full-width "Scout +1" text button — same `onScout`
+            wiring and budget-exhausted disabled state, purely a visual rebuild. */}
+        <div className="grid grid-cols-2 gap-1">
           {SCOUT_HEADLINE_ATTRIBUTES.map((attr) => {
             const isRevealed = revealedAttrs.includes(attr);
             return (
-              <div key={attr} className="flex items-center justify-between text-sm">
-                <span className="text-slate-400">{HEADLINE_ATTR_LABELS[attr]}</span>
+              <div key={attr} className="flex items-center justify-between gap-1.5 rounded-md border border-white/5 bg-[#151d2e] px-2 py-1.5">
+                <span className="truncate text-[11.5px] font-medium text-[#c3ccdd]">{HEADLINE_ATTR_LABELS[attr]}</span>
                 {isRevealed ? (
-                  <span className="tabular-nums font-semibold">{prospect[attr]}</span>
+                  <span className="shrink-0 tabular-nums text-sm font-semibold">{prospect[attr]}</span>
                 ) : (
                   <button
                     disabled={budgetRemaining <= 0}
                     onClick={() => onScout(attr)}
-                    className="rounded bg-base-700 px-2 py-0.5 text-xs font-semibold hover:bg-base-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    title={`Scout ${HEADLINE_ATTR_LABELS[attr]}`}
+                    className="shrink-0 rounded bg-[#242e44] px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    Scout +1
+                    +1
                   </button>
                 )}
               </div>
@@ -1182,7 +1329,7 @@ function ProspectProfile({
       </div>
 
       <div>
-        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Scouting report</div>
+        <div className={`mb-1.5 ${LABEL_CLASS}`}>Scouting report</div>
         {scouted ? (
           <p className="whitespace-pre-line text-sm leading-relaxed text-slate-300">{scoutingReportFor(prospect, tier)}</p>
         ) : (
@@ -1191,12 +1338,12 @@ function ProspectProfile({
       </div>
 
       <div>
-        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Plays like</div>
+        <div className={`mb-1.5 ${LABEL_CLASS}`}>Plays like</div>
         {scouted ? <PlaysLikeLine prospect={prospect} /> : <p className="text-sm text-slate-500">Scout at least one attribute to unlock a comp.</p>}
       </div>
 
       <div>
-        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Predicted draft range</div>
+        <div className={`mb-1.5 ${LABEL_CLASS}`}>Predicted draft range</div>
         {(() => {
           const range = predictedDraftRange(prospect, pool, scoutAccuracy);
           return (
@@ -1206,7 +1353,7 @@ function ProspectProfile({
       </div>
 
       <div>
-        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Mock draft outlets</div>
+        <div className={`mb-1.5 ${LABEL_CLASS}`}>Mock draft outlets</div>
         <div className="space-y-1 text-sm">
           {MOCK_OUTLETS.map((outlet: MockOutlet) => {
             const range = mockProjection(prospect, pool, outlet);
@@ -1223,7 +1370,14 @@ function ProspectProfile({
       </div>
 
       {onDraft && (
-        <button onClick={onDraft} className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
+        // Round 100 — same gradient treatment as the cockpit's pinned Draft button (see `Draft()`'s
+        // docked-column footer), so the button reads identically wherever this shared component renders
+        // it — here, that's the "Full profile" modal.
+        <button
+          onClick={onDraft}
+          className="w-full rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-lg"
+          style={{ backgroundImage: "linear-gradient(90deg, #6d5ce8, #5443c4)", boxShadow: "0 2px 12px rgba(109,92,232,.35)" }}
+        >
           Draft {playerFullName(prospect)}
         </button>
       )}

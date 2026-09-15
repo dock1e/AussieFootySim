@@ -1,5 +1,6 @@
 import type { MatchDayCoachRole } from "../types/coach.ts";
 import type { TacticGroup } from "./tactics.ts";
+import type { ContestType } from "./contestTypes.ts";
 
 /**
  * Match-Day Line Coach Direction — Sep 2026 round 84. See [[Match-Day Line
@@ -321,4 +322,47 @@ export function lineCoachFeedback(role: MatchDayCoachRole, winRate: number): str
   if (winRate < LINE_FEEDBACK_LOW_THRESHOLD) return LOW_FEEDBACK[role];
   if (winRate > LINE_FEEDBACK_HIGH_THRESHOLD) return HIGH_FEEDBACK;
   return MID_FEEDBACK;
+}
+
+// --- Recommended focus — Sep 2026 [[Quarter-Time Decision Room]] --------------------------------
+
+/**
+ * "Which of this line's real sub-stats is worst" -> "which named focus targets it" — real 1:1 pairs
+ * already implied by this file's own per-role sections above (Defensive Line's spoiling/intercepts
+ * both address `markContested`/`groundBall`; Forward Line's three named focuses map 1:1 onto its
+ * three sub-stats; Midfield's clearance/groundBall map onto their own two focuses; Ruck and
+ * Stoppage's raw-hitout/aerial map onto theirs). Deliberately excludes Midfield's "Focus on Ball
+ * Use" — a disposal-execution lever, not a contest win rate, so there's no quarter-scoped stat that
+ * should ever recommend it; it stays reachable only as a manual pick.
+ */
+const FOCUS_FOR_WORST_SUB_STAT: Record<MatchDayCoachRole, Partial<Record<ContestType, LineCoachFocus>>> = {
+  "Defensive Line": { markContested: "Focus on Intercepts", groundBall: "Focus on Intercepts", tackle: "Focus on Tackling" },
+  "Forward Line": { markLead: "Focus on Leading", markContested: "Focus on Contested Marking", tackle: "Focus on Forward Pressure" },
+  Midfield: { clearance: "Focus on Clearances", groundBall: "Focus on Contested Possession" },
+  "Ruck and Stoppage": { ruck: "Focus on Winning the Tap", markContested: "Focus on Around-the-Ground Work" },
+};
+
+/**
+ * A real, computed recommendation, not a canned suggestion — `subRates` is this line's own real
+ * quarter-scoped per-sub-stat win rates (`engine/summary.ts`'s `lineQuarterWinRates`, keyed by the
+ * same `ContestType` names `engine/match.ts`'s `LINE_FEEDBACK_FIELDS` already lists for this role);
+ * this file stays match.ts-free (see its own top comment), so the caller does the real box-score
+ * arithmetic and hands over plain numbers. Picks whichever listed sub-stat is worst and maps it to a
+ * focus via `FOCUS_FOR_WORST_SUB_STAT`; `null` when nothing qualifies (no sub-stat has recorded a
+ * real attempt yet this quarter) or when even the worst sub-stat still clears
+ * `LINE_FEEDBACK_LOW_THRESHOLD` — a line that isn't genuinely struggling gets no recommendation,
+ * same severity gate the feedback classifier and the Quarter-Time Decision Room's own problem-card
+ * ranking both already use.
+ */
+export function recommendedFocusFor(role: MatchDayCoachRole, subRates: Partial<Record<ContestType, number>>): LineCoachFocus | null {
+  let worstStat: ContestType | null = null;
+  let worstRate = Infinity;
+  for (const [stat, rate] of Object.entries(subRates) as [ContestType, number][]) {
+    if (rate < worstRate) {
+      worstRate = rate;
+      worstStat = stat;
+    }
+  }
+  if (worstStat === null || worstRate >= LINE_FEEDBACK_LOW_THRESHOLD) return null;
+  return FOCUS_FOR_WORST_SUB_STAT[role][worstStat] ?? null;
 }

@@ -3,6 +3,8 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import type { MatchTeam } from "../engine/team";
 import { benchPlayers } from "../engine/team";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
+import type { Player } from "../types/player";
+import type { Side } from "../engine/zones";
 import {
   computeDotPositions,
   ballTargetFor,
@@ -792,7 +794,11 @@ function BenchStrip({ home, away }: { home: MatchTeam; away: MatchTeam }) {
   if (homeBench.length === 0 && awayBench.length === 0) return null;
 
   return (
-    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+    // `shrink-0` — Sep 2026 [[LiveMatch Cockpit Rebuild]] bugfix: the canvas above is now a
+    // flex-shrink/grow sibling (see MatchCanvas's own root doc comment) rather than a fixed-width
+    // block, so without this the flex algorithm could squeeze the bench strip too when space is
+    // tight. It should always keep its own natural (small, text-only) height.
+    <div className="mt-2 shrink-0 grid grid-cols-2 gap-2 text-[11px]">
       <BenchSide label={`${home.name} bench`} players={homeBench} color={HOME_COLOR} align="left" />
       <BenchSide label={`${away.name} bench`} players={awayBench} color={AWAY_COLOR} align="right" />
     </div>
@@ -851,6 +857,17 @@ export interface MatchCanvasProps {
   /** Each side's current game style — Aug 2026, feeds `computeDotPositions`'s new static positional bias (see engine/ground.ts's `gameStyleAnchorBias`). Both default to Balanced (zero bias, byte-identical rendering to before this prop existed) so every caller that doesn't know or care about game style keeps working unchanged. */
   homeStyle?: GameStyle;
   awayStyle?: GameStyle;
+  /**
+   * Sep 2026 — [[LiveMatch Cockpit Rebuild]]: opens the in-match stats drawer
+   * (`PlayerMatchStatsModal`, LiveMatch.tsx) for whichever ground token was
+   * clicked. Reuses the exact same hit-test radius/logic the hover tooltip
+   * below already used (`dotAt`) — clicking is just "hover, but on
+   * mousedown, and resolved to a real `Player` instead of a `DotPosition`."
+   * Optional, same "no dummy no-op needed" reasoning as every other prop
+   * here — no caller wired this before this round, since no ground token
+   * was clickable at all until now.
+   */
+  onSelectPlayer?: (player: Player, side: Side) => void;
 }
 
 export function MatchCanvas({
@@ -862,6 +879,7 @@ export function MatchCanvas({
   isPlaying = true,
   homeStyle = DEFAULT_GAME_STYLE,
   awayStyle = DEFAULT_GAME_STYLE,
+  onSelectPlayer,
 }: MatchCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<DotPosition | null>(null);
@@ -1047,14 +1065,22 @@ export function MatchCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately mount-only, see comment above
   }, []);
 
-  function handleMouseMove(e: ReactMouseEvent<HTMLCanvasElement>) {
+  /**
+   * Shared by hover (`handleMouseMove`) and click (`handleClick`) — resolves
+   * a raw client-space mouse position to the nearest currently-drawn dot
+   * within the existing 18px virtual-px hover radius, or `null`. Extracted
+   * Sep 2026 ([[LiveMatch Cockpit Rebuild]]) when click-to-select needed the
+   * exact same hit-test the hover tooltip already did; previously inlined
+   * only in `handleMouseMove` since hover was the only consumer.
+   */
+  function dotAt(clientX: number, clientY: number): DotPosition | null {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     const scaleX = GROUND_WIDTH / rect.width;
     const scaleY = GROUND_HEIGHT / rect.height;
-    const mx = (e.clientX - rect.left) * scaleX;
-    const my = (e.clientY - rect.top) * scaleY;
+    const mx = (clientX - rect.left) * scaleX;
+    const my = (clientY - rect.top) * scaleY;
 
     let closest: DotPosition | null = null;
     let closestDist = 18; // hover radius in virtual px
@@ -1065,21 +1091,63 @@ export function MatchCanvas({
         closestDist = dist;
       }
     }
-    setHovered(closest);
+    return closest;
+  }
+
+  function handleMouseMove(e: ReactMouseEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    setHovered(dotAt(e.clientX, e.clientY));
     setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }
+
+  function handleClick(e: ReactMouseEvent<HTMLCanvasElement>) {
+    if (!onSelectPlayer) return;
+    const dot = dotAt(e.clientX, e.clientY);
+    if (!dot) return;
+    const roster = dot.side === "home" ? home : away;
+    const player = roster.players.find((p) => p.PlayerID === dot.playerId);
+    if (player) onSelectPlayer(player, dot.side);
   }
 
   const hoveredLine = hovered ? liveBoxScore?.[hovered.playerId] : undefined;
 
   return (
-    <div className="relative">
+    /*
+     * Sep 2026 [[LiveMatch Cockpit Rebuild]] bugfix: this root was plain `"relative"`, with the
+     * canvas below at `w-full` — correct when this component's container width was the only
+     * constraint (the pre-cockpit layout), but in the cockpit's 3-column body the centre column's
+     * available HEIGHT is the binding constraint instead. `w-full` scaled the canvas to the
+     * column's ~836px width regardless of vertical budget, rendering ~635px tall against a column
+     * that only had ~541px total (confirmed live via getBoundingClientRect() — the excess was
+     * silently clipped by the column's own `overflow-hidden`, along with the play-by-play strip
+     * and speed controls beneath it).
+     *
+     * Fixed by flipping which axis drives the scaling: this root is now a `flex-col` whose height
+     * comes from its LiveMatch.tsx caller (`h-full`, itself now `min-h-0 flex-1` — see that call
+     * site's own doc comment), and the canvas is a flex-shrink/grow item (`min-h-0 flex-1`) instead
+     * of a fixed-width one. As a replaced element with intrinsic `width`/`height` attributes
+     * (`GROUND_WIDTH`/`GROUND_HEIGHT` below) and no explicit CSS width, the browser derives the
+     * canvas's rendered width from whatever height flexbox gives it, preserving the true oval
+     * aspect ratio for every one of the 12 configured grounds (`GROUND_HEIGHT` varies per ground —
+     * see `engine/ground.ts` — so this had to stay ratio-driven, not a hardcoded box). `max-w-full`
+     * is a safety clamp for the rare case a ground's ratio would otherwise overflow the column's
+     * width. `items-start` (not the flex default `stretch`, and deliberately not `center`) keeps
+     * the canvas's own top-left corner exactly at this root's — preserving the existing hover
+     * tooltip's positioning math below, which assumes exactly that. `BenchStrip` keeps its natural
+     * size via its own new `shrink-0` (see that component) so the two share the available height
+     * correctly instead of the canvas claiming all of it before BenchStrip gets a look-in.
+     */
+    <div className="relative flex h-full min-h-0 flex-col items-start gap-1">
       <canvas
         ref={canvasRef}
         width={GROUND_WIDTH}
         height={GROUND_HEIGHT}
-        className="w-full rounded-card border border-base-600"
+        className={`min-h-0 max-w-full flex-1 rounded-card border border-base-600 ${onSelectPlayer ? "cursor-pointer" : ""}`}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setHovered(null)}
+        onClick={handleClick}
       />
       {hovered && (
         <div

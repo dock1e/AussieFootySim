@@ -16,8 +16,15 @@ import type { GameStyle } from "../engine/tactics";
  * "Chip & Mark" (formerly "Slow the Pace" here) was removed Aug 2026 — Tyler:
  * it "looks like it was going to be a copy of the Spread the Ground game
  * style" — see [[Tactics and Positional Play]] Part 7.
+ *
+ * Sep 2026 [[Quarter-Time Decision Room]]: `LiveMatch.tsx`'s quarter-time break no longer renders
+ * this component directly — the new decision room builds its own 5-card grid (with modelled-impact
+ * bars, and select-then-confirm rather than select-and-resume) straight from `COACHS_CALL_OPTIONS`
+ * below, now exported so both call sites share one real list rather than a second, driftable copy.
+ * The component itself is untouched and still exported/usable — nothing about its own behaviour
+ * changed, only which screen renders the options data.
  */
-const COACHS_CALL_OPTIONS: { style: GameStyle; label: string; blurb: string }[] = [
+export const COACHS_CALL_OPTIONS: { style: GameStyle; label: string; blurb: string }[] = [
   { style: "Balanced", label: "Trust the Players", blurb: "No bias — keep playing your natural game." },
   {
     style: "Defensive Flood",

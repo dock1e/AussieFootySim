@@ -47,6 +47,13 @@ export default {
       fontFamily: {
         display: ["'Barlow Condensed'", "'Oswald'", "sans-serif"],
         sans: ["'Inter'", "system-ui", "sans-serif"],
+        // Round 100 (Sep 2026), Draft cockpit accent polish — Tyler's spec calls for
+        // Barlow (not Inter) on general Draft-screen UI text and IBM Plex Mono for
+        // all-caps micro-labels. Both are now actually loaded (see index.html); scoped
+        // as new tokens rather than redefining `sans`/`display` so no other screen's
+        // typography shifts as a side effect of this round.
+        barlow: ["'Barlow'", "system-ui", "sans-serif"],
+        mono: ["'IBM Plex Mono'", "ui-monospace", "monospace"],
       },
       borderRadius: {
         card: "0.75rem",

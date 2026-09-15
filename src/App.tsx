@@ -90,7 +90,19 @@ export default function App() {
   // specifically on `screen === "draft"` (not on draft-window state) so every other screen's shell is
   // completely untouched, and only active at `lg:` and above — below that this screen falls back to
   // the exact same scrollable, capped-width shell every other screen already uses.
-  const isDraftCockpit = screen === "draft";
+  //
+  // Sep 2026 — [[LiveMatch Cockpit Rebuild]] needs the identical shell for the live in-match screen,
+  // but a bare `screen === "match"` check (mirroring the line above verbatim) would be wrong: unlike
+  // Draft's cockpit, which was built to house every one of Draft's own internal states, only ONE of
+  // LiveMatch's states (a live/paused/break in-progress match) is the new cockpit — the club-picker
+  // setup screen, MatchPreparation, and FullTimeResult are untouched, ordinary scrollable screens, and
+  // FullTimeResult in particular is genuinely long (full box score, margin chart). Clipping all three
+  // under `overflow-hidden` would be a real regression nobody asked for. `matchCockpitActive` is set by
+  // LiveMatch itself (`onCockpitActiveChange`) only while it's actually rendering the cockpit JSX, off
+  // for every other one of its states and on unmount — so this stays a precise, per-state gate rather
+  // than the Draft screen's coarser whole-screen one.
+  const [matchCockpitActive, setMatchCockpitActive] = useState(false);
+  const isCockpitScreen = screen === "draft" || (screen === "match" && matchCockpitActive);
   const myClub = useGameStore((s) => s.myClub);
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
@@ -124,9 +136,9 @@ export default function App() {
 
   return (
     <div
-      className={`mx-auto min-h-screen max-w-6xl px-4 py-6 ${isDraftCockpit ? "lg:flex lg:h-screen lg:max-w-none lg:flex-col lg:overflow-hidden lg:py-4" : ""}`}
+      className={`mx-auto min-h-screen max-w-6xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-screen lg:max-w-none lg:flex-col lg:overflow-hidden lg:py-4" : ""}`}
     >
-      <header className={`mb-6 ${isDraftCockpit ? "lg:mb-3 lg:shrink-0" : ""}`}>
+      <header className={`mb-6 ${isCockpitScreen ? "lg:mb-3 lg:shrink-0" : ""}`}>
         {/* Logo + SaveMenu get their own row, deliberately separate from nav
             below — see the regression this fixed: with both in one
             `flex-wrap` row, nav growing to 11 tabs (Position Switch) was
@@ -178,7 +190,7 @@ export default function App() {
         </nav>
       </header>
 
-      <main key={poolVersion} className={isDraftCockpit ? "lg:min-h-0 lg:flex-1 lg:overflow-hidden" : undefined}>
+      <main key={poolVersion} className={isCockpitScreen ? "lg:min-h-0 lg:flex-1 lg:overflow-hidden" : undefined}>
         {screen === "dashboard" && (
           <Dashboard
             onGoToSelection={() => setScreen("selection")}
@@ -189,7 +201,7 @@ export default function App() {
         {screen === "squad" && <SquadList players={squad} liveCondition={liveCondition} />}
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
-        {screen === "match" && <LiveMatch />}
+        {screen === "match" && <LiveMatch onCockpitActiveChange={setMatchCockpitActive} />}
         {screen === "listNeeds" && (
           <ListNeeds
             onGoToCombine={() => setScreen("combine")}

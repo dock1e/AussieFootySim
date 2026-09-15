@@ -1296,12 +1296,39 @@ function recordContest(ctx: Ctx, type: ContestType, winner: Player, loser: Playe
 // Continues the section started near conditionMultiplierFor above — split across the file only
 // because this half needs CONTEST_STAT_FIELDS, defined just above, which those other helpers don't.
 
-/** Which of `CONTEST_STAT_FIELDS`' attempts/wins pairs feed each match-day line coach's own feedback win-rate — each line's own real, already-tracked "how are we doing at our job" metrics. See [[Match-Day Line Coach Direction]]'s own "Feedback sentences" section. Defined here (not lineCoaching.ts) since it needs the real `BoxScoreLine`/`CONTEST_STAT_FIELDS` types — lineCoaching.ts itself only ever sees a plain computed win-rate number, see that file's own top comment. */
-const LINE_FEEDBACK_FIELDS: Record<MatchDayCoachRole, ReadonlyArray<{ attempts: keyof BoxScoreLine; wins: keyof BoxScoreLine }>> = {
-  "Defensive Line": [CONTEST_STAT_FIELDS.markContested, CONTEST_STAT_FIELDS.groundBall, CONTEST_STAT_FIELDS.tackle],
-  "Forward Line": [CONTEST_STAT_FIELDS.markLead, CONTEST_STAT_FIELDS.markContested, CONTEST_STAT_FIELDS.tackle],
-  Midfield: [CONTEST_STAT_FIELDS.clearance, CONTEST_STAT_FIELDS.groundBall],
-  "Ruck and Stoppage": [CONTEST_STAT_FIELDS.ruck, CONTEST_STAT_FIELDS.markContested],
+/**
+ * Which of `CONTEST_STAT_FIELDS`' attempts/wins pairs feed each match-day line coach's own feedback
+ * win-rate — each line's own real, already-tracked "how are we doing at our job" metrics. See
+ * [[Match-Day Line Coach Direction]]'s own "Feedback sentences" section. Defined here (not
+ * lineCoaching.ts) since it needs the real `BoxScoreLine`/`CONTEST_STAT_FIELDS` types — lineCoaching.ts
+ * itself only ever sees a plain computed win-rate number, see that file's own top comment.
+ *
+ * Sep 2026 [[Quarter-Time Decision Room]]: each entry now also carries its own `name` (the
+ * `ContestType` it's drawn from) alongside `attempts`/`wins` — exported so `engine/summary.ts`'s new
+ * `lineQuarterWinRates` can read the SAME role -> sub-stat grouping this file's own blended
+ * `lineFeedbackFor` already uses, rather than a second, driftable copy of "which stats belong to
+ * which line." `sumContestFields` below only ever reads `.attempts`/`.wins`, so this is a purely
+ * additive widening — `lineFeedbackFor`'s own blended-sum behaviour is unchanged.
+ */
+export const LINE_FEEDBACK_FIELDS: Record<MatchDayCoachRole, ReadonlyArray<{ name: ContestType; attempts: keyof BoxScoreLine; wins: keyof BoxScoreLine }>> = {
+  "Defensive Line": [
+    { name: "markContested", ...CONTEST_STAT_FIELDS.markContested },
+    { name: "groundBall", ...CONTEST_STAT_FIELDS.groundBall },
+    { name: "tackle", ...CONTEST_STAT_FIELDS.tackle },
+  ],
+  "Forward Line": [
+    { name: "markLead", ...CONTEST_STAT_FIELDS.markLead },
+    { name: "markContested", ...CONTEST_STAT_FIELDS.markContested },
+    { name: "tackle", ...CONTEST_STAT_FIELDS.tackle },
+  ],
+  Midfield: [
+    { name: "clearance", ...CONTEST_STAT_FIELDS.clearance },
+    { name: "groundBall", ...CONTEST_STAT_FIELDS.groundBall },
+  ],
+  "Ruck and Stoppage": [
+    { name: "ruck", ...CONTEST_STAT_FIELDS.ruck },
+    { name: "markContested", ...CONTEST_STAT_FIELDS.markContested },
+  ],
 };
 
 /** Sums specific attempts/wins field pairs across a set of players' box lines — a narrower, match.ts-local cousin of summary.ts's own `sumTeam` (which sums every `BoxScoreLine` field wholesale); this only ever needs the 2-3 fields one line coach's feedback cares about. */

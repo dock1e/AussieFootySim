@@ -451,3 +451,48 @@ export function gameStyleForwardEntryMultiplier(style: GameStyle): number {
 export function opponentFloodGoalAccuracyMultiplier(defendingTeamStyle: GameStyle): number {
   return defendingTeamStyle === "Defensive Flood" ? 0.9 : 1;
 }
+
+// --- Modelled impact summary — Sep 2026 [[Quarter-Time Decision Room]] --------------------------
+
+export interface GameStyleImpact {
+  /** Percentage-point deltas, signed so positive always reads as "more" — the UI decides colour/direction-labelling, this only returns the real computed number. */
+  ourScoring: number;
+  /** Negative = less of their scoring (good for us), matching `ourScoring`'s own sign convention. */
+  theirScoring: number;
+  fitnessCost: number;
+}
+
+/**
+ * A disclosed derived proxy, not a separately hand-tuned number per style — every figure is composed
+ * entirely from this file's own already-shipped, already-`match.ts`-called multiplier functions
+ * above, so nothing here can silently drift from what the engine actually does. `match.ts` has no
+ * dedicated per-`GameStyle` fitness multiplier today (only the line-coach "Demand They Dig Deeper"
+ * lever drains fitness for real — see `lineCoaching.ts`'s `digDeeperFitnessDrainMultiplier`), so
+ * `fitnessCost` is explicitly an intensity proxy, not a wired mechanic — see the design note's own
+ * "What's real vs. what's a disclosed derived proxy" section.
+ *
+ * Formula, and the full real 5-style table it produces (kept here as a comment so the two can't
+ * silently drift apart — see the design note for the full derivation):
+ *   ourScoring   = (forwardEntry - 1)*100 + (disposal - 1)*100
+ *   theirScoring = -(avg(defender(true), defender(false)) - 1)*100 + (floodAccuracy - 1)*100
+ *   fitnessCost  = (disposal - 1)*100 + (1 - contestChance)*100
+ *
+ *   Balanced (Trust the Players):        0 /   0 /  0
+ *   Defensive Flood (Focus on Defence): -15 / -25 /  0
+ *   Spread the Ground (Run & Carry):    +15 /   0 / +35
+ *   Attack the Middle (Push Harder):    +15 / +10 /  0
+ *   Forward Press (Focus on Attack):    +10 / -2.5 / 0
+ *
+ * Averaging `gameStyleDefenderMultiplier`'s two branches for `theirScoring` is the one real
+ * simplification: Forward Press's own real effect genuinely cuts both ways (better if the press
+ * holds, worse if it's broken — its own blurb text already says as much), and a single bar needs one
+ * number: the average is a fair, disclosed midpoint, not a cherry-pick of whichever branch flatters
+ * the style more.
+ */
+export function gameStyleModelledImpact(style: GameStyle): GameStyleImpact {
+  const ourScoring = (gameStyleForwardEntryMultiplier(style) - 1) * 100 + (gameStyleDisposalMultiplier(style) - 1) * 100;
+  const avgDefenderMult = (gameStyleDefenderMultiplier(style, true) + gameStyleDefenderMultiplier(style, false)) / 2;
+  const theirScoring = -(avgDefenderMult - 1) * 100 + (opponentFloodGoalAccuracyMultiplier(style) - 1) * 100;
+  const fitnessCost = (gameStyleDisposalMultiplier(style) - 1) * 100 + (1 - gameStyleContestChanceMultiplier(style)) * 100;
+  return { ourScoring, theirScoring, fitnessCost };
+}

@@ -28,6 +28,13 @@ import { groupByPosition } from "./MatchPreparation";
  * Ineligible on-ground cells dim rather than disappear, so the coach can see
  * at a glance which of their armed player's real positions are actually
  * occupied right now.
+ *
+ * Sep 2026 [[Quarter-Time Decision Room]]: `LiveMatch.tsx`'s quarter-time break no longer renders
+ * this component directly — the new decision room rebuilds this same "arm a bench player, click an
+ * eligible cell" interaction with one real behaviour change (a swap now STAGES locally rather than
+ * calling `onInterchange` immediately, so a genuine "Reset" is possible before "Confirm & Resume").
+ * Reuses this file's own `GROUND_ROW_POSITIONS`/`benchPlayers`/`fitnessColour` building blocks
+ * rather than duplicating them. This component itself is untouched and still exported/usable.
  */
 export interface QuarterTimeInterchangeProps {
   team: MatchTeam;

@@ -56,3 +56,17 @@
     @apply bg-info text-white;
   }
 }
+
+@layer utilities {
+  /* Round 100 (Sep 2026) — Draft cockpit pick-order ticker: Tyler asked for the
+     horizontal scroll behaviour to stay (so the ticker still scrolls to the
+     live pick) but the scrollbar track itself hidden. Cross-browser: Firefox
+     via `scrollbar-width`, Chrome/Safari/Edge via the pseudo-element. */
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}

@@ -28,6 +28,12 @@ import { focusesFor, type LineCoachFocus } from "../engine/lineCoaching";
  * roster decision, not a quarter-time one. This panel is now read-only for
  * assignment (see `LineCoachCard` below) and keeps only what genuinely IS
  * live, in-match state: the feedback sentence and the focus buttons.
+ *
+ * Sep 2026 [[Quarter-Time Decision Room]]: `LiveMatch.tsx`'s quarter-time break no longer renders
+ * this component directly — the new decision room rebuilds this same card (coach+grade, feedback
+ * quote, focus chips) in its own 2×2 grid, adding a real, computed "recommended" focus
+ * (`engine/lineCoaching.ts`'s new `recommendedFocusFor`) this component never had. This component
+ * itself is untouched and still exported/usable.
  */
 export interface LineCoachPanelProps {
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;

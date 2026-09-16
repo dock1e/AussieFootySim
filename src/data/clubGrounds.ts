@@ -17,41 +17,51 @@
  * doesn't touch it.
  */
 import type { FixtureMatch } from "../engine/fixture.ts";
-import { GROUND_CONFIGS, type GroundConfig } from "./grounds.ts";
+import { STADIUM_CONFIGS, type AFLStadium } from "./stadiums.ts";
 
 /**
  * Each of the 18 real clubs' actual primary home ground, mapped onto
- * grounds.ts's `GROUND_CONFIGS` table — straight from [[Club Database]]'s
- * own `Home ground:` field (see the design note's own 18-club cross-check
- * table). Keys are `ClubID` (matches `types/club.ts`'s `CLUBS`/
- * `Player.ClubID`/`Player Database/Schema.md`), not club name, since that's
- * what `FixtureMatch.homeClubId` actually carries.
+ * `data/stadiums.ts`'s `STADIUM_CONFIGS` table — straight from
+ * [[Club Database]]'s own `Home ground:` field (see the design note's own
+ * 18-club cross-check table). Keys are `ClubID` (matches `types/club.ts`'s
+ * `CLUBS`/`Player.ClubID`/`Player Database/Schema.md`), not club name, since
+ * that's what `FixtureMatch.homeClubId` actually carries.
  *
  * 16 of 18 clubs already had a configured ground as of round 12 (multi-
  * tenant sharing working exactly as expected: 4 clubs on the MCG, 5 on
  * Marvel, 2 each on Adelaide Oval and Optus). GWS and Gold Coast were the
  * one real gap round 13 found — round 11's original 7-ground list was
  * scoped to "iconic" grounds for visual variety, not full 18-club coverage
- * — filled here with `engie`/`peopleFirst` (grounds.ts, round 14).
+ * — filled with `engie`/`peopleFirst` (round 14).
+ *
+ * Sep 2026 round 104: repointed onto `data/stadiums.ts`'s 20-venue ids
+ * (`data/grounds.ts`, the old 12-venue table, is deleted this round) — a
+ * clean 1:1 id migration, every club's actual real-world venue unchanged:
+ * `adelaideOval->adelaide_oval, optus->optus_stadium,
+ * kardiniaPark->kardinia_park, peopleFirst->carrara, engie->engie_stadium`
+ * (the other 7 old ids — mcg, gabba, marvel, scg — already matched the new
+ * table's own ids verbatim). See [[Venue-Accurate Ground Renderer]] for the
+ * full 12-of-20 mapping and why the other 8 report venues aren't attached to
+ * any club here.
  */
 export const CLUB_PRIMARY_GROUND: Record<number, string> = {
-  1: "adelaideOval", // Adelaide
+  1: "adelaide_oval", // Adelaide
   2: "gabba", // Brisbane Lions
   3: "marvel", // Carlton
   4: "mcg", // Collingwood
   5: "marvel", // Essendon
-  6: "optus", // Fremantle
-  7: "kardiniaPark", // Geelong
-  8: "peopleFirst", // Gold Coast
-  9: "engie", // Greater Western Sydney
+  6: "optus_stadium", // Fremantle
+  7: "kardinia_park", // Geelong
+  8: "carrara", // Gold Coast
+  9: "engie_stadium", // Greater Western Sydney
   10: "mcg", // Hawthorn
   11: "mcg", // Melbourne
   12: "marvel", // North Melbourne
-  13: "adelaideOval", // Port Adelaide
+  13: "adelaide_oval", // Port Adelaide
   14: "mcg", // Richmond
   15: "marvel", // St Kilda
   16: "scg", // Sydney
-  17: "optus", // West Coast
+  17: "optus_stadium", // West Coast
   18: "marvel", // Western Bulldogs
 };
 
@@ -59,9 +69,9 @@ export const CLUB_PRIMARY_GROUND: Record<number, string> = {
  * The confirmed away-designated-home-game exceptions from round 13's real
  * 2026 AFL fixture research — Hawthorn/Tasmania, Gold Coast/Darwin, GWS/
  * Manuka, exactly the three Tyler named as examples ("etc"). `groundId`
- * points at grounds.ts's round-14-added `tasmania`/`tio`/`manuka` entries,
- * built the same tomgorey.com-sourced, compression-mapped way as every
- * other ground in that table.
+ * points at `data/stadiums.ts`'s `york_park`/`marrara_oval`/`manuka_oval`
+ * entries (round 104 ids — round 14's original `tasmania`/`tio`/`manuka`
+ * ids, before the venue-accurate rebuild).
  *
  * `homeGamesPerSeason` is how many of that club's home rounds each season
  * use the exception ground rather than their primary one:
@@ -89,13 +99,13 @@ export interface GroundException {
 }
 
 export const GROUND_EXCEPTIONS: GroundException[] = [
-  { clubId: 10, groundId: "tasmania", homeGamesPerSeason: 3, label: "Hawthorn — Tasmania (University of Tasmania Stadium, Launceston)" },
-  { clubId: 8, groundId: "tio", homeGamesPerSeason: 2, label: "Gold Coast — Darwin (TIO Stadium)" },
-  { clubId: 9, groundId: "manuka", homeGamesPerSeason: 1, label: "Greater Western Sydney — Manuka (Manuka Oval, Canberra)" },
+  { clubId: 10, groundId: "york_park", homeGamesPerSeason: 3, label: "Hawthorn — Tasmania (University of Tasmania Stadium, Launceston)" },
+  { clubId: 8, groundId: "marrara_oval", homeGamesPerSeason: 2, label: "Gold Coast — Darwin (TIO Stadium)" },
+  { clubId: 9, groundId: "manuka_oval", homeGamesPerSeason: 1, label: "Greater Western Sydney — Manuka (Manuka Oval, Canberra)" },
 ];
 
 /**
- * Which `GroundConfig` a given match should actually use — the one real
+ * Which `AFLStadium` a given match should actually use — the one real
  * lookup this whole file exists to provide. Falls back to the home club's
  * primary ground whenever an exception doesn't apply, which is every match
  * for 15 of 18 clubs and most of a season for the other 3, matching Tyler's
@@ -123,9 +133,9 @@ export const GROUND_EXCEPTIONS: GroundException[] = [
  * AFL's actual broadcast/travel-driven placement (Layer B, explicitly not
  * built this round).
  */
-export function groundForMatch(homeClubId: number, round?: number, fixture?: FixtureMatch[]): GroundConfig {
+export function groundForMatch(homeClubId: number, round?: number, fixture?: FixtureMatch[]): AFLStadium {
   const primaryId = CLUB_PRIMARY_GROUND[homeClubId];
-  const primary = primaryId ? GROUND_CONFIGS[primaryId] : GROUND_CONFIGS[GROUND_CONFIGS["mcg"].id];
+  const primary = primaryId ? STADIUM_CONFIGS[primaryId] : STADIUM_CONFIGS["mcg"];
 
   if (round === undefined || !fixture) return primary;
 
@@ -148,5 +158,5 @@ export function groundForMatch(homeClubId: number, round?: number, fixture?: Fix
     exceptionRounds.add(homeRounds[idx]);
   }
 
-  return exceptionRounds.has(round) ? GROUND_CONFIGS[exception.groundId] : primary;
+  return exceptionRounds.has(round) ? STADIUM_CONFIGS[exception.groundId] : primary;
 }

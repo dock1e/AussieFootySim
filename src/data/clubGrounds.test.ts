@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { CLUB_PRIMARY_GROUND, GROUND_EXCEPTIONS, groundForMatch } from "./clubGrounds";
-import { GROUND_CONFIGS } from "./grounds";
+import { STADIUM_CONFIGS } from "./stadiums";
 import { CLUBS } from "../types/club";
 import { generateFixture } from "../engine/fixture";
 
@@ -8,11 +8,11 @@ const clubIds = CLUBS.map((c) => c.ClubID);
 const fixture = generateFixture(clubIds);
 
 describe("CLUB_PRIMARY_GROUND", () => {
-  it("has an entry for every real club, pointing at a real GroundConfig", () => {
+  it("has an entry for every real club, pointing at a real AFLStadium", () => {
     for (const id of clubIds) {
       const groundId = CLUB_PRIMARY_GROUND[id];
       expect(groundId, `club ${id} has no primary ground`).toBeDefined();
-      expect(GROUND_CONFIGS[groundId], `club ${id}'s primary ground "${groundId}" isn't a real config`).toBeDefined();
+      expect(STADIUM_CONFIGS[groundId], `club ${id}'s primary ground "${groundId}" isn't a real stadium`).toBeDefined();
     }
   });
 
@@ -24,10 +24,10 @@ describe("CLUB_PRIMARY_GROUND", () => {
 });
 
 describe("GROUND_EXCEPTIONS", () => {
-  it("only references real clubs and real, existing GroundConfigs", () => {
+  it("only references real clubs and real, existing AFLStadiums", () => {
     for (const ex of GROUND_EXCEPTIONS) {
       expect(clubIds, `exception club ${ex.clubId} isn't a real club`).toContain(ex.clubId);
-      expect(GROUND_CONFIGS[ex.groundId], `exception ground "${ex.groundId}" isn't a real config`).toBeDefined();
+      expect(STADIUM_CONFIGS[ex.groundId], `exception ground "${ex.groundId}" isn't a real stadium`).toBeDefined();
     }
   });
 
@@ -41,20 +41,20 @@ describe("GROUND_EXCEPTIONS", () => {
 
   it("covers exactly Tyler's three named examples (Tasmania, Darwin, Manuka)", () => {
     const labels = GROUND_EXCEPTIONS.map((e) => e.groundId).sort();
-    expect(labels).toEqual(["manuka", "tasmania", "tio"]);
+    expect(labels).toEqual(["manuka_oval", "marrara_oval", "york_park"]);
   });
 });
 
 describe("groundForMatch", () => {
   it("returns the primary ground for every club when no round/fixture is given (LiveMatch.tsx's ad-hoc friendly screen)", () => {
     for (const id of clubIds) {
-      const config = groundForMatch(id);
-      expect(config.id).toBe(CLUB_PRIMARY_GROUND[id]);
+      const stadium = groundForMatch(id);
+      expect(stadium.id).toBe(CLUB_PRIMARY_GROUND[id]);
     }
   });
 
   it("still returns the primary ground if only one of round/fixture is supplied", () => {
-    const hawthornId = GROUND_EXCEPTIONS.find((e) => e.groundId === "tasmania")!.clubId;
+    const hawthornId = GROUND_EXCEPTIONS.find((e) => e.groundId === "york_park")!.clubId;
     expect(groundForMatch(hawthornId, 5).id).toBe(CLUB_PRIMARY_GROUND[hawthornId]); // round with no fixture
     expect(groundForMatch(hawthornId, undefined, fixture).id).toBe(CLUB_PRIMARY_GROUND[hawthornId]); // fixture with no round
   });
@@ -88,7 +88,7 @@ describe("groundForMatch", () => {
   });
 
   it("is deterministic - same club/round/fixture always resolves the same ground", () => {
-    const hawthornId = GROUND_EXCEPTIONS.find((e) => e.groundId === "tasmania")!.clubId;
+    const hawthornId = GROUND_EXCEPTIONS.find((e) => e.groundId === "york_park")!.clubId;
     const homeRounds = fixture.filter((m) => m.homeClubId === hawthornId).map((m) => m.round);
     for (const r of homeRounds) {
       expect(groundForMatch(hawthornId, r, fixture).id).toBe(groundForMatch(hawthornId, r, fixture).id);
@@ -96,9 +96,9 @@ describe("groundForMatch", () => {
   });
 
   it("spreads a club's exception rounds across the season rather than clustering them all at the start", () => {
-    const hawthornId = GROUND_EXCEPTIONS.find((e) => e.groundId === "tasmania")!.clubId;
+    const hawthornId = GROUND_EXCEPTIONS.find((e) => e.groundId === "york_park")!.clubId;
     const homeRounds = fixture.filter((m) => m.homeClubId === hawthornId).map((m) => m.round).sort((a, b) => a - b);
-    const exceptionRounds = homeRounds.filter((r) => groundForMatch(hawthornId, r, fixture).id === "tasmania").sort((a, b) => a - b);
+    const exceptionRounds = homeRounds.filter((r) => groundForMatch(hawthornId, r, fixture).id === "york_park").sort((a, b) => a - b);
     expect(exceptionRounds.length).toBeGreaterThan(1);
     // "Spread" here just means not all bunched in the first third of this club's home
     // rounds - a weak but meaningful check that the even-spacing formula is doing

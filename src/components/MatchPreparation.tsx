@@ -247,7 +247,7 @@ export function groupByPosition(team: MatchTeam): Map<Position, Player[]> {
  * layout as `SelectionGround` (`GROUND_ROW_POSITIONS`), each cell showing
  * that position's real occupant with their tactic (and, for the current
  * tagger, a target) editable right there, plus an interchange strip below
- * mirroring `MatchCanvas.tsx`'s own bench chips.
+ * mirroring `GroundView.tsx`'s (formerly `MatchCanvas.tsx`) own bench chips.
  *
  * Only usable when `team.positions` has real per-slot data — an AI club
  * auto-filled via `pickBest22` (any opponent whose coach hasn't got a

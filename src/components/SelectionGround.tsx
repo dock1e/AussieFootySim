@@ -21,7 +21,7 @@ import { PlayerLink } from "./PlayerLink";
  * own horizontal band layout (ROADMAP.md item #8's Aug 2026 video-review
  * update) — a deliberate choice: it's the more universally-recognisable
  * shape for a *static* selection screen, and it doesn't need to match
- * MatchCanvas.tsx's horizontal live-match ground, which has its own good
+ * GroundView.tsx's (formerly MatchCanvas.tsx) horizontal live-match ground, which has its own good
  * reason for its orientation (it mirrors `ground.ts`'s 1-D zone model
  * directly). The two screens serve different purposes and don't need to
  * share one.

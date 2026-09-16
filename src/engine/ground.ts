@@ -4,7 +4,8 @@ import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import type { MatchEvent } from "./match.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
-import { ACTIVE_GROUND, setActiveGroundConfig, type GroundConfig } from "../data/grounds.ts";
+import { getStadium, DEFAULT_STADIUM_ID, type AFLStadium } from "../data/stadiums.ts";
+import { yBound, PX_PER_METRE, CANVAS_PADDING_M } from "./groundGeometry.ts";
 import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
 import type { AbstractPosition } from "./positioning.ts";
@@ -32,124 +33,73 @@ import type { AbstractPosition } from "./positioning.ts";
  * a literal path simulation — but a materially different, position- and
  * phase-of-play-aware one, not a static line with cosmetic jitter.
  */
-export const GROUND_WIDTH = 1000;
-// Was 600 (a 1.67:1 rectangle, notably more elongated than any real AFL
-// ground). Aug 2026 (Tyler, reference dimensions attached: 135-185m long by
-// 110-155m wide): real grounds run closer to 1.1-1.3:1 — Marvel Stadium's
-// 160x125m is about as close to this app's old ratio gets, and the MCG at
-// 160x141m is nearly circular. 780 (1.28:1) read as a genuine oval rather
-// than a stretched rectangle while staying comfortably landscape for a wide
-// UI card. Every other constant in this file (MARGIN_X/MARGIN_Y, ZONE_X_FRACTION,
-// CENTER_Y, maxHalfHeightAt) is expressed as a fraction of GROUND_WIDTH/
-// GROUND_HEIGHT, so this change alone re-scales the whole ground proportionally
-// with no follow-on edits needed elsewhere in this file.
-//
-// Aug 2026, round 2 (Tyler, live testing): trimmed a further 10%, to 702
-// (1.42:1) — with the ball/player realism fixes landed, the next ask was
-// fitting the whole Live Match screen (ground + new player-stat sidebars,
-// see LiveMatch.tsx) on one screen without scrolling, not a further
-// proportion correctness pass. Still comfortably inside a real oval's look,
-// just a little shorter so the page reads less tall.
-//
-// Round 12 (Tyler: "go ahead with the per ground config", after round 11's
-// research answered whether supporting 7 real venues' shapes changes the
-// corner-smoothing approach — see src/data/grounds.ts and the vault's
-// "Ground Shapes - Multi-Stadium Design" note): this literal 702 moved to
-// `ACTIVE_GROUND.groundHeight` (currently always the "mcg" entry, which is
-// 702 unchanged — no ground selector exists yet, so this is a behaviour-
-// preserving refactor, not a visible change). Every other constant in this
-// file is still expressed as a fraction of GROUND_WIDTH/GROUND_HEIGHT, so
-// swapping which ground is active only ever needs to change this one value.
-//
-// Round 14 (Tyler: "Build just the smaller scope fixture" — the ground-
-// *selection* build, src/data/clubGrounds.ts): `const` → `let`. This value
-// (and GROUND_END_CAP_FRACTION/CENTER_Y below) get read as a bare identifier
-// throughout this whole file — maxHalfHeightAt, formationFor,
-// computeDotPositions, ballTargetFor — and MatchCanvas.tsx imports them the
-// same way, so converting every one of those call sites to a function call
-// just to support a dynamic active ground would have been a much bigger,
-// riskier diff than this file actually needs. A `let`, reassigned by
-// `setActiveGround` below whenever the active ground changes, is a 3-line
-// change instead — every existing call site keeps reading the same bare
-// name and automatically sees the new value, since it's the same live
-// binding either way.
-export let GROUND_HEIGHT = ACTIVE_GROUND.groundHeight;
-// Split into X/Y Aug 2026, round 7 (Tyler, live testing: "stretch the length
-// of the ground... pull the edge of the ground close to the edge of the
-// canvas"): this used to be one shared margin for both axes. `MARGIN_X`
-// shrinks so the goal-line-to-centre distance grows - "length"/"wider"
-// specifically means the long (goal-to-goal) axis. `MARGIN_Y` stays at the
-// original 30 (`MatchCanvas.tsx`'s unchanged 14+16 vertical margin) - nothing
-// about the vertical fit has ever been flagged as a problem.
-//
-// Round 8 (Tyler, live testing, a red line drawn at the canvas edge: "I want
-// the ground to be wider still... reaches the red lines"): shrunk again, 12
-// -> 7, matching `MatchCanvas.tsx`'s new combined 2px outer + 5px turf-gap
-// horizontal margin.
-const MARGIN_X = 7;
-const MARGIN_Y = 30;
-const MIN_HALF_HEIGHT = 70;
+/**
+ * Sep 2026, Phase 10 round 104 — venue-accurate rebuild. Tyler's own brief
+ * ("Ground Visualisation Spec.pdf" + the attached stadium report
+ * "Algorithmic Simulation of AFL Stadiums"): replace the old single
+ * hard-coded ~1.42:1 ellipse (round 2's `702`) with each real venue's own
+ * length/width/superellipse-exponent geometry, sourced from
+ * `data/stadiums.ts`'s 20-venue database (was `data/grounds.ts`'s 12-venue
+ * pixel table — deleted this round). Full design record:
+ * [[Venue-Accurate Ground Renderer]].
+ *
+ * THE SEAM, disclosed: this section (down to `setActiveStadium`) is the ONLY
+ * geometry this round touches. `computeDotPositions`/`formationFor`/
+ * `ballTargetFor`/every lane and anchor table further down this file are
+ * completely untouched — they only ever call the bare identifiers this
+ * section still exports (`GROUND_WIDTH`, `GROUND_HEIGHT`, `CENTER_Y`,
+ * `maxHalfHeightAt`, `zoneToX`/`zoneFractionToX`, `attackingGoalX`), exactly
+ * why this was a safe, isolated rewrite: those identifiers were already
+ * `let`s (or plain functions reading them), reassigned on ground-switch for
+ * exactly this reason since round 12/14. `GROUND_WIDTH` joins `GROUND_HEIGHT`
+ * as a `let` this round — real venues vary in LENGTH as well as width, so a
+ * shared fixed length no longer holds across 20 real venues the way it did
+ * for the old system's synthetic, length-pinned compression.
+ *
+ * `PX_PER_METRE`/`CANVAS_PADDING_M` (`groundGeometry.ts`) convert Tyler's
+ * real metre-space geometry into this same virtual-pixel space, sized so a
+ * typical venue lands close to the old GROUND_WIDTH=1000 magnitude — MCG:
+ * `(80.7+6)*2*6 = 1040` — so `MAX_DOT_SPEED_PX_PER_SEC`/
+ * `MAX_BALL_SPEED_PX_PER_SEC` further down this file keep reading at the same
+ * visual speed with no retuning. The `+6m` padding each side of `a`/`b` is
+ * Tyler's own viewBox formula (`-(a+6) -(b+6) 2(a+6) 2(b+6)`) — it IS the
+ * margin now, so the old `MARGIN_X`/`MARGIN_Y`/`GROUND_END_CAP_FRACTION`
+ * flat-cap-ellipse hack (round 5-12) is deleted outright, not ported: a true
+ * superellipse (the venue's own real `n`) already tapers correctly with no
+ * flat-cap hack needed — a real superellipse's height genuinely reaches zero
+ * right at the goal line by construction, matching a real oval.
+ */
+let ACTIVE_STADIUM: AFLStadium = getStadium(DEFAULT_STADIUM_ID);
+let A_M = ACTIVE_STADIUM.lengthMeters / 2;
+let B_M = ACTIVE_STADIUM.widthMeters / 2;
+let N_EXP = ACTIVE_STADIUM.superellipseExponent;
+
+export let GROUND_WIDTH = (A_M + CANVAS_PADDING_M) * 2 * PX_PER_METRE;
+export let GROUND_HEIGHT = (B_M + CANVAS_PADDING_M) * 2 * PX_PER_METRE;
+export let CENTER_Y = GROUND_HEIGHT / 2;
+
+/** Metres-to-canvas-pixel-x — centre bounce sits at the canvas's own horizontal centre. */
+function xToPx(xM: number): number {
+  return GROUND_WIDTH / 2 + xM * PX_PER_METRE;
+}
 
 /**
- * Aug 2026, round 5 (Tyler, live testing against a sample image: "square off
- * the left and right ends of the playing field... where the goals and the
- * behind posts are should be brought forwards"): first attempt replaced the
- * *entire* boundary with a rounded rectangle (flat sides all the way round,
- * quarter-circle corners only at the ends) — which squared off almost the
- * whole side of the ground, not just the tips, and read as a stadium/
- * rounded-rect shape overall rather than an oval. Tyler caught this from a
- * screenshot ("this is not right, the change I was asking for was much more
- * subtle") and asked for the ellipse back, with only a small flat cut
- * directly behind the goal posts.
- *
- * Round 6 (Tyler, the correction above): back to a real ellipse everywhere,
- * except within the last `GROUND_END_CAP_FRACTION` share of the
- * goal-line-to-centre distance at each end, where the height is held
- * constant at whatever the ellipse's own natural height was at that cutoff
- * point instead of continuing to taper all the way to a sharp point — a real
- * ellipse's slope goes vertical right at the very tip, so this only ever
- * shaves off the last, steepest little sliver of curve, not the oval's
- * general shape. `MatchCanvas.tsx`'s boundary/turf drawing (which builds this
- * same flat-tip shape as a real path — see that file's `flatCapEllipsePath`,
- * round 7 — rather than round 6's original clip+rectangle) and this file's
- * `maxHalfHeightAt` (which every player anchor and the wobble clamp both
- * read) share this exact constant so the drawn shape and the shape player
- * positions are actually bounded by can never drift apart — same discipline
- * as round 5's version of this comment, just pointed at a much smaller, more
- * localized effect this time.
+ * Metres-to-canvas-pixel, both axes — the one conversion `components/
+ * GroundView.tsx` needs to place every static marking it draws (boundary,
+ * centre square, goal squares, arcs, interchange gate/benches — all computed
+ * in pure metre space by `groundGeometry.ts`) onto the exact same pixel grid
+ * `computeDotPositions`/`ballTargetFor` already draw player/ball dots on.
+ * Exported (not just `xToPx` above) because GroundView needs the y-axis too,
+ * which nothing pixel-side needed before this round — `maxHalfHeightAt`
+ * already folds its own y-bound into a half-*height*, never a signed y
+ * coordinate. A function, not a precomputed constant, for the same reason
+ * every other export here is one: it must re-read the current `GROUND_WIDTH`/
+ * `GROUND_HEIGHT` after `setActiveStadium` changes them, not whatever they
+ * were when this module first loaded.
  */
-/**
- * Round 10 (Tyler, live testing against round 9's actual render: "It's still
- * a noticeable bump, like a pimple... I think that the problem is the length
- * of the vertical flat ends of the oval. If we shorten that vertical line by
- * just a small amount, perhaps about 10% the line may join up to the end of
- * the oval shape more smoothly"): a hand-computed sweep of the corner
- * Bezier's own control points (mirroring `MatchCanvas.tsx`'s
- * `flatCapEllipsePath`) confirmed the direction of Tyler's theory - the
- * worst-case bulge past the true ellipse shrinks monotonically as the flat
- * edge shortens (2.575px -> 2.277px at exactly 10% shorter, at round 9's
- * `GROUND_CAP_ROUND_FRACTION`) - so this is a real, measured improvement,
- * not just a guess taken on faith. `GROUND_END_CAP_FRACTION` doesn't map
- * onto "flat edge length" directly (the edge's own length is
- * `2 * ry * sin(theta)`, and `theta = acos(1 - GROUND_END_CAP_FRACTION)` -
- * two `acos`/`sin` steps apart, not linear), so this value is solved
- * backwards from Tyler's literal ask (shrink `2*ry*sin(theta)` by exactly
- * 10%) rather than just knocking 10% off the old 0.065 directly, which would
- * have shortened the edge by a different, unstated amount.
- *
- * Round 12: moved to `ACTIVE_GROUND.capFraction` (src/data/grounds.ts) —
- * still 0.0523 for every ground today, including this one, per round 11's
- * finding that the corner construction doesn't need per-ground tuning to
- * stay visually clean across all 7 target real-world ratios. See that file's
- * own doc comment for the full reasoning.
- *
- * Round 14: `const` → `let`, same reason and same `setActiveGround`
- * mechanism as `GROUND_HEIGHT` above — still 0.0523 for all 12 grounds
- * today (the 5 round 14 added), so in practice this never actually changes
- * value yet, but it's wired for real rather than silently relying on every
- * ground happening to share one number forever.
- */
-export let GROUND_END_CAP_FRACTION = ACTIVE_GROUND.capFraction;
+export function toPixel(xM: number, yM: number): { x: number; y: number } {
+  return { x: xToPx(xM), y: GROUND_HEIGHT / 2 + yM * PX_PER_METRE };
+}
 
 const ZONE_X_FRACTION: Record<Zone, number> = {
   0: 0.08,
@@ -159,8 +109,13 @@ const ZONE_X_FRACTION: Record<Zone, number> = {
   4: 0.92,
 };
 
+/** `ZONE_X_FRACTION`'s existing [0,1] fraction (unchanged since round 5 — ~100 rounds of tuned "how close to the goal line a zone actually renders") rescaled into Tyler's own normalised u in [-1, 1]. */
+function fracToU(frac: number): number {
+  return frac * 2 - 1;
+}
+
 export function zoneToX(zone: Zone): number {
-  return MARGIN_X + ZONE_X_FRACTION[zone] * (GROUND_WIDTH - 2 * MARGIN_X);
+  return xToPx(fracToU(ZONE_X_FRACTION[zone]) * A_M);
 }
 
 /**
@@ -178,82 +133,79 @@ export function zoneFractionToX(z: number): number {
   const hi = Math.min(4, lo + 1) as Zone;
   const t = clamped - lo;
   const frac = ZONE_X_FRACTION[lo] + (ZONE_X_FRACTION[hi] - ZONE_X_FRACTION[lo]) * t;
-  return MARGIN_X + frac * (GROUND_WIDTH - 2 * MARGIN_X);
+  return xToPx(fracToU(frac) * A_M);
 }
 
 /**
- * Half the playable height at a given x — the real, continuous ellipse
- * taper everywhere, except within the last `GROUND_END_CAP_FRACTION` share
- * of the goal-line-to-centre distance at each end, where it's held constant
- * at the height the ellipse itself reaches right at that cutoff point
- * (matching the flat tip `MatchCanvas.tsx` clips the boundary/turf to — see
- * `GROUND_END_CAP_FRACTION`'s own doc comment). A floor (`MIN_HALF_HEIGHT`)
- * still guards the extreme edge case so goal-square dots are never crushed
- * together, though in practice the flat-cap height is already comfortably
- * clear of it.
+ * Half the playable height at a given x (pixels) — Sep 2026 round 104: now
+ * the venue's own real superellipse boundary (Tyler's `yBound`, section 4's
+ * own player-node clamp formula, `* 0.94`) rather than the old flat-cap
+ * ellipse approximation. `0.94` replaces the old ad-hoc `* 0.85` this
+ * function's callers (`formationFor`/`computeDotPositions`) used to apply
+ * themselves — moved in here so every caller automatically gets Tyler's
+ * exact figure with no call-site changes. `MIN_HALF_HEIGHT_M` is a disclosed,
+ * reasoned floor (not derived) guarding the true zero-width tip a real
+ * superellipse has right at the goal line — checked numerically to only ever
+ * bind within the last ~0.3m before the tip for a typical venue (MCG), so it
+ * can't reintroduce a visible flat-cap artifact the way the old system's
+ * much larger cap fraction did.
  */
-export function maxHalfHeightAt(x: number): number {
-  const cx = GROUND_WIDTH / 2;
-  const a = GROUND_WIDTH / 2 - MARGIN_X;
-  const b = GROUND_HEIGHT / 2 - MARGIN_Y;
-  const capInset = a * GROUND_END_CAP_FRACTION;
-  const dx = Math.min(a - capInset, Math.abs(x - cx)); // clamp to the flat-cap edge, not the ellipse's own zero-width tip
-  const t = Math.max(0, 1 - (dx / a) ** 2);
-  return Math.max(MIN_HALF_HEIGHT, b * Math.sqrt(t));
+const MIN_HALF_HEIGHT_M = 6;
+export function maxHalfHeightAt(xPx: number): number {
+  const xM = (xPx - GROUND_WIDTH / 2) / PX_PER_METRE;
+  return Math.max(MIN_HALF_HEIGHT_M, yBound(A_M, B_M, N_EXP, xM) * 0.94) * PX_PER_METRE;
+}
+
+/**
+ * The TRUE boundary half-height at a given x — no `* 0.94`. Sep 2026 round
+ * 104 bugfix: `maxHalfHeightAt` above now bakes Tyler's own 0.94 player-node
+ * fraction straight in (see its own doc comment), which quietly turned the
+ * old drift-wobble fix's "use the *true*, unscaled `maxHalfHeightAt(x)` as
+ * the outer safety net" (round 3, see the wobble clamp's own doc comment
+ * below) into a *false* claim — after this round's rewrite,
+ * `maxHalfHeightAt` no longer returns the true edge, it returns 94% of it,
+ * so a caller reaching for "the real ground edge" needs this function
+ * instead. Exists purely so that distinction has a name; every other caller
+ * in this file (`formationFor`, `trackedPixel`) wants the 0.94-scaled value
+ * and should keep calling `maxHalfHeightAt` directly, not this.
+ */
+export function trueHalfHeightAt(xPx: number): number {
+  const xM = (xPx - GROUND_WIDTH / 2) / PX_PER_METRE;
+  return Math.max(MIN_HALF_HEIGHT_M, yBound(A_M, B_M, N_EXP, xM)) * PX_PER_METRE;
 }
 
 /**
  * The x pixel of the goal line the given side is ATTACKING (i.e. shooting
- * at) — Aug 2026 round 40. Relocated here from a local-only computation
- * inside `MatchCanvas.tsx`'s `drawGround` (`leftGoalLineX`/`rightGoalLineX`)
- * so `ballTargetFor`'s new shot-flight target below can share the exact same
- * goal-line pixel the ground is actually drawn at, rather than an
- * independent guess that could silently drift out of sync with it — the
- * same single-source-of-truth reasoning `GROUND_HEIGHT`/
- * `GROUND_END_CAP_FRACTION`/`MAX_BALL_SPEED_PX_PER_SEC` above already follow.
- * `turfRx` here is deliberately `GROUND_WIDTH / 2 - MARGIN_X`, not a fresh
- * `rx`/`turfRx` pair with its own 2px/5px insets — `MARGIN_X`'s own doc
- * comment already states the two are the same combined inset, so this stays
- * numerically identical to `MatchCanvas.tsx`'s own `turfRx` without
- * duplicating the two magic numbers that make it up. `MatchCanvas.tsx`'s
- * `drawGround` now calls this too, rather than keeping its own parallel
- * copy — see that file's own `leftGoalLineX`/`rightGoalLineX`.
- *
- * Home attacks the +x (right) goal, away attacks -x (left) — the same
- * `possession === "home" ? 1 : -1` convention `ballTargetFor`'s own `dirX`
- * already uses for kicks/handballs below, just applied to the goal line
- * itself instead of a general kick direction. Ground-independent (no
- * `ACTIVE_GROUND` read): `GROUND_WIDTH` is the one dimension held flat
- * across all 12 configured grounds — only `GROUND_HEIGHT` varies per-ground.
+ * at) — Aug 2026 round 40, relocated here so `ballTargetFor`'s shot-flight
+ * target can share the exact same goal-line pixel the ground is actually
+ * drawn at. Sep 2026 round 104: a real superellipse's own x-intercept at
+ * y=0 is exactly `x=a` by construction (`|a/a|^n + 0 = 1`), so the goal line
+ * sits exactly at the boundary's own end — no cap-inset math needed at all,
+ * unlike the old flat-cap ellipse this replaces. Home attacks the +x (right)
+ * goal, away attacks -x (left) — the same `possession === "home" ? 1 : -1`
+ * convention `ballTargetFor`'s own `dirX` already uses for kicks/handballs
+ * below, just applied to the goal line itself.
  */
 export function attackingGoalX(possession: Side): number {
-  const cx = GROUND_WIDTH / 2;
-  const turfRx = GROUND_WIDTH / 2 - MARGIN_X;
-  const turfCapInset = turfRx * GROUND_END_CAP_FRACTION;
-  const halfSpan = turfRx - turfCapInset;
-  return possession === "home" ? cx + halfSpan : cx - halfSpan;
+  return possession === "home" ? xToPx(A_M) : xToPx(-A_M);
 }
 
-export let CENTER_Y = GROUND_HEIGHT / 2;
-
 /**
- * The real public entry point for switching which ground is active (Aug
- * 2026, Phase 10 round 14 — `src/data/clubGrounds.ts`'s `groundForMatch`
- * is the thing that decides *which* config a given match should use; this
- * is what actually applies that decision). Re-derives every one of this
- * file's own ground-dimension bindings from the new config, then updates
- * `data/grounds.ts`'s own `ACTIVE_GROUND` too (via `setActiveGroundConfig`)
- * so anything reading that directly — MatchCanvas.tsx's own
- * `ACTIVE_GROUND.arcRadiusPullback` read fresh inside `drawGround`, or its
- * `ACTIVE_GROUND.roundFraction` read the same way — stays in sync as well.
- * One call updates both files' worth of state; nothing outside this
- * function should ever need to touch `GROUND_HEIGHT`/
- * `GROUND_END_CAP_FRACTION`/`CENTER_Y` or `ACTIVE_GROUND` directly.
+ * The real public entry point for switching which venue is active (Sep 2026
+ * round 104, superseding round 14's `setActiveGround`/`GroundConfig`) —
+ * `src/data/clubGrounds.ts`'s `groundForMatch` decides *which* `AFLStadium`
+ * a given match should use; this is what actually applies that decision.
+ * Re-derives every one of this file's own ground-dimension bindings from the
+ * new venue. Nothing outside this function should ever need to touch
+ * `GROUND_WIDTH`/`GROUND_HEIGHT`/`CENTER_Y` directly.
  */
-export function setActiveGround(config: GroundConfig): void {
-  setActiveGroundConfig(config);
-  GROUND_HEIGHT = config.groundHeight;
-  GROUND_END_CAP_FRACTION = config.capFraction;
+export function setActiveStadium(stadium: AFLStadium): void {
+  ACTIVE_STADIUM = stadium;
+  A_M = stadium.lengthMeters / 2;
+  B_M = stadium.widthMeters / 2;
+  N_EXP = stadium.superellipseExponent;
+  GROUND_WIDTH = (A_M + CANVAS_PADDING_M) * 2 * PX_PER_METRE;
+  GROUND_HEIGHT = (B_M + CANVAS_PADDING_M) * 2 * PX_PER_METRE;
   CENTER_Y = GROUND_HEIGHT / 2;
 }
 
@@ -568,12 +520,18 @@ interface Anchor {
  *   (already centre-anchored at lane ~0, and Tyler's own words: they "stay
  *   towards the middle" regardless of which of these two styles is active).
  *
- * `SPREAD_WIDE_SCALE`/`FLOOD_SPREAD_SCALE` are capped at 1.15, not higher:
- * `formationFor`'s `y` already multiplies `lane` by `maxHalfHeightAt(x) *
- * 0.85`, so a real dual-lane position already sitting at `lane = ±1` (every
- * Wing/Flank/`BP`/`HBF`/`FP` slot) has exactly `1/0.85 ≈ 1.176` of headroom
- * before a scaled-up lane pushes the dot outside the true boundary line —
- * 1.15 stays inside that with a small margin, 1.3 (tried first) does not.
+ * `SPREAD_WIDE_SCALE`/`FLOOD_SPREAD_SCALE` are capped at 1.15, not higher —
+ * chosen to keep a scaled-up dual-lane anchor (`lane = ±1`, every Wing/Flank/
+ * `BP`/`HBF`/`FP` slot) visually close to the boundary without looking
+ * pinned to it; 1.3 (tried first) read as sitting right on the line. Sep
+ * 2026 round 104: this headroom used to be reasoned about by hand here (a
+ * margin calculation against `formationFor`'s own `* 0.85`) — `formationFor`
+ * now clamps its output `y` to `maxHalfHeightAt(x)` directly (see that
+ * function's own safety-clamp comment) whenever a scaled lane would exceed
+ * it, so 1.15 only has to look right, not also stay under a hand-derived
+ * limit; the clamp is what actually guarantees no node renders outside the
+ * boundary regardless of `laneScale` (it just stops "spreading" further once
+ * clamped, rather than overshooting the boundary).
  *
  * Only ever applied to a real-position anchor, never the archetype-line
  * fallback (a team with no Selection Committee lineup behind it) — Tyler's
@@ -881,7 +839,7 @@ function formationFor(
   // Aug 2026, round 8 (Tyler: "the Interchange players are currently on the
   // field the whole time"): only the on-ground roster gets a formation anchor
   // at all — an interchange player (see MatchTeam.onGround) simply never
-  // appears in the returned map, so MatchCanvas.tsx never draws a dot for
+  // appears in the returned map, so GroundView.tsx (formerly MatchCanvas.tsx) never draws a dot for
   // them. `onGroundPlayers` falls back to the full squad when a team has no
   // on-ground/bench distinction (the plain pickBest22 path, the balance
   // simulator, every pre-round-8 test), so this is a no-op change for any
@@ -907,7 +865,15 @@ function formationFor(
       // needed. Same for `lane`: already real-pitch left/right, not
       // side-mirrored, matching how `a.lane` is used untransformed just below.
       x = zoneFractionToX(trackedPos.zoneFrac) + sideOffset;
-      const halfHeight = maxHalfHeightAt(x) * 0.85;
+      // Sep 2026 round 104 bugfix: this used to be `maxHalfHeightAt(x) *
+      // 0.85` — a leftover pre-round-104 margin that, once `maxHalfHeightAt`
+      // started baking Tyler's own 0.94 boundary-clamp fraction straight in
+      // (see that function's own doc comment), compounded to an
+      // undisclosed, un-asked-for 0.799 instead of his literal 0.94. Removed
+      // now that `maxHalfHeightAt(x)` alone already IS Tyler's exact
+      // section-4 player-node formula (`v * yBound(...) * 0.94`) for
+      // `trackedPos.lane` playing the role of his `v`.
+      const halfHeight = maxHalfHeightAt(x);
       y = CENTER_Y + trackedPos.lane * halfHeight;
       // BUG FIXED Aug 2026, round 28 — found by this round's own
       // scratch-script collision sweep (not reported by Tyler): unlike the
@@ -938,9 +904,34 @@ function formationFor(
       const shiftedHomeZone = Math.min(4, Math.max(0, rawZoneTarget));
       const rawZone = mirrorZone(side, shiftedHomeZone);
       x = zoneFractionToX(rawZone) + sideOffset;
-      const halfHeight = maxHalfHeightAt(x) * 0.85;
+      // Sep 2026 round 104 bugfix — see the tracked-position branch above:
+      // no more `* 0.85` on top of `maxHalfHeightAt`, same reasoning.
+      const halfHeight = maxHalfHeightAt(x);
       y = CENTER_Y + (a.lane + a.laneNudge) * halfHeight;
     }
+    // Sep 2026 round 104 safety clamp, added alongside the two `* 0.85`
+    // removals above: `gameStyleAnchorBias`'s `laneScale` (up to 1.15, see
+    // its own doc comment) was tuned against the PRE-round-104 assumption
+    // that a lane-+-1 anchor already sat at `trueEdge * 0.85` — a real
+    // ~17.6% headroom before 1.15x of it would reach the true edge. Now that
+    // `maxHalfHeightAt` bakes Tyler's own 0.94 straight in and the redundant
+    // `* 0.85` is gone, that same anchor sits at `trueEdge * 0.94` instead —
+    // only ~6.4% headroom — so `laneScale = 1.15` alone would push a
+    // Spread-the-Ground/Defensive-Flood wing or flank position to `0.94 *
+    // 1.15 ≈ 1.08` of the true edge, past the boundary line outright.
+    //
+    // Clamped to `maxHalfHeightAt(x)` itself — Tyler's own 0.94 fraction,
+    // the SAME outer bound a neutral (`laneScale = 1`) dual-lane anchor
+    // already sits at — not the true 1.0 edge. Two reasons: (1) it caps a
+    // scaled-up lane at exactly the boundary Tyler's own spec already
+    // establishes as the resting-position limit, rather than introducing a
+    // second, looser one; (2) it preserves the ~6% gap between an anchor and
+    // the true edge that the drift-wobble clamp below (`trueHalfHeightAt`)
+    // relies on for its own slack — clamping here to the *true* edge instead
+    // would let a game-style-scaled anchor sit flush against it, reopening
+    // round 3's original "zero slack for wobble" bug for exactly this case.
+    const clampHalfHeight = maxHalfHeightAt(x);
+    y = Math.min(CENTER_Y + clampHalfHeight, Math.max(CENTER_Y - clampHalfHeight, y));
     out.set(p.PlayerID, {
       playerId: p.PlayerID,
       lname: p.lname,
@@ -1009,7 +1000,7 @@ function driftOffset(playerId: number, driftTime: number): { dx: number; dy: num
  * a regression, and one no permanent test locks against (Phase 7's own
  * "byte-for-byte with driftTime=0" claim was verified by a throwaway scratch
  * script, not a kept Vitest test — see ROADMAP.md "Phase 9"). Only
- * `MatchCanvas.tsx`'s live animation loop passes a real `driftTime`, and
+ * `GroundView.tsx`'s (formerly `MatchCanvas.tsx`) live animation loop passes a real `driftTime`, and
  * only to *this* function — the underlying event log and match simulation in
  * `src/engine/match.ts` are completely unaffected by anything in this file;
  * it only changes what a UI *renders*, never what actually happened.
@@ -1044,7 +1035,7 @@ export function computeDotPositions(
   // case: recognising a disposal-launch event that's about to resolve into a
   // MARKING_CONTEST or HANDBALL_CONTEST tick next (see the
   // `isDisposalInFlight` branch below). Optional/defaulted so the
-  // team-change reset call site (MatchCanvas.tsx, instant snap-to-position,
+  // team-change reset call site (GroundView.tsx, formerly MatchCanvas.tsx, instant snap-to-position,
   // no animated "next" event in play) doesn't need to supply one.
   nextEvent: MatchEvent | null = null,
 ): DotPosition[] {
@@ -1344,7 +1335,7 @@ export function computeDotPositions(
       // coincidence (confirmed example: Tom Doedee, pulled in as the sole
       // involved player in a midfield event, blended to the exact spot Ryan
       // Lester's own CHB anchor already occupied). Because an involved dot
-      // is drawn bigger, ringed, and on top (see MatchCanvas.tsx's drawDot),
+      // is drawn bigger, ringed, and on top (see GroundView.tsx's drawDot, formerly MatchCanvas.tsx),
       // an exact coincidence doesn't read as "two dots merged" so much as
       // "the uninvolved player's dot vanished entirely" - arguably worse.
       // A small deterministic per-player tie-break, applied after the
@@ -1419,22 +1410,37 @@ export function computeDotPositions(
   // and "the edge they already stand on" were identical: zero slack, so the
   // ground-bound was *always* the binding constraint for lane +-1 players,
   // not a rare edge case, and it clipped Lobb and Johannisen to the same
-  // floor exactly as before. Fixed by using the *true*, unscaled
-  // `maxHalfHeightAt(x)` (no `* 0.85`) as the outer safety net instead — the
-  // real ~29px gap between where a lane +-1 player stands and the actual
-  // ground edge, comfortably more than `DRIFT_RADIUS_Y` (13), so a lane +-1
-  // player's own small local window now fits inside the true edge instead of
-  // being clipped by it, and the ground-bound only ever binds for a player
-  // whose formation anchor was already unusually close to the literal
-  // boundary. Same fix applied to x for consistency, though the x case is
-  // lower-risk (DRIFT_RADIUS_X is small relative to the ground's width).
+  // floor exactly as before. Fixed by using the *true*, unscaled ground edge
+  // (no `* 0.85`) as the outer safety net instead — comfortably more than
+  // `DRIFT_RADIUS_Y` (13), so a lane +-1 player's own small local window fits
+  // inside the true edge instead of being clipped by it. Same fix applied to
+  // x for consistency, though the x case is lower-risk (DRIFT_RADIUS_X is
+  // small relative to the ground's width).
+  //
+  // Sep 2026 round 104 bugfix: this used to read `maxHalfHeightAt(dot.x)`
+  // for "the true, unscaled ground edge" — true before this round, but
+  // `maxHalfHeightAt` now bakes Tyler's own 0.94 player-node fraction
+  // straight in (see its own doc comment), so it stopped meaning "the true
+  // edge" the moment that landed, silently shrinking this wobble ceiling
+  // down toward the same 0.94-scaled value `formationFor`'s own anchors
+  // already sit at (once THEIR redundant `* 0.85` was also removed this same
+  // round) — reopening the exact "zero slack" bug this comment describes.
+  // `trueHalfHeightAt` (new this round, right next to `maxHalfHeightAt`) is
+  // what "the real ground edge" actually means now.
   if (driftTime !== 0) {
     for (const [id, dot] of all) {
       if (dot.involved) continue; // involved players are already headed somewhere specific - don't also wobble them
       const { dx, dy } = driftOffset(id, driftTime);
-      const trueHalfHeight = maxHalfHeightAt(dot.x); // the real ground edge - NOT the *0.85 bound formationFor itself places lane +-1 anchors at, which would leave zero slack for their own wobble
-      const xMin = Math.max(MARGIN_X, dot.x - DRIFT_RADIUS_X);
-      const xMax = Math.min(GROUND_WIDTH - MARGIN_X, dot.x + DRIFT_RADIUS_X);
+      const trueHalfHeight = trueHalfHeightAt(dot.x); // the real ground edge - NOT the 0.94-scaled bound formationFor itself places anchors at, which would leave far too little slack for their own wobble
+      // Sep 2026 round 104: bound to the real venue x-extent (xToPx(+-A_M),
+      // the boundary's own goal-line pixel) rather than the old MARGIN_X
+      // (a small fixed pixel inset from the raw canvas edge) - MARGIN_X no
+      // longer exists now the canvas padding is Tyler's own +6m viewBox
+      // margin, and this is the more correct bound anyway: it's the same
+      // "real ground edge" this clamp's own y-side already uses, just
+      // applied to x too.
+      const xMin = Math.max(xToPx(-A_M), dot.x - DRIFT_RADIUS_X);
+      const xMax = Math.min(xToPx(A_M), dot.x + DRIFT_RADIUS_X);
       const yMin = Math.max(CENTER_Y - trueHalfHeight, dot.y - DRIFT_RADIUS_Y);
       const yMax = Math.min(CENTER_Y + trueHalfHeight, dot.y + DRIFT_RADIUS_Y);
       const x = Math.min(xMax, Math.max(xMin, dot.x + dx));
@@ -1473,7 +1479,7 @@ export interface BallTarget {
   x: number;
   y: number;
   state: BallState;
-  /** Relative to a handball's pace (1 = same speed). MatchCanvas.tsx scales the ball's own smoothing half-life by this so a kick visibly takes longer to arrive. Aug 2026 round 30: scales ONLY the half-life — MatchCanvas.tsx's speed *cap* (`MAX_BALL_SPEED_PX_PER_SEC`, this file) deliberately does NOT scale by this any more, see that constant's own doc comment for the bug this fixed. */
+  /** Relative to a handball's pace (1 = same speed). GroundView.tsx (formerly MatchCanvas.tsx) scales the ball's own smoothing half-life by this so a kick visibly takes longer to arrive. Aug 2026 round 30: scales ONLY the half-life — that component's speed *cap* (`MAX_BALL_SPEED_PX_PER_SEC`, this file) deliberately does NOT scale by this any more, see that constant's own doc comment for the bug this fixed. */
   speedMultiplier: number;
 }
 
@@ -1485,7 +1491,7 @@ const BALL_SIDE_OFFSET = 20; // px, kick/handball: to the side, toward wherever 
 const BALL_MARK_OFFSET_Y = -24; // px, above the head
 const BALL_DROPPED_OFFSET_Y = 16; // px, at/below the feet — fumbled
 const BALL_NEUTRAL_OFFSET_Y = -12; // px, held at about chest height — the STOPPAGE/groundBall-win/shot default
-// Exported Aug 2026 round 32 — `MatchCanvas.tsx`'s new drop-punt spin
+// Exported Aug 2026 round 32 — `GroundView.tsx`'s (formerly `MatchCanvas.tsx`) new drop-punt spin
 // animation (Tyler: "when the ball travels through the air, can we make it
 // look like the ball is rotating in the style of an AFL Drop Punt?") needs to
 // tell a genuine kick apart from a handball's own "flight" state (a handball
@@ -1495,16 +1501,17 @@ const BALL_NEUTRAL_OFFSET_Y = -12; // px, held at about chest height — the STO
 export const KICK_SPEED_MULTIPLIER = 3;
 
 /**
- * The ball's own hard speed cap, in px/sec — `MatchCanvas.tsx`'s render loop
- * is the actual consumer (its `maxBallStep`), same "player dot equivalent"
- * relationship `MAX_DOT_SPEED_PX_PER_SEC` (that file, 200) already documents
- * for itself, just now living here instead. Moved from `MatchCanvas.tsx` to
- * this file Aug 2026 round 30 so `kickFlightDurationMs` below can derive a
- * genuinely consistent real-time estimate from the *exact* number the
- * renderer itself moves the ball at, rather than an independently-guessed
- * figure that could silently drift out of sync with it — the same
- * single-source-of-truth reasoning `GROUND_HEIGHT`/`GROUND_END_CAP_FRACTION`
- * already follow for the geometry side of this file.
+ * The ball's own hard speed cap, in px/sec — `GroundView.tsx`'s render loop
+ * (renamed from `MatchCanvas.tsx` round 104) is the actual consumer (its
+ * `maxBallStep`), same "player dot equivalent" relationship
+ * `MAX_DOT_SPEED_PX_PER_SEC` (that file, 200) already documents for itself,
+ * just now living here instead. Moved from that component to this file Aug
+ * 2026 round 30 so `kickFlightDurationMs` below can derive a genuinely
+ * consistent real-time estimate from the *exact* number the renderer itself
+ * moves the ball at, rather than an independently-guessed figure that could
+ * silently drift out of sync with it — the same single-source-of-truth
+ * reasoning `GROUND_WIDTH`/`GROUND_HEIGHT` already follow for the geometry
+ * side of this file.
  */
 export const MAX_BALL_SPEED_PX_PER_SEC = 350;
 
@@ -1530,7 +1537,7 @@ export const MAX_BALL_SPEED_PX_PER_SEC = 350;
  * worked out to ~117px/s — *slower* than a player dot's own
  * `MAX_DOT_SPEED_PX_PER_SEC` (200), the exact opposite of "you should be
  * able to kick slightly faster than a player moves." Fixed by simply
- * dropping that divide (see `MatchCanvas.tsx`) — the cap now stays at its
+ * dropping that divide (see `GroundView.tsx`, formerly `MatchCanvas.tsx`) — the cap now stays at its
  * own already-documented, already-correct value regardless of shot type,
  * and only the half-life (still `* speedMultiplier`) keeps a kick's ease
  * reading slower/floatier than a handball's, same as before.
@@ -1590,10 +1597,10 @@ export const MAX_BALL_SPEED_PX_PER_SEC = 350;
  */
 const FLIGHT_ARRIVAL_BUFFER_MS = 300;
 
-/** Same pixel conversion `formationFor`'s own tracked-position branch uses for a player dot (`zoneFractionToX` + `maxHalfHeightAt(x) * 0.85` for lane->y) — reused here so a flight-distance estimate stays consistent with how a real player's position actually renders. Deliberately omits `formationFor`'s own small home/away `sideOffset` (+-18px) — irrelevant at the scale a multi-hundred-pixel kick estimate operates on. */
+/** Same pixel conversion `formationFor`'s own tracked-position branch uses for a player dot (`zoneFractionToX` + `maxHalfHeightAt(x)` for lane->y — no extra `* 0.85`, removed round 104 for the same reason as `formationFor`'s own two call sites, see their doc comments) — reused here so a flight-distance estimate stays consistent with how a real player's position actually renders. Deliberately omits `formationFor`'s own small home/away `sideOffset` (+-18px) — irrelevant at the scale a multi-hundred-pixel kick estimate operates on. */
 function trackedPixel(pos: AbstractPosition): { x: number; y: number } {
   const x = zoneFractionToX(pos.zoneFrac);
-  const halfHeight = maxHalfHeightAt(x) * 0.85;
+  const halfHeight = maxHalfHeightAt(x);
   return { x, y: CENTER_Y + pos.lane * halfHeight };
 }
 
@@ -1667,7 +1674,7 @@ export function ballTargetFor(
   event: MatchEvent | null,
   nextEvent: MatchEvent | null,
   // Aug 2026 round 40 — real ms since `event` itself became the current tick
-  // (MatchCanvas.tsx's own `frame()` loop tracks this via a small new ref,
+  // (GroundView.tsx's own `frame()` loop tracks this via a small new ref, formerly MatchCanvas.tsx,
   // the same "reset on event change, otherwise keep counting" shape
   // `driftElapsedRef` already uses for the whole-match version of this
   // idea). Only consulted for the new snap-shot windup branch below — every

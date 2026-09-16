@@ -39,7 +39,7 @@ const BASE_TICK_MS = 450; // ms between events at 1x — tune freely, purely a U
 // MARKING_CONTEST/HANDBALL_CONTEST resolution tick never stayed on screen
 // long enough, in real time, for the ball to actually finish visibly
 // crossing the real distance it had just been sent across, even after
-// MatchCanvas.tsx's own companion fix made its speed correctly faster than a
+// GroundView.tsx's (formerly MatchCanvas.tsx) own companion fix made its speed correctly faster than a
 // player's. `holdMs` below is BASE_TICK_MS unchanged for every ordinary
 // tick, and genuinely extended (not independently guessed — see
 // `kickFlightDurationMs`'s own doc comment in engine/ground.ts) only for the

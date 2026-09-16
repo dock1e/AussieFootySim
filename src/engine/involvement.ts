@@ -160,7 +160,7 @@ export function weightedChoice<T>(rng: Rng, items: readonly T[], weightOf: (item
  * can no longer be picked as a live contest participant while sitting on the
  * bench — the same underlying gap behind Tyler's "interchange players are on
  * the field the whole time" report, just the match-engine half of it rather
- * than the rendering half (see MatchCanvas.tsx/ground.ts for that side).
+ * than the rendering half (see GroundView.tsx/ground.ts for that side — GroundView.tsx was named MatchCanvas.tsx before round 104).
  */
 export function weightedPlayerChoice(rng: Rng, side: Side, team: MatchTeam, zone: Zone): Player {
   const pool = onGroundPlayers(team);

@@ -358,7 +358,7 @@ export function toAverageMap(totals: Map<number, SeasonPlayerTotals>): Map<numbe
  * feature. Box score alone is ~26KB/match (~5.7MB/season) — safe
  * indefinitely. The stripped data was never actually needed here: `.events`
  * has exactly one consumer in this codebase, live tick-by-tick match
- * playback (`useMatchPlayback.ts`/`LiveMatch.tsx`/`MatchCanvas.tsx`), and it
+ * playback (`useMatchPlayback.ts`/`LiveMatch.tsx`/`GroundView.tsx`, formerly `MatchCanvas.tsx`), and it
  * only ever reads the LIVE `Season.played`, never an archive — confirmed by
  * grepping every `.events` site before adding this — so no archived-match
  * consumer (single-game highs, Benchmarking, `ArchivedMatchView`) loses

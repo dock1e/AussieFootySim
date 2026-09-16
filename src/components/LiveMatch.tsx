@@ -27,14 +27,13 @@ import type { Side } from "../engine/zones";
 import { mulberry32 } from "../engine/rng";
 import { fantasyPointsFor } from "../engine/ratings";
 import { quarterlyPoints, type QuarterPoints } from "../engine/summary";
-import { setActiveGround } from "../engine/ground";
 import { groundForMatch } from "../data/clubGrounds";
 import { DEFAULT_GAME_STYLE, type TeamPlan, type GameStyle } from "../engine/tactics";
 import { useMatchPlayback, type PlaybackSpeed, type MatchPlayback } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
 import { useSaveStore } from "../store/useSaveStore";
-import { MatchCanvas } from "./MatchCanvas";
+import { GroundView } from "./GroundView";
 import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
 import { QuarterTimeDecisionRoom } from "./QuarterTimeDecisionRoom";
@@ -68,8 +67,8 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
   /**
    * Each side's current game style, kept in sync with whatever `kickOff`
    * actually started the match with and whatever a Coach's Call changes it
-   * to mid-match — Aug 2026, feeds `MatchCanvas`'s new `homeStyle`/
-   * `awayStyle` props (see engine/ground.ts's `gameStyleAnchorBias`) so the
+   * to mid-match — Aug 2026, feeds `GroundView`'s (formerly `MatchCanvas`'s)
+   * `homeStyle`/`awayStyle` props (see engine/ground.ts's `gameStyleAnchorBias`) so the
    * ground rendering's positional shape actually reflects the chosen game
    * style, not just its disposal/contest-rating effects. Deliberately local
    * state here rather than reading back through `matchInProgress` (which
@@ -115,16 +114,19 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
    * random seed every time), so `groundForMatch` is called with just the
    * home club's id, which always resolves to that club's *primary* real
    * ground (see that function's own doc comment for why round-based
-   * exceptions deliberately don't fire here). `activeGroundName` is a pure
-   * re-derivation for display only, not a read-back of engine state — kept
-   * in sync with `setActiveGround` below by construction, since both come
-   * from the exact same `groundForMatch` call.
+   * exceptions deliberately don't fire here).
+   *
+   * Sep 2026 round 104 — [[Venue-Accurate Ground Renderer]]: `groundForMatch`
+   * now returns a real `AFLStadium` (`data/stadiums.ts`), not the old
+   * pixel-based `GroundConfig`. The `setActiveGround`/`useEffect` pairing
+   * that used to live here is gone too — `GroundView` now owns syncing
+   * `engine/ground.ts`'s active-stadium state to whatever `venue` prop it's
+   * given (see its own venue-sync effect), so this screen just resolves the
+   * venue and passes it straight through as a prop, same as `homeTeam`/
+   * `awayTeam` below.
    */
   const homeClubId = clubByName(homeClub)?.ClubID;
-  const activeGround = groundForMatch(homeClubId ?? -1);
-  useEffect(() => {
-    setActiveGround(activeGround);
-  }, [activeGround]);
+  const venue = groundForMatch(homeClubId ?? -1);
 
   /** Uses the coach's own Selection Committee lineup when it's their club and it's complete; every other club falls back to the same real, suitability-aware auto-fill (`autoFillLineup`) an AI club gets in season simulation now — see engine/season.ts's `buildTeams` and [[Tactics and Positional Play]] — rather than the old coarse OVR-only `pickBest22`. */
   function resolveTeam(clubName: string): MatchTeam {
@@ -357,7 +359,7 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
             {awayIsCustom && <span className="stat-pill stat-pill-good">your lineup</span>}
           </div>
           <span className="text-xs text-slate-500" title="Fixture-driven ground selection (Phase 10 round 14) - the home club's real primary ground, since this screen has no fixture round to check exceptions against">
-            @ {activeGround.name}
+            @ {venue.commonName}
           </span>
           <button
             onClick={() => setStage("prep")}
@@ -479,9 +481,10 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
                 this wrapper take exactly the remaining flex space instead, so MatchCanvas's own
                 `h-full` (see its doc comment) has a real, definite height to fill. */}
             <div className="min-h-0 flex-1">
-              <MatchCanvas
+              <GroundView
                 home={homeTeam}
                 away={awayTeam}
+                venue={venue}
                 event={playback.currentEvent}
                 nextEvent={result.events[playback.currentIndex + 1] ?? null}
                 liveBoxScore={playback.liveBoxScore}
@@ -564,8 +567,9 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
  * codebase (grepped for recharts/d3/Chart.js/framer-motion/CountUp — none
  * installed, none used); `AnimatedNumber` and `Sparkline` below are small,
  * dependency-free replacements — the former a `requestAnimationFrame` tween
- * in the same idiom `MatchCanvas.tsx` already uses throughout for its own
- * dot/ball animation, the latter plain inline SVG bars in the same spirit
+ * in the same idiom `GroundView.tsx` (formerly `MatchCanvas.tsx`) already
+ * uses throughout for its own dot/ball animation, the latter plain inline
+ * SVG bars in the same spirit
  * as `FullTimeResult.tsx`'s own hand-rolled `MarginChart` polyline.
  */
 function AnimatedNumber({ value, className = "" }: { value: number; className?: string }) {

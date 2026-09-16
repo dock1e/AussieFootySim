@@ -463,8 +463,9 @@ export function directionWeight(progress: number): number {
  * tactical preference against using it. Grounded in `distanceBetween`'s own
  * disclosed scale (its own doc comment above: each of `zoneFrac`'s 4 units
  * and `lane`'s 2 units "covers a several-tens-of-metres span") — averaging
- * `data/grounds.ts`'s own `GROUND_CONFIGS[*].realDimensions.lengthM` (~155-
- * 170m across the 12 modelled venues, ~160m typical) across 4 zoneFrac units
+ * `data/stadiums.ts`'s own `lengthMeters` (~156-175m across all 20 real
+ * venues as of round 104, ~163m typical — was ~155-170m/~160m across the
+ * pre-round-104 12-venue table, no material change) across 4 zoneFrac units
  * gives roughly 40m per unit for the dominant, lengthwise kicking direction.
  * `MAX_KICK_DISTANCE` = 1.5 lands close to the upper end of Tyler's own
  * 45-60m range for a mostly-lengthwise kick (~60m), while still allowing a

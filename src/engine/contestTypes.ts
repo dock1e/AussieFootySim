@@ -1,4 +1,5 @@
 import type { RatedAttribute } from "../types/player.ts";
+import type { Archetype } from "../types/archetype.ts";
 
 /**
  * The one-on-one "contest" primitive — Engine.md core loop step 3, described
@@ -76,4 +77,51 @@ export const CONTEST_CONFIG: Record<ContestType, ContestConfig> = {
     attackerSkill: "clearance",
     defenderSkill: "clearance",
   },
+};
+
+/**
+ * Archetype-specific contest rating bonuses — Sep 2026, Phase 10 round 105,
+ * Phase A of [[Simulation Engine Report Review]]. That review found AFS's
+ * contest math was attribute-average only (with one existing exception,
+ * `ContestConfig.heightWeighted`'s ruck-only height term) — no general "this
+ * archetype is just better/worse at this contest type, independent of its
+ * attributes" hook existed anywhere, which was the one genuinely new, cheap
+ * idea the reviewed report contributed (its own named archetype β-bonuses:
+ * Gorilla/Key Forward +8.0 in aerial contests, Key Intercept Defender +10.0
+ * defending them, Small Crumbing Forward +14.0 at ground level, Resting
+ * Ruckman/Key Tall Defender -18.0 at ground level).
+ *
+ * Mapped onto AFS's own real 14 archetypes (`types/archetype.ts`), not the
+ * reviewed report's invented sub-archetype taxonomy — see that review's own
+ * Section 1 finding for why AFS's player-persistent archetype is the better
+ * fit here than the report's slot-probabilistic one. A flat bonus per
+ * archetype per `ContestType`, applied to whichever side (attacker or
+ * defender role) that archetype's player actually occupies in a given
+ * contest (`resolveContest`, in `contest.ts`) — not fixed to one role — since a real
+ * Key Forward pressed into a defensive aerial contest (a forward-half
+ * stoppage, say) is still a genuinely strong overhead mark, not suddenly an
+ * average one just because this tick cast them as the "defender".
+ *
+ * `Hybrid Key Forward Ruck` deliberately carries both the aerial bonus AND
+ * the ground-level penalty — a real, coherent football claim (tall,
+ * ruck-capable forwards are genuinely strong overhead and genuinely
+ * unsuited to scrambling at ground level), not an oversight of double-
+ * booking one archetype across two rows.
+ *
+ * These are the reviewed report's own round figures, not yet independently
+ * calibrated against AFS's actual rating distributions — same "deliberately
+ * roughed in, meant for real-data verification before being trusted" status
+ * every other placeholder constant in this project carries (`contest.ts`'s
+ * own `DEFAULT_K`, `RUCK_HEIGHT_WEIGHT`, etc.). See
+ * `scripts/verify_round105_scratch.ts` for the real-player before/after
+ * win-rate check this round ran before shipping these numbers as-is.
+ */
+export const ARCHETYPE_CONTEST_BONUS: Partial<Record<Archetype, Partial<Record<ContestType, number>>>> = {
+  "Key Forward": { markContested: 8, markLead: 8 },
+  "Hybrid Key Forward Ruck": { markContested: 8, markLead: 8, groundBall: -18 },
+  "Intercept Defender": { markContested: 10, markLead: 10 },
+  "Small Forward": { groundBall: 14 },
+  "Pressure Forward": { groundBall: 14 },
+  Ruck: { groundBall: -18 },
+  "Key Defender": { groundBall: -18 },
 };

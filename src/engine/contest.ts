@@ -1,5 +1,6 @@
 import type { Player, RatedAttribute } from "../types/player.ts";
-import { CONTEST_CONFIG, type ContestType } from "./contestTypes.ts";
+import type { Archetype } from "../types/archetype.ts";
+import { ARCHETYPE_CONTEST_BONUS, CONTEST_CONFIG, type ContestType } from "./contestTypes.ts";
 import type { Rng } from "./rng.ts";
 
 export interface ContestResult {
@@ -27,11 +28,17 @@ const DEFAULT_K = 0.06;
 const RUCK_HEIGHT_BASELINE_CM = 195; // roughly the current AFL Ruck-position average
 const RUCK_HEIGHT_WEIGHT = 0.25; // "rating points" added/subtracted per cm above/below baseline
 
-/** Simple mean of the given rated attributes, optionally nudged by a height term (ruck contests only). */
+/**
+ * Simple mean of the given rated attributes, optionally nudged by a height
+ * term (ruck contests only) and/or a flat archetype bonus (Sep 2026, round
+ * 105 — see `contestTypes.ts`'s own `ARCHETYPE_CONTEST_BONUS` doc comment).
+ * `archetypeBonus` is additive, same treatment as the pre-existing height
+ * term, and applied after it so the two never interact multiplicatively.
+ */
 export function computeContestRating(
   player: Player,
   attributes: readonly RatedAttribute[],
-  opts?: { heightWeighted?: boolean },
+  opts?: { heightWeighted?: boolean; archetypeBonus?: number },
 ): number {
   if (attributes.length === 0) {
     throw new Error("computeContestRating: attributes list must be non-empty");
@@ -43,6 +50,9 @@ export function computeContestRating(
   let rating = sum / attributes.length;
   if (opts?.heightWeighted) {
     rating += (player.height - RUCK_HEIGHT_BASELINE_CM) * RUCK_HEIGHT_WEIGHT;
+  }
+  if (opts?.archetypeBonus !== undefined) {
+    rating += opts.archetypeBonus;
   }
   return rating;
 }
@@ -71,8 +81,13 @@ export function resolveContest(
   opts?: { attackerMultiplier?: number; defenderMultiplier?: number },
 ): ContestResult {
   const config = CONTEST_CONFIG[type];
-  let attackerRating = computeContestRating(attacker, config.attacker, { heightWeighted: config.heightWeighted });
-  let defenderRating = computeContestRating(defender, config.defender, { heightWeighted: config.heightWeighted });
+  // Round 105 — each side's own real archetype, looked up independently for
+  // whichever role they're actually in this tick (see ARCHETYPE_CONTEST_BONUS's
+  // own doc comment for why this isn't fixed to "attacker" or "defender").
+  const attackerArchetypeBonus = ARCHETYPE_CONTEST_BONUS[attacker.archetype as Archetype]?.[type];
+  const defenderArchetypeBonus = ARCHETYPE_CONTEST_BONUS[defender.archetype as Archetype]?.[type];
+  let attackerRating = computeContestRating(attacker, config.attacker, { heightWeighted: config.heightWeighted, archetypeBonus: attackerArchetypeBonus });
+  let defenderRating = computeContestRating(defender, config.defender, { heightWeighted: config.heightWeighted, archetypeBonus: defenderArchetypeBonus });
   if (opts?.attackerMultiplier !== undefined) attackerRating *= opts.attackerMultiplier;
   if (opts?.defenderMultiplier !== undefined) defenderRating *= opts.defenderMultiplier;
   const pAttackerWins = winProbability(attackerRating, defenderRating);

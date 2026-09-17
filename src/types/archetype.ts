@@ -50,6 +50,40 @@ export const ARCHETYPE_PRIMARY_ATTRIBUTES: Record<Archetype, readonly RatedAttri
 };
 
 /**
+ * One tactical-function scouting sentence per archetype — Phase A item 5 (round 106), Tyler's own
+ * scope: "fold a few of the report's tactical-function phrases into playerProfileText.ts/draft.ts's
+ * existing scouting-text phrase banks for archetype flavour." Source material is the uploaded "AFL
+ * Simulation Engine Implementation" report's Section 1 (its Position/Primary-Archetype/Tactical-
+ * Function table plus the surrounding descriptive paragraphs) — reworded into AFS's own third-person
+ * present-tense scouting voice (matching `draft.ts`'s `FLAVOR_TRAIT_PHRASES`) and remapped onto AFS's
+ * real 14 archetypes above, NOT the report's own much finer-grained invented taxonomy (e.g. its
+ * "Rebound Playmaker" vs. "Intercept Half-Back" split, both of which land on AFS's single "Half Back
+ * Flanker") — same "our own archetypes, not the report's" discipline round 105's
+ * `ARCHETYPE_CONTEST_BONUS` table already established for this same source report.
+ *
+ * Purely cosmetic flavor text, wired into two existing procedural scouting-text generators
+ * (`draft.ts`'s `proceduralEliteWriteupFor`, `playerProfileText.ts`'s developing-tier profile blurb) —
+ * nothing in the engine or match sim reads this table, and it has zero effect on any rating, roll, or
+ * simulated outcome.
+ */
+export const ARCHETYPE_TACTICAL_PHRASES: Record<Archetype, string> = {
+  "Inside Mid": "He thrives in the squeeze of a stoppage, absorbing contact to win the hard ball and feed it clean to a running teammate.",
+  "Outside Mid": "He works the boundary line for the release ball, then turns quick hands into real territory with his acceleration.",
+  "Pressure Forward": "He hunts the opposition's rebound options specifically, turning defensive kick-outs into forward-half turnovers.",
+  "Hybrid Mid Forward": "He pushes forward off the back of clearances, looking to turn a one-on-one mismatch into a scoring shot of his own.",
+  "Small Forward": "He reads the fall of the ball off a marking contest before anyone else, snapping opportunistically and locking it inside forward 50 with relentless tackling.",
+  "Medium Forward": "He times a lead as well as anyone, using a sharp change of direction to separate from his opponent into open space.",
+  Ruck: "He dominates around the stoppage, using his reach and tap placement to feed the ball straight into a teammate's stride.",
+  "Key Forward": "He holds his ground deep inside 50, using sheer upper-body strength to protect his space and win the ball in the air.",
+  "Hybrid Key Forward Ruck": "Whether resting up forward or camped in the ruck, he demands a tall matchup and competes in every contested overhead ball he can reach.",
+  "Medium Defender": "He'll track a mobile opponent all the way to the wing if he has to, still getting off the ground to spoil the contest when it matters.",
+  "Intercept Defender": "He plays off his direct opponent, reading the kick early to float across the pack and turn defence into attack with an intercept mark.",
+  "Half Back Flanker": "He demands the ball off a kick-in or defensive mark and looks to hit the corridor with real penetration, not just a safe chip sideways.",
+  "Back Pocket": "He shadows a crumbing small forward at ground level, denying the cheap opportunistic goal before it happens.",
+  "Key Defender": "He's the primary stopper on the opposition's key forward, using strength and body positioning to spoil the contest rather than take it on himself.",
+};
+
+/**
  * The 18 on-field slots + 5 interchange — see Configuration.md "Positions".
  *
  * Aug 2026, round 8 (Tyler: "In 2026 the AFL increased the interchange to 5

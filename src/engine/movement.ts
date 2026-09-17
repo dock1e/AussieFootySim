@@ -47,9 +47,12 @@ import { tacticGroupForSlot, defaultTacticForPosition, type Tactic, type TeamPla
  * ARCHITECTURE: a genuinely stateful simulation, living in the engine
  * (`match.ts`'s `Ctx.trackedPositions`), NOT a rendering trick — every
  * on-ground player's `AbstractPosition` (`positioning.ts`) is updated once
- * per simulated tick in `simulateQuarter`'s own loop, paced toward a
- * freshly-computed TARGET by a real max-speed step (`maxStepFor`), not
- * teleported to it. The result is snapshotted onto every `MatchEvent`
+ * per raw frame in `simulateQuarter`'s own loop (round 106 — [[Contest
+ * Resolution Redesign]] item 7 — decoupled this from the coarser decision
+ * cadence `ctx.tick` still advances on; see `TICK_RATE_MULTIPLIER`'s own
+ * doc comment in `match.ts`), paced toward a freshly-computed TARGET by a
+ * real max-speed step (`maxStepFor`), not teleported to it. The result is
+ * snapshotted onto every `MatchEvent`
  * (`MatchEvent.trackedPositions`, an array-of-objects — same convention
  * `StatDelta` already established, deliberately NOT a `Map`, since events
  * get persisted via `saveGame.ts`/IndexedDB and a `Map` doesn't survive
@@ -217,8 +220,21 @@ function lerp(a: number, b: number, t: number): number {
  * (`CONTEST_EXECUTION_DIFFICULTY`'s own calibration). Floored at 0.5x so
  * even the slowest realistic player still visibly moves, never floors to a
  * dead stop.
+ *
+ * Round 106 — [[Contest Resolution Redesign]] item 7: rescaled 0.16 -> 0.032
+ * (÷ `TICK_RATE_MULTIPLIER` = 5, `match.ts`) the moment `stepTickPositions`
+ * started calling this module once per raw frame instead of once per
+ * decision — 5x more calls per quarter at the OLD per-call distance would
+ * have covered 5x the ground. Scaling this one constant down by the same
+ * factor is what keeps total ground covered per quarter unchanged while
+ * movement itself gets 5x smoother between decisions; every other constant
+ * in this file (`REFERENCE_SPEED_ACCEL`, `MIN_STEP_MULTIPLIER`, the
+ * pull-taper arrays) is a ratio or a per-call cap, not a per-quarter total,
+ * so none of them needed touching. Confirmed empirically, not just reasoned
+ * on paper — see `scripts/verify_round106_scratch.ts`'s ground-covered
+ * check.
  */
-const BASE_STEP_PER_TICK = 0.16;
+const BASE_STEP_PER_TICK = 0.032;
 const REFERENCE_SPEED_ACCEL = 55;
 const MIN_STEP_MULTIPLIER = 0.5;
 

@@ -7,7 +7,7 @@ import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } f
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers, benchPlayers } from "./team.ts";
 import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
-import { carrierPosition, proximityFor, distanceBetween, proximityWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
+import { carrierPosition, proximityFor, distanceBetween, proximityWeight, spaceWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
 import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
 import {
   tacticGroupForSlot,
@@ -363,6 +363,65 @@ export interface SimulateMatchOptions {
   awayLineCoachEffectiveness?: Partial<Record<MatchDayCoachRole, number>>;
 }
 
+/**
+ * Round 106, item 7 — [[Contest Resolution Redesign]]'s own original item 7, untouched since round
+ * 21's process-map ask (Tyler: "our tick rate needs to increase by at least a factor of 5 or 6 per
+ * quarter to accommodate all these extra decisions... help simulate the decision the player needs to
+ * make when determining whether to kick or handball... as players move towards and try to close the
+ * distance on the player with the ball to contest that player before they kick it... give our
+ * simulation much more 'life'"). `5`, the bottom of Tyler's own named range.
+ *
+ * Round 27 flagged this as needing "a full rebalancing pass, not a search-and-replace... every per-tick
+ * probability constant... would need re-deriving so match-total rates don't just multiply by the
+ * tick-count factor" — real, disclosed evidence (22.09% of the tick budget already spent on two-tick
+ * disposal sequences). That warning assumed the only way to add ticks was to make EVERY existing tick
+ * five times more frequent, decision included, which really would multiply every match-total rate by 5.
+ * This round's actual mechanism is different and narrower: `simulateQuarter`'s loop below now steps
+ * player MOVEMENT (`stepTickPositions`) on every one of the new, more granular raw ticks, but only
+ * dispatches the phase-handler switch (the actual decision — clearance, disposal, contest, shot, and
+ * `ctx.tick` itself) on every `TICK_RATE_MULTIPLIER`-th one. `ctx.tick` — this file's own name for "one
+ * resolved phase-step" (see `TACKLE_HOLD_DOWN_TICKS`'s own doc comment: "`ctx.tick` advances once per
+ * resolved phase-step regardless of phase type... not a fixed real-world time slice") — keeps advancing
+ * at EXACTLY the cadence it always has: still 130 decision-ticks per quarter, identical total count to
+ * before this round. That means every existing probability constant, every `ctx.tick`-keyed hold-down
+ * (`TACKLE_HOLD_DOWN_TICKS`, `RUCK_TAP_HOLD_DOWN_TICKS`), every fitness constant
+ * (`ON_GROUND_FITNESS_DRAIN`, `FITNESS_CHECK_INTERVAL_TICKS`, `MIN_BENCH_REST_TICKS`), and Run-and-Carry's
+ * own `MAX_CONSECUTIVE_RUN_TICKS`/`P_RUN_AND_CARRY_BASE` needs ZERO re-derivation — none of them were
+ * ever reading the new, more granular raw-tick counter at all, only `ctx.tick`. The one constant that
+ * DOES need rescaling is movement's own `BASE_STEP_PER_TICK` (movement.ts) — `stepTickPositions` now
+ * runs `TICK_RATE_MULTIPLIER`x more often per decision, so it scales down by the same factor to keep
+ * total ground covered per quarter unchanged; see that constant's own doc comment. Confirmed against
+ * real many-seed aggregate match-total rates (disposals, tackles, marks, frees, goals) in
+ * `scripts/verify_round106_scratch.ts`, not just reasoned on paper.
+ *
+ * Deliberately NOT the `kickFlightDurationMs`/`BASE_TICK_MS` split (round 30, `ground.ts`/
+ * `useMatchPlayback.ts`) — that already decoupled engine ticks from on-screen wall-clock pacing at the
+ * PRESENTATION layer; this is the simulation's own internal tick count, a separate, bigger thing, per
+ * this report review's own framing. Needs zero presentation-layer changes as a direct consequence of the
+ * mechanism above: the front end (`useMatchPlayback.ts`) plays back `MatchResult.events[]` — LOGGED
+ * events, populated by `log()` calls inside phase handlers — never raw ticks; since the settle ticks this
+ * round adds never call `log()`, the logged-event count per quarter is exactly what it always was, so
+ * `BASE_TICK_MS` needs no change at all.
+ *
+ * `DEFAULT_TICKS_PER_QUARTER` itself deliberately stays `130` below, NOT `130 * TICK_RATE_MULTIPLIER` —
+ * caught before it shipped by checking every real consumer of `MatchInProgress.ticksPerQuarter` /
+ * `MatchResult.ticksPerQuarter`, not just this file. `ratings.ts`'s `computeAussieFootySimRatings` does
+ * `totalTicks = result.ticksPerQuarter * 4` and divides `ev.tick` (itself `ctx.tick` at log time) by it
+ * to get a 0-1 "how late in the match" fraction for its state-of-game clutch weighting
+ * (`stateOfGameMultiplier`); `LiveMatch.tsx`'s scoreboard does the analogous thing for the on-screen
+ * progress readout. Both assume `ticksPerQuarter` is denominated in the SAME unit as `ev.tick`/`ctx.tick`
+ * — decision-dispatches, not raw frames. Multiplying the stored field by 5 while `ctx.tick` keeps
+ * advancing once per dispatch (as it must, per the paragraph above) would silently cap both at ~20%
+ * even on the last kick of the match — a real, silent bug, not a cosmetic one. Making `ctx.tick` advance
+ * once per raw frame instead would fix that mismatch but reopens exactly the six-constant rescale
+ * (`TACKLE_HOLD_DOWN_TICKS` and friends) this whole design exists to avoid. So `ticksPerQuarter` keeps
+ * its pre-existing value AND meaning — still the decision-dispatch count, still 130, zero downstream
+ * change for `ratings.ts` or the front end — and the new, more-granular raw-frame count lives only as a
+ * local variable inside `simulateQuarter`'s own loop below (`ticksPerQuarter * TICK_RATE_MULTIPLIER`),
+ * never stored on `MatchInProgress`/`MatchResult`. The visible "5x" Tyler asked for is the
+ * `TICK_RATE_MULTIPLIER` constant itself, not a literal bump to `DEFAULT_TICKS_PER_QUARTER`.
+ */
+const TICK_RATE_MULTIPLIER = 5;
 const DEFAULT_TICKS_PER_QUARTER = 130;
 
 // --- Placeholder probabilities — "deliberately roughed in" per Engine.md's own framing of
@@ -409,7 +468,30 @@ const P_FORWARD_MARK_IS_LEAD = 0.4;
  * `isForward50` is also true.
  */
 const P_FORWARD50_CONTEST_IS_GROUNDBALL = 0.3;
-const P_KICK_VS_HANDBALL = 0.55;
+/**
+ * Round 106, item 5 — [[Contest Resolution Redesign]]'s own original item 5
+ * framing, untouched since round 27 until now: "Replace the flat
+ * P_KICK_VS_HANDBALL constant with a threshold roll over distance-to-
+ * best-open-target, readPlay, and current pressure" (Tyler, round 106,
+ * re-surfacing the report review's second vote for this exact item). The old
+ * flat `P_KICK_VS_HANDBALL = 0.55` constant is gone — replaced by
+ * `decideKickVsHandball` below, a genuine `resolveThreshold` roll. These
+ * three constants are that roll's calibration, derived (not guessed) against
+ * the real generated player pool's own average `readPlay` (751 real
+ * prospects/players, `src/data/generated/players.json`: mean 49.07, median
+ * 46) so a "neutral" tick — average readPlay, equally-open kick and handball
+ * targets, zero pressure — reproduces close to the old flat 55% kick rate,
+ * not a silently different baseline: `winProbability(49, 45.7, DEFAULT_K =
+ * 0.06)` ≈ 0.548. Confirmed against real many-seed aggregate data (not just
+ * this hand derivation) in `scripts/verify_round106_scratch.ts` — see that
+ * script and this round's ROADMAP.md entry for the measured actual rate,
+ * disclosed as this project's every other calibrated constant already is.
+ */
+const KICK_DECISION_BASE_DIFFICULTY = 45.7;
+/** Rating points per `spaceWeight`-unit of "the kick target is more open than the handball target" (or vice-versa) — `spaceWeight`'s own range is [1, `SPACE_WEIGHT_MAX`=4], so the two candidates' openness gap realistically spans roughly ±3; at that extreme this swings the roll by ±18 rating points, a real, noticeable preference (not decorative) without being a hard override — the same "soft preference" philosophy `spaceWeight` itself is already documented with (positioning.ts). */
+const KICK_DECISION_OPENNESS_WEIGHT = 6;
+/** Rating points subtracted at full pressure (a live tagger, or a nearby defender at `PROXIMITY_CLOSE_DISTANCE`) — big enough that a tagged/closely-attended carrier meaningfully favours the safer, shorter handball (a genuinely open kick target can still override it), small enough it never becomes a deterministic "always handball under any pressure" cutoff. */
+const KICK_DECISION_PRESSURE_PENALTY = 15;
 const P_SET_SHOT_VS_SNAP = 0.7;
 /**
  * Aug 2026 round 38 — Match Realism Review Finding 3 ("the snap-shot
@@ -1973,22 +2055,23 @@ function runClearance(ctx: Ctx, state: State): State {
  * disposal to nobody, so this always succeeds.
  */
 /**
- * Aug 2026 round 46 — ROADMAP backlog item #26. Shared by both real
- * forward-50 kick-launch call sites (`resolveUnpressuredDisposal`'s own
- * branch, and `runGeneralPlay`'s pressured-disposal tail below — the exact
- * same duplication `resolveLongKickExecution`'s own doc comment just below
- * already describes for the other 2 of "4 real kick-launch call sites").
- * Picks the receiver via `weightedKickTarget` exactly once, then — only for
- * a genuine forward-50 entry — decides shot-chance from THEIR real
- * predicted position (`SHOT_CHANCE_ON_ENTRY_MAX`'s own doc comment, above,
- * has the full diagnosis of why this couldn't be a drop-in multiplier on
- * the old flat roll). The caller reuses the SAME `receiverPick` for the
- * actual mark resolution whichever way `isShotChance` comes back — a real,
- * incidental correctness fix over the old code, which only ever picked a
- * receiver once GIVEN the flat roll already succeeded, so there was no risk
- * of two different `weightedKickTarget` calls landing on two different
- * receivers for the same tick the way a naive "roll first, maybe pick
- * twice" restructure could have introduced.
+ * Aug 2026 round 46 — ROADMAP backlog item #26; RESTRUCTURED round 106, item
+ * 5. Originally this picked the receiver via `weightedKickTarget` itself
+ * AND decided shot-chance in one call (`pickForward50KickReceiver`). Round
+ * 106's `decideKickVsHandball` needs the kick candidate's own openness
+ * BEFORE the kick-vs-handball decision even happens, so both real forward-50
+ * kick-launch call sites (`resolveUnpressuredDisposal`, and
+ * `runGeneralPlay`'s pressured-disposal tail below) now call
+ * `weightedKickTarget` themselves, up front, unconditionally — see each call
+ * site's own doc comment. This function is what's left: ONLY the
+ * shot-chance-given-an-already-decided-receiver half, still gated on
+ * `isForward50`/the decision itself (a shot-chance roll only makes sense
+ * once a kick has actually been chosen) — `SHOT_CHANCE_ON_ENTRY_MAX`'s own
+ * doc comment, above, has the full diagnosis of why this couldn't be a
+ * drop-in multiplier on the old flat roll. Both call sites reuse the SAME
+ * `KickPick` they already computed for the decision — no second,
+ * independent `weightedKickTarget` draw, so there's still no risk of two
+ * different calls landing on two different receivers for the same tick.
  *
  * Receiver position for the geometry check itself: real tracked position if
  * this player already has one, else the same `proximityFor` estimate
@@ -1998,25 +2081,37 @@ function runClearance(ctx: Ctx, state: State): State {
  * already-established proxy this file trusts elsewhere for "roughly where
  * is this player."
  */
-function pickForward50KickReceiver(
-  ctx: Ctx,
-  state: State,
-  possessingTeam: MatchTeam,
-  possessingPlan: TeamPlan | null,
-  defendingSide: Side,
-  defendingTeam: MatchTeam,
-  carrier: Player,
-  newZone: Zone,
-  disposerPos: AbstractPosition,
-): { receiverPick: KickPick; isShotChance: boolean } {
-  const receiverPick = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
-  if (!isForward50(newZone, state.possession)) return { receiverPick, isShotChance: false };
+function shotChanceGivenReceiver(ctx: Ctx, state: State, possessingPlan: TeamPlan | null, possessingTeam: MatchTeam, newZone: Zone, receiverPick: KickPick): boolean {
+  if (!isForward50(newZone, state.possession)) return false;
   const receiverPos =
     ctx.trackedPositions.get(receiverPick.player.PlayerID) ??
     proximityFor(receiverPick.player, state.possession, possessingTeam.positions?.get(receiverPick.player.PlayerID), newZone, state.possession, undefined, possessingTeam.positions);
   const { depth, angleSeverity } = shotGeometry(receiverPos, state.possession);
   const geometryShotChance = shotChanceOnEntry(depth, angleSeverity) * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
-  return { receiverPick, isShotChance: ctx.rng() < geometryShotChance };
+  return ctx.rng() < geometryShotChance;
+}
+
+/**
+ * Round 106, item 5 — [[Contest Resolution Redesign]]'s own original
+ * framing: kick-vs-handball as a real decision, replacing the flat
+ * `P_KICK_VS_HANDBALL` coin flip. A `resolveThreshold` roll (this file's
+ * standard rating-vs-difficulty threshold check, `contest.ts`), not a bespoke
+ * comparison — Tyler's own words asked for "a threshold roll," and this is
+ * the mechanism every other real/fake-binary decision in this file already
+ * uses (tackle attempts, disposal-vs-defender, set shots).
+ *
+ * `rating` rewards a carrier who reads the play well (`readPlay`) AND has a
+ * genuinely more open kick target than handball target right now
+ * (`kickOpenness - handballOpenness`, both already-computed `spaceWeight`
+ * values the caller passes in — see each call site's own doc comment for
+ * where they come from); `difficulty` rises with live pressure, pushing the
+ * decision toward the safer, shorter handball the more closely this
+ * disposal is being defended. See `KICK_DECISION_BASE_DIFFICULTY`'s own doc
+ * comment for the calibration this is built around.
+ */
+function decideKickVsHandball(ctx: Ctx, carrier: Player, kickOpenness: number, handballOpenness: number, pressure: number): boolean {
+  const rating = carrier.readPlay + (kickOpenness - handballOpenness) * KICK_DECISION_OPENNESS_WEIGHT - pressure * KICK_DECISION_PRESSURE_PENALTY;
+  return resolveThreshold(rating, KICK_DECISION_BASE_DIFFICULTY, ctx.rng).success;
 }
 
 /**
@@ -2107,17 +2202,32 @@ function resolveUnpressuredDisposal(
 ): State {
   const line = lineFor(ctx, carrier);
   line.disposals += 1;
-  const isKick = ctx.rng() < P_KICK_VS_HANDBALL;
-  if (isKick) line.kicks += 1;
-  else line.handballs += 1;
-
-  const newZone = isKick ? advanceZone(state.zone, state.possession) : state.zone;
   // Aug 2026 round 33 — the disposer's own exact position at the moment of
-  // this kick, computed once and reused by both weightedKickTarget call
-  // sites below (shot-chance and general) rather than duplicated at each —
+  // this disposal, computed once and reused below rather than duplicated —
   // see weightedKickTarget's own doc comment (involvement.ts) for why this
   // is now required.
   const disposerPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
+  // Round 106, item 5 — kick-vs-handball is now decideKickVsHandball's own
+  // real decision, not a flat P_KICK_VS_HANDBALL coin flip; see that
+  // function's own doc comment. That needs BOTH candidates' own openness
+  // BEFORE the decision, so both weightedKickTarget/weightedHandballTarget
+  // searches now run unconditionally, up front (one extra rng() draw per
+  // disposal versus before this round, deliberately accepted — this
+  // project's every other tick-loop restructure has changed the exact
+  // rng() sequence the same way; see mulberry32's own doc comment).
+  // `newZoneIfKick` is `advanceZone` (pure, no rng) applied speculatively —
+  // safe to compute before the decision, since a kick's own target zone
+  // doesn't depend on which target ends up actually used.
+  const newZoneIfKick = advanceZone(state.zone, state.possession);
+  const kickCandidate = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZoneIfKick, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  const handballCandidate = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, state.zone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  // This is the "nobody in range, zero pressure" call site (see this
+  // function's own name/doc comment) — there's no live defender here to
+  // derive a pressure figure from, so this is honestly 0, not a guess.
+  const isKick = decideKickVsHandball(ctx, carrier, spaceWeight(kickCandidate.distance), spaceWeight(handballCandidate.distance), 0);
+  if (isKick) line.kicks += 1;
+  else line.handballs += 1;
+  const newZone = isKick ? newZoneIfKick : state.zone;
 
   if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
     const newSide = otherSide(state.possession);
@@ -2170,13 +2280,16 @@ function resolveUnpressuredDisposal(
   );
 
   // Round 46 — receiver (and, only for a genuine forward-50 entry,
-  // shot-chance) decided ONCE here via pickForward50KickReceiver, not
-  // separately inside each branch below — see that function's own doc
-  // comment for the full diagnosis (ROADMAP backlog item #26).
+  // shot-chance) decided ONCE — round 106 item 5 hoisted the actual
+  // weightedKickTarget call above (kickCandidate, needed by the decision
+  // itself), so this now only needs shotChanceGivenReceiver's own half; see
+  // that function's doc comment for the full diagnosis (ROADMAP backlog
+  // item #26, restructured).
   let receiverPick: KickPick | null = null;
   let isShotChance = false;
   if (isKick) {
-    ({ receiverPick, isShotChance } = pickForward50KickReceiver(ctx, state, possessingTeam, possessingPlan, defendingSide, defendingTeam, carrier, newZone, disposerPos));
+    receiverPick = kickCandidate;
+    isShotChance = shotChanceGivenReceiver(ctx, state, possessingPlan, possessingTeam, newZone, receiverPick);
   }
   if (receiverPick && isShotChance) {
     // Aug 2026 round 26 — the mark itself no longer resolves on this same
@@ -2228,9 +2341,9 @@ function resolveUnpressuredDisposal(
   // doc comment for why a handball reception isn't a dueling contest the way
   // a mark is).
   if (receiverPick) {
-    // Round 46 — same pick from pickForward50KickReceiver above (isKick was
-    // true to get here; receiverPick is only ever set in that branch), not a
-    // second independent weightedKickTarget call.
+    // Round 46 — same pick as kickCandidate above (isKick was true to get
+    // here; receiverPick is only ever set in that branch), not a second
+    // independent weightedKickTarget call.
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
@@ -2249,7 +2362,11 @@ function resolveUnpressuredDisposal(
       markContestDistance: markDistance,
     };
   }
-  const handballPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  // Round 106, item 5 — this branch is only reached when !isKick, so
+  // newZone === state.zone here; handballCandidate (computed against
+  // state.zone above, before the decision) is exactly the same search a
+  // fresh weightedHandballTarget(..., newZone, ...) call would repeat.
+  const handballPick = handballCandidate;
   const receiver = handballPick.player;
   const handballLabel =
     proximityWeight(handballPick.distance) === 0
@@ -2638,7 +2755,27 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
 
   const line = lineFor(ctx, carrier);
   line.disposals += 1;
-  const isKick = ctx.rng() < P_KICK_VS_HANDBALL;
+  // Aug 2026 round 33 — same reasoning as resolveUnpressuredDisposal's own
+  // identical line: the disposer's own exact position, computed once and
+  // reused below.
+  const disposerPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
+  // Round 106, item 5 — see resolveUnpressuredDisposal's own identical
+  // restructure/doc comment for the full reasoning (decideKickVsHandball
+  // replaces the flat P_KICK_VS_HANDBALL coin flip; both candidate target
+  // searches now run unconditionally, up front). This call site's own
+  // addition is a genuine, non-zero `pressure` term: `tagger` is a live,
+  // deterministic 1-on-1 assignment (full attention, pressure 1); absent
+  // one, `nearby`'s own already-computed distance-to-carrier
+  // (`proximityWeight`, the same 0/PROXIMITY_MID_FACTOR/1 read every other
+  // proximity-gated decision in this file already uses) stands in for "how
+  // closely is this disposal actually being defended" — both `tagger` and
+  // `nearby` were already computed above (finding `defender` itself), not
+  // freshly calculated here.
+  const newZoneIfKick = advanceZone(state.zone, state.possession);
+  const kickCandidate = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZoneIfKick, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  const handballCandidate = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, state.zone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  const pressure = tagger ? 1 : proximityWeight(nearby!.distance);
+  const isKick = decideKickVsHandball(ctx, carrier, spaceWeight(kickCandidate.distance), spaceWeight(handballCandidate.distance), pressure);
   if (isKick) line.kicks += 1;
   else line.handballs += 1;
 
@@ -2650,11 +2787,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // — controlled ball movement *out of trouble*, not a ground-gaining play.
   // Kicks alone advance the zone; a handball keeps play, and the receiver
   // pool below, right where it already was.
-  const newZone = isKick ? advanceZone(state.zone, state.possession) : state.zone;
-  // Aug 2026 round 33 — same reasoning as resolveUnpressuredDisposal's own
-  // identical line: the disposer's own exact position, computed once and
-  // reused by both weightedKickTarget call sites below.
-  const disposerPos = carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
+  const newZone = isKick ? newZoneIfKick : state.zone;
 
   // Out on the Full — Aug 2026 round 19, see P_KICK_GOES_OUT_ON_FULL's own
   // doc comment. Only a kick can literally sail out on the full; the
@@ -2726,14 +2859,16 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // and *then* shoots — not the disposer teleporting straight into a shot off
   // their own kick.
   // Round 46 — receiver (and, only for a genuine forward-50 entry,
-  // shot-chance) decided ONCE here via pickForward50KickReceiver, same as
-  // resolveUnpressuredDisposal's own identical restructure above — see that
-  // function's own doc comment for the full diagnosis (ROADMAP backlog
-  // item #26).
+  // shot-chance) decided ONCE — round 106 item 5 hoisted the actual
+  // weightedKickTarget call above (kickCandidate, needed by the decision
+  // itself), same as resolveUnpressuredDisposal's own identical restructure;
+  // see shotChanceGivenReceiver's own doc comment for the full diagnosis
+  // (ROADMAP backlog item #26, restructured).
   let receiverPick: KickPick | null = null;
   let isShotChance = false;
   if (isKick) {
-    ({ receiverPick, isShotChance } = pickForward50KickReceiver(ctx, state, possessingTeam, possessingPlan, defendingSide, defendingTeam, carrier, newZone, disposerPos));
+    receiverPick = kickCandidate;
+    isShotChance = shotChanceGivenReceiver(ctx, state, possessingPlan, possessingTeam, newZone, receiverPick);
   }
   if (receiverPick && isShotChance) {
     // Aug 2026 round 26 — same treatment as resolveUnpressuredDisposal's own
@@ -2781,9 +2916,9 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // as of round 24, additionally weighted by genuine space from the nearest
   // opponent (weightedKickTarget) — see that function's own doc comment.
   if (receiverPick) {
-    // Round 46 — same pick from pickForward50KickReceiver above (isKick was
-    // true to get here; receiverPick is only ever set in that branch), not a
-    // second independent weightedKickTarget call.
+    // Round 46 — same pick as kickCandidate above (isKick was true to get
+    // here; receiverPick is only ever set in that branch), not a second
+    // independent weightedKickTarget call.
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
@@ -2802,7 +2937,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       markContestDistance: markDistance,
     };
   }
-  const handballPick = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, newZone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  // Round 106, item 5 — this branch is only reached when !isKick, so
+  // newZone === state.zone here; handballCandidate (computed against
+  // state.zone above, before the decision) is exactly the same search a
+  // fresh weightedHandballTarget(..., newZone, ...) call would repeat.
+  const handballPick = handballCandidate;
   const receiver = handballPick.player;
   const handballLabel =
     proximityWeight(handballPick.distance) === 0
@@ -4104,17 +4243,25 @@ export function fitnessFor(match: MatchInProgress, side: Side, playerId: number)
 /** Runs exactly one quarter's worth of ticks, then resets to a centre stoppage — the exact same per-quarter body `simulateMatch()`'s own loop used to run inline, just callable one quarter at a time. Mutates `match` in place (and returns it, for chaining/assignment convenience). */
 export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4): MatchInProgress {
   match.ctx.quarter = quarter;
-  // Aug 2026 round 28 — step every on-ground player's off-ball position
-  // once per tick consumed below (both the main loop and the dangling-
-  // phase loop further down), using the zone/possession the ball was
-  // actually at entering that tick (i.e. the result of the PREVIOUS
-  // tick's resolution, since this always runs before that tick's own
-  // phase handler). Any `log()` call a phase handler makes during the
-  // same tick snapshots these freshly-stepped positions, not stale ones
-  // from a tick ago. See `engine/movement.ts`'s top comment for the full
-  // model. Factored into a closure since it's called from 5 separate
-  // sites below with identical arguments bar the always-current `match`
-  // state they close over.
+  // Aug 2026 round 28, decoupled round 106 — step every on-ground player's
+  // off-ball position once per RAW FRAME consumed below (both the main loop
+  // and the dangling-phase loop further down), using the zone/possession the
+  // ball was actually at entering that frame (i.e. the result of the
+  // PREVIOUS frame's resolution, since this always runs before that frame's
+  // own phase handler, when it has one — see below). Any `log()` call a
+  // phase handler makes snapshots these freshly-stepped positions, not stale
+  // ones from a frame ago. See `engine/movement.ts`'s top comment for the
+  // full model. Factored into a closure since it's called from several sites
+  // below (and the dangling-phase loop) with identical arguments bar the
+  // always-current `match` state they close over.
+  //
+  // Round 106 — [[Contest Resolution Redesign]] item 7: this closure now
+  // runs `TICK_RATE_MULTIPLIER` times per decision instead of once, giving
+  // movement 5x finer resolution between decisions, while everything gated
+  // on `match.ctx.tick` below (fitness, rotation, and the actual phase
+  // dispatch) keeps firing at exactly its old cadence — see
+  // `TICK_RATE_MULTIPLIER`'s own doc comment for the full reasoning and why
+  // that split is what lets every existing per-tick constant stay untouched.
   const stepTickPositions = () => {
     match.ctx.trackedPositions = stepPositions(
       match.ctx.home,
@@ -4130,9 +4277,18 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       match.ctx.trackedPositions,
     );
   };
-  for (let t = 0; t < match.ticksPerQuarter; t++) {
-    match.ctx.tick += 1;
+  // Raw frames this quarter: `TICK_RATE_MULTIPLIER` for every one decision
+  // dispatch `match.ticksPerQuarter` itself still counts (130 by default, or
+  // whatever an explicit `SimulateMatchOptions.ticksPerQuarter` override
+  // says) — a purely local quantity, never stored on `MatchInProgress`/
+  // `MatchResult`. See `TICK_RATE_MULTIPLIER`'s own doc comment for why.
+  const rawFrameCount = match.ticksPerQuarter * TICK_RATE_MULTIPLIER;
+  for (let frame = 0; frame < rawFrameCount; frame++) {
     stepTickPositions();
+    // Every raw frame moves players; only every `TICK_RATE_MULTIPLIER`-th
+    // one is an actual decision — same cadence as before this round.
+    if ((frame + 1) % TICK_RATE_MULTIPLIER !== 0) continue;
+    match.ctx.tick += 1;
     stepFitness(match.ctx);
     maybeRotateForFitness(match.ctx, match.state);
     switch (match.state.phase) {

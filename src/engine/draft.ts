@@ -5,7 +5,7 @@ import type { ClubStrategy } from "./listNeeds.ts";
 import { ARCHETYPE_LINE, summariseLines, bandForGap, type Line } from "../data/lines.ts";
 import type { Player, RatedAttribute } from "../types/player.ts";
 import { DISCRETE_SKILLS, RATED_ATTRIBUTES, playerFullName, type ImprovementRates, type DeclineRates } from "../types/player.ts";
-import { ARCHETYPES, ARCHETYPE_PRIMARY_ATTRIBUTES, type Archetype } from "../types/archetype.ts";
+import { ARCHETYPES, ARCHETYPE_PRIMARY_ATTRIBUTES, ARCHETYPE_TACTICAL_PHRASES, type Archetype } from "../types/archetype.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
 import { SCOUT_FOCUS_AREA_ARCHETYPES, type Coach, type ScoutFocusArea } from "../types/coach.ts";
 import type { LadderRow } from "./ladder.ts";
@@ -1420,17 +1420,19 @@ interface WriteupContext {
   statLabel: string;
   statValue: number;
   trait: string;
+  /** Archetype tactical-function flavor sentence — Phase A item 5 (round 106), `ARCHETYPE_TACTICAL_PHRASES`. A second, independent flavor sentence alongside `trait` (attribute-based); `trait` reads the prospect's own rolled numbers, this reads their role on-field, so the two don't repeat each other. */
+  archetypePhrase: string;
   closing: string;
 }
 
 /** 6 template shapes, each modeled on a recurring pattern in the 18-write-up sample set (riser/carnival-standout, graduation-to-seniors, hard-nosed competitor, injury-interrupted-but-still-rated, character/nickname read, genuine-star framing) — picked deterministically per prospect so the same prospect always reads the same way, not re-randomized every render. */
 const ELITE_WRITEUP_TEMPLATES: readonly ((c: WriteupContext) => string)[] = [
-  (c) => `${c.name} has been one of the risers of the year, rocketing into calculations at the very top of the draft. The ${c.archetype} had one of the eye-catching games of the carnival, gathering ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a big showing for ${c.homeState}. ${c.trait} ${c.closing}`,
-  (c) => `${c.name} has pushed well up draft boards after a strong stretch of football. ${c.trait} He piled up ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a standout carnival performance for ${c.homeState}. ${c.closing}`,
-  (c) => `There's a lot to like about the way ${c.name} goes about it. ${c.trait} The ${c.archetype} competes hard every time the footy's in dispute, backing it up with ${c.disposals} disposals and ${c.statValue} ${c.statLabel} through the carnival. ${c.closing}`,
-  (c) => `${c.name}'s season has had its interruptions, but clubs haven't lost faith. Before a recent injury scare, the ${c.archetype} had shown exactly why he's rated so highly — ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a big carnival performance for ${c.homeState}. ${c.trait} ${c.closing}`,
-  (c) => `${c.name} plays with a real edge. ${c.trait} He's been one of the most talked-about names in this year's crop, backing up strong carnival form (${c.disposals} disposals, ${c.statValue} ${c.statLabel}) with the upside that has clubs willing to look past the occasional rough patch. ${c.closing}`,
-  (c) => `${c.name} is the kind of prospect a draft class gets built around. ${c.trait} He backed up a stellar carnival — ${c.disposals} disposals and ${c.statValue} ${c.statLabel} for ${c.homeState} — with the sort of composure scouts rarely see at this age. ${c.closing}`,
+  (c) => `${c.name} has been one of the risers of the year, rocketing into calculations at the very top of the draft. The ${c.archetype} had one of the eye-catching games of the carnival, gathering ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a big showing for ${c.homeState}. ${c.trait} ${c.archetypePhrase} ${c.closing}`,
+  (c) => `${c.name} has pushed well up draft boards after a strong stretch of football. ${c.trait} He piled up ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a standout carnival performance for ${c.homeState}. ${c.archetypePhrase} ${c.closing}`,
+  (c) => `There's a lot to like about the way ${c.name} goes about it. ${c.trait} The ${c.archetype} competes hard every time the footy's in dispute, backing it up with ${c.disposals} disposals and ${c.statValue} ${c.statLabel} through the carnival. ${c.archetypePhrase} ${c.closing}`,
+  (c) => `${c.name}'s season has had its interruptions, but clubs haven't lost faith. Before a recent injury scare, the ${c.archetype} had shown exactly why he's rated so highly — ${c.disposals} disposals and ${c.statValue} ${c.statLabel} in a big carnival performance for ${c.homeState}. ${c.trait} ${c.archetypePhrase} ${c.closing}`,
+  (c) => `${c.name} plays with a real edge. ${c.trait} He's been one of the most talked-about names in this year's crop, backing up strong carnival form (${c.disposals} disposals, ${c.statValue} ${c.statLabel}) with the upside that has clubs willing to look past the occasional rough patch. ${c.archetypePhrase} ${c.closing}`,
+  (c) => `${c.name} is the kind of prospect a draft class gets built around. ${c.trait} He backed up a stellar carnival — ${c.disposals} disposals and ${c.statValue} ${c.statLabel} for ${c.homeState} — with the sort of composure scouts rarely see at this age. ${c.archetypePhrase} ${c.closing}`,
 ];
 
 /**
@@ -1462,6 +1464,7 @@ function proceduralEliteWriteupFor(prospect: Player, tier: ScoutingTier): string
     statLabel: statSpec.label,
     statValue: flavorInt(rng, statSpec.min, statSpec.max),
     trait: standoutTraitPhraseFor(prospect),
+    archetypePhrase: ARCHETYPE_TACTICAL_PHRASES[prospect.archetype as Archetype] ?? "",
     closing: "",
   };
   const closings = tierClosingPhrases(name, tier);

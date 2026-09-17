@@ -1,6 +1,7 @@
 import type { Grade } from "./seasonGrading.ts";
 import type { SeasonAwards } from "./awards.ts";
 import type { SeasonArchiveEntry } from "./seasonSummary.ts";
+import { ARCHETYPE_TACTICAL_PHRASES, type Archetype } from "../types/archetype.ts";
 
 /**
  * Player Profile honours summary + write-up blurb — round 94 Part 2, [[Season Grading, Post-Season
@@ -28,6 +29,14 @@ import type { SeasonArchiveEntry } from "./seasonSummary.ts";
  * `PlayerProfileModal.tsx`'s own existing "Draft & Club History" table, and duplicating it into this
  * blurb too would be redundant on the same page. This blurb is intentionally a SEPARATE, purely
  * achievement-and-tenure-driven read, not a retelling of the draft-night story.
+ *
+ * **Round 106 addition (Phase A item 5, cosmetic)**: `DEVELOPING_TEMPLATES` now append one archetype
+ * tactical-function sentence (`ARCHETYPE_TACTICAL_PHRASES`, `../types/archetype.ts`) after the existing
+ * achievement-tenure sentence. Deliberately scoped to the "developing" tier only — a developing player
+ * has no honour or grade yet to headline, so a role-on-field sentence fills a real gap; the decorated
+ * and quality tiers' templates already spend their one sentence on the achievement itself, and adding a
+ * second clause there would pad a sentence that's already saying something, working against this file's
+ * own "1 or 2 sentence," tightly-tiered design goal (see top of this comment).
  */
 
 // ---------------------------------------------------------------------------
@@ -185,6 +194,8 @@ interface BlurbFrag {
   gradeSuffix: string;
   /** "14 games into their career" / "yet to make their senior debut" — precomputed once so every "developing"-tier template can use it uniformly regardless of whether `gamesPlayed` is 0. */
   gamesPhrase: string;
+  /** Archetype tactical-function flavor sentence (`ARCHETYPE_TACTICAL_PHRASES`, Phase A item 5, round 106) — only ever appended by the `DEVELOPING_TEMPLATES` below. A developing player has no achievement yet to headline, so this fills a genuine gap rather than padding a sentence that's already saying something; the decorated/quality tiers' templates already spend their one sentence on the achievement itself and don't use this field. */
+  archetypePhrase: string;
 }
 
 const DECORATED_TEMPLATES: readonly ((f: BlurbFrag) => string)[] = [
@@ -204,11 +215,11 @@ const QUALITY_TEMPLATES: readonly ((f: BlurbFrag) => string)[] = [
 ];
 
 const DEVELOPING_TEMPLATES: readonly ((f: BlurbFrag) => string)[] = [
-  (f) => `${f.name} is still writing their story at ${f.club} — a ${f.archetype} the club will be watching closely as they develop, ${f.gamesPhrase}.`,
-  (f) => `Early days for ${f.name} at ${f.club}; the ${f.archetype} tools are there, ${f.gamesPhrase}.`,
-  (f) => `${f.name} is a developing ${f.archetype} for ${f.club}, ${f.gamesPhrase} and building a case with every outing.`,
-  (f) => `${f.club} added ${f.name} as a ${f.archetype} prospect — ${f.gamesPhrase}, with the runway still ahead of them.`,
-  (f) => `${f.name}'s time at ${f.club} is just beginning, ${f.gamesPhrase} as a ${f.archetype} worth checking back in on.`,
+  (f) => `${f.name} is still writing their story at ${f.club} — a ${f.archetype} the club will be watching closely as they develop, ${f.gamesPhrase}. ${f.archetypePhrase}`,
+  (f) => `Early days for ${f.name} at ${f.club}; the ${f.archetype} tools are there, ${f.gamesPhrase}. ${f.archetypePhrase}`,
+  (f) => `${f.name} is a developing ${f.archetype} for ${f.club}, ${f.gamesPhrase} and building a case with every outing. ${f.archetypePhrase}`,
+  (f) => `${f.club} added ${f.name} as a ${f.archetype} prospect — ${f.gamesPhrase}, with the runway still ahead of them. ${f.archetypePhrase}`,
+  (f) => `${f.name}'s time at ${f.club} is just beginning, ${f.gamesPhrase} as a ${f.archetype} worth checking back in on. ${f.archetypePhrase}`,
 ];
 
 /** Simple deterministic string hash (djb2-ish) — same "same input always maps to the same template index" role as `records.ts`'s own local `hashKey`, duplicated here rather than imported: a generic string-hash utility isn't worth coupling this file to `records.ts` for. */
@@ -245,6 +256,7 @@ export function profileSummaryFor(input: ProfileBlurbInput): string {
     achievement: achievementPhraseFor(input.honours.text, input.grade),
     gradeSuffix: input.grade ? `, grading as high as ${articleFor(input.grade)} ${input.grade} along the way` : "",
     gamesPhrase: input.gamesPlayed > 0 ? `${input.gamesPlayed} game${input.gamesPlayed === 1 ? "" : "s"} into their career` : "yet to make their senior debut",
+    archetypePhrase: ARCHETYPE_TACTICAL_PHRASES[input.archetype as Archetype] ?? "",
   };
   const templates = tier === "decorated" ? DECORATED_TEMPLATES : tier === "quality" ? QUALITY_TEMPLATES : DEVELOPING_TEMPLATES;
   const idx = hashKey(`${input.name}|profile-summary`) % templates.length;

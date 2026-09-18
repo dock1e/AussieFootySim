@@ -1703,6 +1703,126 @@ function describeLooseBallOut(ctx: Ctx, nameA: string, nameB: string): string {
   return LOOSE_BALL_OUT_PHRASES[Math.floor(ctx.rng() * LOOSE_BALL_OUT_PHRASES.length)](nameA, nameB);
 }
 
+/**
+ * Aug 2026 round 109 — Tyler: "I am even thinking we should include 'Umpire
+ * throws the ball up' as part of the hit out contest or 'The boundary umpire
+ * throws in the ball' for boundary contests." Previously `resolveRuckTap`
+ * jumped straight from silence to `${ruckWinner.lname} wins the hit-out` (or
+ * its throw-in/scrappy variants) with no restart action of its own ever
+ * logged — realistic for the CONTEST, but real broadcasts always call the
+ * umpire putting the ball back into play first. Two separate small pools
+ * (not one shared "restart" bank) because a centre bounce and a boundary
+ * throw-in are genuinely different real actions — a bounce is a review-able
+ * skill (a poor bounce can go anywhere), a throw-in never is — so sharing
+ * text between them would read wrong on whichever half it didn't originate
+ * from. Logged as its own preceding `STOPPAGE` line (a real, distinct
+ * broadcast beat — "Umpire's up... and Grundy taps it down") rather than
+ * concatenated onto the existing hitout line, which stays completely
+ * unchanged below. `playerIds: []`/`skipPositionNudge: true` — the umpire
+ * isn't a tracked on-ground player, there's nobody's position to nudge.
+ * One extra `ctx.rng()` draw per stoppage — the same disclosed, accepted
+ * rng-sequence shift every other tick-loop addition in this file has made
+ * (see mulberry32's own doc comment).
+ */
+const CENTRE_BOUNCE_PHRASES: string[] = [
+  "The umpire bounces the ball to start the contest",
+  "Umpire's up, and it's bounced dead centre",
+  "Back goes the umpire, and the ball is bounced to get things underway",
+  "The ball is bounced into the air to restart play",
+];
+const THROW_IN_PHRASES: string[] = [
+  "The boundary umpire throws the ball back in",
+  "In it comes from the boundary umpire",
+  "The boundary umpire steps in to fire it back into play",
+  "Back in it comes off the boundary umpire",
+];
+function describeStoppageRestart(ctx: Ctx, stoppageType: "centreBounce" | "throwIn"): string {
+  const phrases = stoppageType === "centreBounce" ? CENTRE_BOUNCE_PHRASES : THROW_IN_PHRASES;
+  return phrases[Math.floor(ctx.rng() * phrases.length)];
+}
+
+/**
+ * Aug 2026 round 109 — Tyler: "Increase our phrase bank to make it feel more
+ * dynamic and emotive." `${defender} tackles ${carrier}` was a single fixed
+ * string at `runGeneralPlay`'s own non-chase landed-tackle site — the most
+ * frequently-repeated line in a pasted play-by-play excerpt Tyler reviewed,
+ * appearing 3 times in one short Q3 sample. Same variety-bank pattern as
+ * `LOOSE_BALL_OUT_PHRASES` above.
+ */
+const TACKLE_LANDED_PHRASES: ((tackler: string, carried: string) => string)[] = [
+  (t, c) => `${t} tackles ${c}`,
+  (t, c) => `${t} wraps up ${c} in the tackle`,
+  (t, c) => `${t} brings ${c} down with a strong tackle`,
+  (t, c) => `${t} closes in and drags ${c} to ground`,
+];
+function describeTackleLanded(ctx: Ctx, tacklerName: string, carriedName: string): string {
+  return TACKLE_LANDED_PHRASES[Math.floor(ctx.rng() * TACKLE_LANDED_PHRASES.length)](tacklerName, carriedName);
+}
+
+/**
+ * Round 109 phrase-bank variety, uncontested gather (ground ball or leading mark with
+ * no one close enough to contest it). Split by contestType because a mark and a ground
+ * ball read very differently even though both are "uncontested" — see resolveUncontestedGather.
+ */
+const UNCONTESTED_GATHER_GROUND_PHRASES: ((name: string) => string)[] = [
+  (n) => `${n} gathers the loose ball — no one close enough to contest`,
+  (n) => `${n} scoops up the loose ball unopposed`,
+  (n) => `${n} is first to the ball and gathers it cleanly`,
+  (n) => `${n} collects the loose ball with time to spare`,
+];
+const UNCONTESTED_GATHER_MARK_PHRASES: ((name: string) => string)[] = [
+  (n) => `${n} marks it — no one close enough to contest`,
+  (n) => `${n} takes an uncontested mark`,
+  (n) => `${n} marks it comfortably, unopposed`,
+  (n) => `${n} has time and space to take the mark cleanly`,
+];
+function describeUncontestedGather(ctx: Ctx, name: string, isGroundBall: boolean): string {
+  const phrases = isGroundBall ? UNCONTESTED_GATHER_GROUND_PHRASES : UNCONTESTED_GATHER_MARK_PHRASES;
+  return phrases[Math.floor(ctx.rng() * phrases.length)](name);
+}
+
+/**
+ * Round 109 phrase-bank variety, contested win (contested mark / mark on the lead / ground
+ * ball — see CONTEST_WIN_LABEL in runContest). Kept generic across all three label strings
+ * rather than split by contestType, since "wins the {label}" reads fine for any of them and a
+ * physical verb like "climbs highest" would be wrong for a ground ball.
+ */
+const CONTESTED_WIN_PHRASES: ((winner: string, label: string, loser: string) => string)[] = [
+  (w, l) => `${w} wins the ${l}`,
+  (w, l, ls) => `${w} out-battles ${ls} to win the ${l}`,
+  (w, l, ls) => `${w} gets to it first and wins the ${l} over ${ls}`,
+  (w, l) => `${w} fights hard and comes away with the ${l}`,
+];
+function describeContestedWin(ctx: Ctx, winner: string, label: string, loser: string): string {
+  return CONTESTED_WIN_PHRASES[Math.floor(ctx.rng() * CONTESTED_WIN_PHRASES.length)](winner, label, loser);
+}
+
+/**
+ * Round 109 phrase-bank variety, defensive spoil and its intercept-mark upgrade (runContest and
+ * runMarkingContest both have their own spoilLabel local that starts as describeSpoil(...) and is
+ * conditionally reassigned to describeInterceptMark(...) — see isInterceptMark in each). Confirmed
+ * via grep that ground.ts does not pattern-match on this text (unlike the pressured-handball case
+ * above), so free variety here carries no rendering risk.
+ */
+const SPOIL_PHRASES: ((defender: string) => string)[] = [
+  (d) => `${d} spoils it and takes control`,
+  (d) => `${d} punches it clear under pressure`,
+  (d) => `${d} gets a fist to it and spoils the contest`,
+  (d) => `${d} times the spoil perfectly to break it up`,
+];
+function describeSpoil(ctx: Ctx, defenderName: string): string {
+  return SPOIL_PHRASES[Math.floor(ctx.rng() * SPOIL_PHRASES.length)](defenderName);
+}
+const INTERCEPT_MARK_PHRASES: ((defender: string) => string)[] = [
+  (d) => `${d} reads it perfectly and takes an intercept mark`,
+  (d) => `${d} reads the kick perfectly and takes an intercept mark`,
+  (d) => `${d} steps in front of his opponent to take the intercept mark`,
+  (d) => `${d} times his run to pluck the intercept mark`,
+];
+function describeInterceptMark(ctx: Ctx, defenderName: string): string {
+  return INTERCEPT_MARK_PHRASES[Math.floor(ctx.rng() * INTERCEPT_MARK_PHRASES.length)](defenderName);
+}
+
 export interface State {
   phase: Phase;
   zone: Zone;
@@ -1899,7 +2019,7 @@ export interface State {
 }
 
 function runStoppage(ctx: Ctx, state: State): State {
-  return resolveRuckTap(ctx, state.zone, state.possession, false);
+  return resolveRuckTap(ctx, state.zone, state.possession, false, "centreBounce");
 }
 
 /**
@@ -1916,7 +2036,7 @@ function runStoppage(ctx: Ctx, state: State): State {
  * trigger (a fraction of shots that miss everything).
  */
 function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
-  return resolveRuckTap(ctx, zone, displaySide, zone === 0 || zone === 4);
+  return resolveRuckTap(ctx, zone, displaySide, zone === 0 || zone === 4, "throwIn");
 }
 
 /**
@@ -1945,15 +2065,27 @@ function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
  * still tends to win anyway (a tall, well-rated Ruck is usually also the
  * tallest on-ground player) — this only changes who's nominated, not who's
  * eligible.
+ *
+ * Aug 2026 round 109 — `stoppageType` added purely to pick the right umpire-
+ * restart line (`describeStoppageRestart`'s own doc comment) — doesn't touch
+ * who contests or how; see its own inline comment for why it can't just
+ * reuse `useSecondaryRuck`.
  */
 /** Aug 2026 round 92 — see the ruck-tap hold-down's own doc comment (inside this function, at the `ctx.groundedUntilTick.set(ruckWinner...)` call) for the full "why". Deliberately short: just long enough to skip the one immediately-following clearance. */
 const RUCK_TAP_HOLD_DOWN_TICKS = 1;
 
-function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean): State {
+function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean, stoppageType: "centreBounce" | "throwIn"): State {
   // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Both a centre bounce
   // (runStoppage) and a boundary throw-in (runThrowIn) funnel through here, so clearing it once in
   // this one shared spot covers every real stoppage in the file.
   ctx.lastEffectiveDisposal = null;
+  // Aug 2026 round 109 — see describeStoppageRestart's own doc comment. A genuinely separate
+  // discriminator from `useSecondaryRuck` just below: that one is about WHO contests (tallest
+  // on-ground player vs nominated ruck, keyed off zone 0/4), this one is about which umpire-action
+  // line reads correctly (a throw-in stays a throw-in even in midfield zones 1-3, where
+  // useSecondaryRuck is false) — conflating the two would have mislabelled a midfield throw-in as a
+  // centre bounce.
+  log(ctx, zone, displaySide, "STOPPAGE", describeStoppageRestart(ctx, stoppageType), [], [], true);
   const home = onGroundPlayers(ctx.home);
   const away = onGroundPlayers(ctx.away);
   const homePlan = ctx.homePlan;
@@ -2313,6 +2445,102 @@ function snapTrackedZone(ctx: Ctx, playerId: number, zone: Zone): void {
   ctx.trackedPositions.set(playerId, { zoneFrac: zone, lane: existing?.lane ?? 0 });
 }
 
+/**
+ * Aug 2026 round 109 — Tyler, reviewing a pasted play-by-play excerpt: these
+ * disposal-launch lines used to fire TWICE for one physical kick/handball —
+ * an unconditional generic "${carrier} finds space with a kick/handball — no
+ * one close enough to contest" (or, in `runGeneralPlay`'s own pressured
+ * sibling block, "...under pressure from ${defender}") immediately followed
+ * by a SECOND, more specific line naming the actual target ("kicks it into a
+ * contest, Y is strongly attended" / "finds Y leading into space" / the
+ * handball equivalent). Both fired every single time — `receiverPick`/
+ * `handballPick` are never null at either call site (weightedKickTarget/
+ * weightedHandballTarget always return a real pick) — so the generic line
+ * carried no information the specific line didn't already make obvious by
+ * construction; it just doubled the line count on every disposal in the
+ * match, reading as two disjointed events (sometimes even out of their
+ * causal order once the next tick's own events interleave) instead of one.
+ * Consolidated into ONE line per disposal by folding the generic line's own
+ * meaning into these phrase-bank pickers, used at every specific-outcome log
+ * site in both `resolveUnpressuredDisposal` and `runGeneralPlay`'s pressured
+ * block below; the generic line's own stat deltas (disposals/kicks/
+ * handballs, plus any carried-forward `gatherDeltas`) move onto whichever
+ * specific line actually fires rather than being dropped.
+ *
+ * `standingTheMark` picks a genuinely different phrase pool for the
+ * unpressured pickers: a mark/free-kick's guaranteed next disposal
+ * (`State.carrierStandingTheMark`) is real AFL's "plays on" moment, not a
+ * fresh "had time and space" gather — several of Tyler's own flagged
+ * examples (a player marking, then apparently "self-marking" his own very
+ * next kick two lines later) are this exact sequence read without that
+ * context. Making the text say "plays on from the mark" explicitly should
+ * read as one continuous, causally-connected passage instead of two
+ * unrelated-looking events. Text only — doesn't touch
+ * `carrierStandingTheMark`'s own game-logic effect (skipping the tackle/
+ * High-Contact roll in `runGeneralPlay`).
+ */
+function unpressuredKickCleanPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean, isLongKick: boolean): string {
+  const phrases: ((c: string, r: string) => string)[] = standingTheMark
+    ? isLongKick
+      ? [
+          (c, r) => `${c} plays on and kicks it long, ${r} leading into space`,
+          (c, r) => `${c} plays on from the mark, going long to find ${r} leading into space`,
+        ]
+      : [
+          (c, r) => `${c} plays on from the mark and finds ${r} leading into space`,
+          (c, r) => `${c} plays on and picks out ${r}, leading into space`,
+        ]
+    : isLongKick
+      ? [
+          (c, r) => `${c} kicks it long, ${r} leading into space — no one close enough to contest`,
+          (c, r) => `${c} has time to pick out the long option, ${r} leading into space`,
+        ]
+      : [
+          (c, r) => `${c} finds ${r} leading into space, no one close enough to contest`,
+          (c, r) => `${c} has all the time in the world and finds ${r} leading into space`,
+        ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
+}
+/** See `unpressuredKickCleanPhrase`'s own doc comment. Covers the "strongly attended" contested-target branch instead of the clean-leading one. */
+function unpressuredKickContestedPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean): string {
+  const phrases: ((c: string, r: string) => string)[] = standingTheMark
+    ? [
+        (c, r) => `${c} plays on from the mark and kicks it into a contest, ${r} is strongly attended`,
+        (c, r) => `${c} plays on, but it's into a contest — ${r} is strongly attended`,
+      ]
+    : [
+        (c, r) => `${c} kicks it into a contest, ${r} is strongly attended`,
+        (c, r) => `${c} has time and space but drills it into a contest — ${r} is strongly attended`,
+      ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
+}
+/** See `unpressuredKickCleanPhrase`'s own doc comment. Covers `resolveLongKickExecution`'s "missed" outcome — no standingTheMark split, since a botched long kick reads the same either way. */
+function unpressuredKickMissedPhrase(ctx: Ctx, carrier: string, receiver: string): string {
+  const phrases: ((c: string, r: string) => string)[] = [
+    (c, r) => `${c} goes long looking for ${r} but doesn't quite get there`,
+    (c, r) => `${c} tries to find ${r} deep, but the kick comes up short`,
+  ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
+}
+/** See `unpressuredKickCleanPhrase`'s own doc comment. `targetUnderPressure` is a separate axis from `standingTheMark` — it's about whether the RECEIVER (not the disposing carrier, guaranteed unpressured here) has a defender close by. */
+function unpressuredHandballPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean, targetUnderPressure: boolean): string {
+  const phrases: ((c: string, r: string) => string)[] = targetUnderPressure
+    ? [
+        (c, r) => `${c} looks for the outlet — ${r} is under pressure`,
+        (c, r) => `${c} finds ${r} with a handball, straight into pressure`,
+      ]
+    : standingTheMark
+      ? [
+          (c, r) => `${c} plays on with a handball, ${r} finds space`,
+          (c, r) => `${c} plays on from the mark and finds ${r} with a handball`,
+        ]
+      : [
+          (c, r) => `${c} handballs it off, ${r} finds space`,
+          (c, r) => `${c} has time to find the handball, ${r} finds space untouched`,
+        ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
+}
+
 function resolveUnpressuredDisposal(
   ctx: Ctx,
   state: State,
@@ -2322,6 +2550,7 @@ function resolveUnpressuredDisposal(
   gatherDeltas: StatDelta[],
   defendingSide: Side,
   defendingTeam: MatchTeam,
+  standingTheMark: boolean,
 ): State {
   const line = lineFor(ctx, carrier);
   line.disposals += 1;
@@ -2388,19 +2617,17 @@ function resolveUnpressuredDisposal(
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
 
-  log(
-    ctx,
-    newZone,
-    state.possession,
-    "GENERAL_PLAY",
-    `${carrier.lname} finds space with a${isKick ? " kick" : " handball"} — no one close enough to contest`,
-    [carrier.PlayerID],
-    [
-      ...gatherDeltas,
-      { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
-      { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
-    ],
-  );
+  // Aug 2026 round 109 — this disposal's own stat credit (disposals/kicks-or-
+  // handballs, plus any carried-forward gatherDeltas) used to be logged here,
+  // standalone, via an unconditional generic line — see
+  // unpressuredKickCleanPhrase's own doc comment for why that line is gone
+  // now. `disposalDeltas` carries the same credit onto whichever specific
+  // line actually fires below (exactly one of the three always does).
+  const disposalDeltas: StatDelta[] = [
+    ...gatherDeltas,
+    { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
+    { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
+  ];
 
   // Round 46 — receiver (and, only for a genuine forward-50 entry,
   // shot-chance) decided ONCE — round 106 item 5 hoisted the actual
@@ -2425,17 +2652,15 @@ function resolveUnpressuredDisposal(
     const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
-      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname)
       : proximityWeight(markDistance) === 0
-        ? isLongKick
-          ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
-          : `${carrier.lname} finds ${receiver.lname} leading into space inside 50`
-        : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
+        ? unpressuredKickCleanPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, isLongKick)
+        : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
     // launch, not reception — if the reception later fails, whichever site resolves that failure
     // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], disposalDeltas, true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -2470,13 +2695,13 @@ function resolveUnpressuredDisposal(
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
-      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname)
       : proximityWeight(markDistance) === 0
-        ? `${carrier.lname} finds ${receiver.lname} leading into space`
-        : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
+        ? unpressuredKickCleanPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, false)
+        : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], disposalDeltas, true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -2491,13 +2716,11 @@ function resolveUnpressuredDisposal(
   // fresh weightedHandballTarget(..., newZone, ...) call would repeat.
   const handballPick = handballCandidate;
   const receiver = handballPick.player;
-  const handballLabel =
-    proximityWeight(handballPick.distance) === 0
-      ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
-      : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
+  const handballTargetUnderPressure = proximityWeight(handballPick.distance) !== 0;
+  const handballLabel = unpressuredHandballPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, handballTargetUnderPressure);
   // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
   ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
-  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
+  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], disposalDeltas, true);
   return {
     phase: "HANDBALL_CONTEST",
     zone: newZone,
@@ -2505,6 +2728,59 @@ function resolveUnpressuredDisposal(
     carrier: receiver,
     handballContestDistance: handballPick.distance,
   };
+}
+
+/**
+ * Aug 2026 round 109 — the pressured counterpart to `unpressuredKickCleanPhrase`
+ * and friends (see that function's own doc comment for the full "why" — same
+ * double-log consolidation, this time for `runGeneralPlay`'s own inline
+ * pressured-disposal block below, reached after a tackle attempt is evaded
+ * rather than through `resolveUnpressuredDisposal`). No `standingTheMark` axis
+ * here — `carrierStandingTheMark` routes unconditionally to the unpressured
+ * function instead (see `runGeneralPlay`'s own top-of-function check), so a
+ * genuinely pressured disposal (a live `defender` who just attempted a
+ * tackle) can never also be a standing-the-mark one.
+ */
+function pressuredKickCleanPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string, isLongKick: boolean): string {
+  const phrases: ((c: string, d: string, r: string) => string)[] = isLongKick
+    ? [
+        (c, d, r) => `${c} gets it away long under pressure from ${d}, ${r} leading into space`,
+        (c, d, r) => `Under pressure from ${d}, ${c} still finds the long option — ${r} leading into space`,
+      ]
+    : [
+        (c, d, r) => `${c} gets it away under pressure from ${d} and finds ${r} leading into space`,
+        (c, d, r) => `Under pressure from ${d}, ${c} still finds ${r} leading into space`,
+      ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
+}
+/** See `pressuredKickCleanPhrase`'s own doc comment. Covers the "strongly attended" contested-target branch. */
+function pressuredKickContestedPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string): string {
+  const phrases: ((c: string, d: string, r: string) => string)[] = [
+    (c, d, r) => `${c} gets it away under pressure from ${d}, straight into a contest — ${r} is strongly attended`,
+    (c, d, r) => `Under pressure from ${d}, ${c} kicks it into a contest, ${r} is strongly attended`,
+  ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
+}
+/** See `pressuredKickCleanPhrase`'s own doc comment. Covers `resolveLongKickExecution`'s "missed" outcome. */
+function pressuredKickMissedPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string): string {
+  const phrases: ((c: string, d: string, r: string) => string)[] = [
+    (c, d, r) => `${c}, under pressure from ${d}, goes long looking for ${r} but doesn't quite get there`,
+    (c, d, r) => `${c} rushes it under pressure from ${d}, looking for ${r} deep, but the kick comes up short`,
+  ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
+}
+/** See `pressuredKickCleanPhrase`'s own doc comment. `targetUnderPressure` is the receiver's own separate contest situation — same distinction `unpressuredHandballPhrase` draws — not to be confused with the carrier's own pressure from `defender`. */
+function pressuredHandballPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string, targetUnderPressure: boolean): string {
+  const phrases: ((c: string, d: string, r: string) => string)[] = targetUnderPressure
+    ? [
+        (c, d, r) => `${c} looks for the outlet under pressure from ${d} — ${r} is under pressure too`,
+        (c, d, r) => `Under pressure from ${d}, ${c} finds ${r} with a handball, straight into more pressure`,
+      ]
+    : [
+        (c, d, r) => `${c} gets a handball away under pressure from ${d}, ${r} finds space`,
+        (c, d, r) => `Under pressure from ${d}, ${c} still finds ${r} with a handball`,
+      ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
 }
 
 function runGeneralPlay(ctx: Ctx, state: State): State {
@@ -2529,7 +2805,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // enough to take the kick from the mark, not the open-field bouncing-run mechanic that models a
   // genuinely loose carrier breaking away.
   if (state.carrierStandingTheMark) {
-    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas, defendingSide, defendingTeam);
+    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas, defendingSide, defendingTeam, true);
   }
 
   // Run and Carry — Aug 2026 round 20, see P_RUN_AND_CARRY_BASE's own doc
@@ -2700,7 +2976,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // See resolveUnpressuredDisposal's own doc comment for why this is a
     // small separate function rather than threading a nullable defender
     // through the already-intricate pressured path below.
-    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas, defendingSide, defendingTeam);
+    return resolveUnpressuredDisposal(ctx, state, carrier, possessingTeam, possessingPlan, gatherDeltas, defendingSide, defendingTeam, false);
   }
 
   const defenderTactic = tacticFor(defendingPlan, defender, defendingTeam.positions);
@@ -2789,7 +3065,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       state.zone,
       state.possession,
       "GENERAL_PLAY",
-      `${defender.lname} tackles ${carrier.lname}`,
+      describeTackleLanded(ctx, defender.lname, carrier.lname),
       [defender.PlayerID, carrier.PlayerID],
       [
         ...gatherDeltas,
@@ -2957,23 +3233,18 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
 
-  log(
-    ctx,
-    newZone,
-    state.possession,
-    "GENERAL_PLAY",
-    `${carrier.lname} finds space with a${isKick ? " kick" : " handball"} under pressure from ${defender.lname}`,
-    [carrier.PlayerID, defender.PlayerID],
-    [
-      ...gatherDeltas,
-      { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
-      { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
-      { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
-    ],
-    false,
-    undefined,
-    true,
-  );
+  // Aug 2026 round 109 — this disposal's own stat credit (disposals/kicks-or-
+  // handballs/defender's tackleAttempts, plus any carried-forward
+  // gatherDeltas) used to be logged here, standalone, via an unconditional
+  // generic line — see pressuredKickCleanPhrase's own doc comment for why
+  // that line is gone now. `disposalDeltas` carries the same credit onto
+  // whichever specific line actually fires below.
+  const disposalDeltas: StatDelta[] = [
+    ...gatherDeltas,
+    { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
+    { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
+    { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
+  ];
 
   // Aug 2026: a shot can only ever come off a kick (Tyler: "A shot on goal
   // can only be a kick, players cannot handball it at goal") — and the
@@ -3003,17 +3274,15 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
-      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname)
       : proximityWeight(markDistance) === 0
-        ? isLongKick
-          ? `${carrier.lname} kicks it long, ${receiver.lname} leading into space`
-          : `${carrier.lname} finds ${receiver.lname} leading into space inside 50`
-        : `${carrier.lname} kicks it into a marking contest, ${receiver.lname} is strongly attended`;
+        ? pressuredKickCleanPhrase(ctx, carrier.lname, defender.lname, receiver.lname, isLongKick)
+        : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
     // launch, not reception — if the reception later fails, whichever site resolves that failure
     // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID, defender.PlayerID], disposalDeltas, true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -3046,13 +3315,13 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
     const kickLabel = missed
-      ? `${carrier.lname} goes long looking for ${receiver.lname} but doesn't quite get there`
+      ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname)
       : proximityWeight(markDistance) === 0
-        ? `${carrier.lname} finds ${receiver.lname} leading into space`
-        : `${carrier.lname} kicks it into a contest, ${receiver.lname} is strongly attended`;
+        ? pressuredKickCleanPhrase(ctx, carrier.lname, defender.lname, receiver.lname, false)
+        : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
-    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID, defender.PlayerID], disposalDeltas, true);
     return {
       phase: "MARKING_CONTEST",
       zone: newZone,
@@ -3067,13 +3336,19 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // fresh weightedHandballTarget(..., newZone, ...) call would repeat.
   const handballPick = handballCandidate;
   const receiver = handballPick.player;
-  const handballLabel =
-    proximityWeight(handballPick.distance) === 0
-      ? `${carrier.lname} handballs it off, ${receiver.lname} finds space`
-      : `${carrier.lname} looks for the outlet — ${receiver.lname} is under pressure`;
+  const handballTargetUnderPressure = proximityWeight(handballPick.distance) !== 0;
+  const handballLabel = pressuredHandballPhrase(ctx, carrier.lname, defender.lname, receiver.lname, handballTargetUnderPressure);
   // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
   ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
-  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, receiver.PlayerID], [], true);
+  // Aug 2026 round 109 — `defender` at playerIds[1] (not `receiver`) and `isPressured: true` here
+  // specifically (never on the two kick branches above, where it'd be inert) preserve exactly what
+  // the deleted generic line used to carry for ground.ts's own `isPressuredHandballCarrier`/
+  // `isPressuredHandballWindup` checks (both key off `event.isPressured && hasStat(event,
+  // "handballs")`, and read `playerIds[1]` as the defender to offset the ball away from) — see this
+  // function's own `disposalDeltas` comment above for the stat half of the same consolidation.
+  // `receiver` moves to index 2 rather than being dropped, so they're still a named, clickable
+  // participant in this event.
+  log(ctx, newZone, state.possession, "GENERAL_PLAY", handballLabel, [carrier.PlayerID, defender.PlayerID, receiver.PlayerID], disposalDeltas, true, undefined, true);
   return {
     phase: "HANDBALL_CONTEST",
     zone: newZone,
@@ -3194,7 +3469,7 @@ function resolveUncontestedGather(
     state.zone,
     attackingSide,
     "CONTEST",
-    `${attackerRep.lname} ${contestType === "groundBall" ? "gathers the loose ball" : "marks it"} — no one close enough to contest`,
+    describeUncontestedGather(ctx, attackerRep.lname, contestType === "groundBall"),
     [attackerRep.PlayerID],
     deltas,
   );
@@ -3407,7 +3682,7 @@ function runContest(ctx: Ctx, state: State): State {
       state.zone,
       attackingSide,
       "CONTEST",
-      `${attackerRep.lname} wins the ${CONTEST_WIN_LABEL[contestType]}`,
+      describeContestedWin(ctx, attackerRep.lname, CONTEST_WIN_LABEL[contestType], defenderRep.lname),
       [attackerRep.PlayerID, defenderRep.PlayerID],
       deltas,
     );
@@ -3440,7 +3715,7 @@ function runContest(ctx: Ctx, state: State): State {
   // long-stable distribution as an unrelated side effect of this round.
   line.interceptPossessions += 1;
   spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "interceptPossessions", delta: 1 });
-  let spoilLabel = `${defenderRep.lname} spoils it and takes control`;
+  let spoilLabel = describeSpoil(ctx, defenderRep.lname);
   // Aug 2026 round 92 — tracked so a genuine intercept mark (below) can also stand the mark, same as
   // every mark-taker elsewhere in this file; see standTheMark's own doc comment.
   let isInterceptMark = false;
@@ -3449,7 +3724,7 @@ function runContest(ctx: Ctx, state: State): State {
       line.marks += 1;
       line.interceptMarks += 1;
       spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "marks", delta: 1 }, { playerId: defenderRep.PlayerID, stat: "interceptMarks", delta: 1 });
-      spoilLabel = `${defenderRep.lname} reads it perfectly and takes an intercept mark`;
+      spoilLabel = describeInterceptMark(ctx, defenderRep.lname);
       isInterceptMark = true;
     } else {
       line.spoils += 1;
@@ -3730,7 +4005,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   // marking-type situation (never groundBall) — no contestType guard needed here.
   defenderLine.interceptPossessions += 1;
   spoilDeltas.push({ playerId: defender.PlayerID, stat: "interceptPossessions", delta: 1 });
-  let spoilLabel = `${defender.lname} spoils the contest and takes control`;
+  let spoilLabel = describeSpoil(ctx, defender.lname);
   // Aug 2026 round 92 — captured in a variable (same expression, same single rng draw, zero
   // behaviour change) so a genuine intercept mark can also stand the mark below — see runContest's
   // own identical-shaped fix for the full "why" (Tyler's ask was unconditional: "when a player takes
@@ -3743,7 +4018,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     defenderLine.marks += 1;
     defenderLine.interceptMarks += 1;
     spoilDeltas.push({ playerId: defender.PlayerID, stat: "marks", delta: 1 }, { playerId: defender.PlayerID, stat: "interceptMarks", delta: 1 });
-    spoilLabel = `${defender.lname} reads the kick perfectly and takes an intercept mark`;
+    spoilLabel = describeInterceptMark(ctx, defender.lname);
   } else {
     defenderLine.spoils += 1;
     spoilDeltas.push({ playerId: defender.PlayerID, stat: "spoils", delta: 1 });

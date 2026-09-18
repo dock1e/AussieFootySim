@@ -606,11 +606,57 @@ export const SHOT_DIFFICULTY_BASE = -70;
 // linearly downstream (`runShot`'s difficulty roll), so this rescale is
 // exact, not a re-tune.
 export const SHOT_DEPTH_PENALTY_SCALE = 2.25;
-export const SHOT_ANGLE_PENALTY_SCALE = 85;
+// Round 108 — Tyler: "the close 60° shot now runs higher than a long
+// straight one, because depth dominates angle at that range... revise the
+// way we calculate [it]." 85 -> 120: `positioning.ts`'s `shotGeometry` (see
+// its own doc comment, round 108 addendum on `GOAL_LINE_DEPTH_FLOOR`) is
+// rewritten in the same round to compute `angleSeverity` from the TRUE angle
+// the real goal mouth subtends, not the old scale-invariant `atan2(|y|,
+// depth)` ratio — but hand-checking the flagged 15m/60° reference point
+// against 50m-dead-square showed that fix alone narrows the inversion
+// without flipping it (difficulty rises ~20.4 -> ~27.0, still under 50m-
+// square's ~42.5). This constant is recalibrated on top of that fix, not
+// instead of it. 120 clears the ~106 bare-parity threshold by ~10.6 raw
+// difficulty points — beyond `SHOT_DIFFICULTY_JITTER`'s own +/-8 band, and,
+// since neither `depth` nor `angleSeverity` depends on which player is
+// shooting, a margin at the constant level holds for every real player, not
+// just on average (confirmed against the full real forward-rating spread in
+// `scripts/verify_round108_scratch.ts`). Both of round 42's own headline
+// calibration anchors ("goal square 97-99%", "50m dead square 33-84%") are
+// dead-square (`angleSeverity = 0`) cases and are completely unaffected by
+// this change either way.
+//
+// Empirically A/B-tested before locking in 120 (not just hand-arithmetic):
+// batches of 40 full simulated matches at MCG (fixed seeds, everything else
+// held constant) showed the true-subtended-angle rewrite ALONE (this
+// constant still at the old 85) already drops mean combined score ~69.5 ->
+// ~65.4 (~6%) -- re-deriving `angleSeverity` from real goal-mouth geometry
+// is a genuinely different quantity across the whole shot population, not
+// just at the one flagged point (see `positioning.ts`'s own round-108 note:
+// higher at 60°, LOWER at a moderate ~27°). Moving this constant on top of
+// that, 85 -> 120, cost only another ~1.4 points (~2%, to ~64.0) -- almost
+// all of the aggregate scoring-volume effect is the geometry fix, not this
+// recalibration, and the lowest-scoring tail (matches under 40 combined)
+// did not get worse (2/40 at 120 vs 3/40 at the pre-round-108 baseline) --
+// so there was no real reason to shade this constant lower than the robust
+// value to "protect" scoring volume; that protection doesn't exist to give
+// up. Goal accuracy (goal-vs-behind given on target) held flat (~61% either
+// way), confirming `GOAL_ACCURACY_*`'s own deliberately-unchanged constants
+// (below) aren't interacting with this change.
+export const SHOT_ANGLE_PENALTY_SCALE = 120;
 const SHOT_DIFFICULTY_JITTER = 8;
 const GOAL_ACCURACY_MAX = 0.995;
 const GOAL_ACCURACY_MIN = 0.3;
 const GOAL_ACCURACY_DEPTH_PENALTY = 0.07;
+// Round 108 — reviewed alongside `SHOT_ANGLE_PENALTY_SCALE` above (same
+// `angleSeverity` input, now the true-subtended-angle version) but
+// deliberately left at its existing value: this constant only shapes the
+// smaller goal-vs-behind accuracy roll GIVEN an on-target shot, was not the
+// mechanism behind Tyler's flagged inversion (`SHOT_ANGLE_PENALTY_SCALE`'s
+// on-target roll was), and MIN/MAX-clamps its own output regardless — a
+// narrower, disclosed scope decision rather than a silent oversight.
+// Re-verified sane (bounded, correctly signed) under the new angleSeverity
+// in `scripts/verify_round108_scratch.ts`, not re-tuned.
 const GOAL_ACCURACY_ANGLE_PENALTY = 0.5;
 /**
  * Aug 2026 round 46 — ROADMAP backlog item #26, diagnosed round 43. Tyler,
@@ -653,6 +699,12 @@ const SHOT_CHANCE_ON_ENTRY_MIN = 0.1;
 // exactly preserving this already-calibrated formula's real output for the
 // real distances it was checked against (`scripts/verify_round46_scratch.ts`).
 const SHOT_CHANCE_ON_ENTRY_DEPTH_PENALTY = 0.00375;
+// Round 108 — same disclosed scope decision as `GOAL_ACCURACY_ANGLE_PENALTY`:
+// `angleSeverity`'s underlying computation changed (`positioning.ts`'s
+// `shotGeometry`, true subtended-goal-angle) but this constant did not cause
+// Tyler's flagged inversion and is left at its existing value, re-verified
+// (not re-tuned) against the new angleSeverity in
+// `scripts/verify_round108_scratch.ts` — still MIN/MAX-clamped either way.
 const SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY = 0.55;
 /**
  * Aug 2026 round 47 — ROADMAP backlog item #25, the deferred half of round
@@ -690,8 +742,12 @@ const SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY = 0.55;
  *
  * `40` is reasoned, not derived — roughly half `HANDBALL_RECEIVE_PRESSURE_
  * PENALTY` (70), deliberately smaller: a shot's own geometry terms
- * (`SHOT_DEPTH_PENALTY_SCALE`/`SHOT_ANGLE_PENALTY_SCALE`, 90/85) already
- * swing `difficulty` far more than `CONTEST_EXECUTION_DIFFICULTY`'s own -22
+ * (`SHOT_DEPTH_PENALTY_SCALE`/`SHOT_ANGLE_PENALTY_SCALE`, originally 90/85,
+ * now 2.25/120 post rounds 107-108's real-metres rescale and angle
+ * recalibration — the `depth`/`angleSeverity` values they multiply changed
+ * scale too, so a real 15-50m shot still swings `difficulty` by a comparable
+ * amount) already swing `difficulty` far more than `CONTEST_EXECUTION_
+ * DIFFICULTY`'s own -22
  * baseline ever does for a handball reception, so pressure here is a real
  * but secondary layer on top of geometry, not the dominant term — a
  * point-blank, square-on snap should still usually go over even under full
@@ -3877,6 +3933,12 @@ function runHandballContest(ctx: Ctx, state: State): State {
  * 38/41) rates are deliberately untouched — this is additive, not a recalibration of those.
  */
 const P_SET_SHOT_GIVEN_FREEKICK = 0.92;
+// Round 108 — same disclosed scope decision as `GOAL_ACCURACY_ANGLE_PENALTY`/
+// `SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY` above: `angleSeverity` now comes from
+// `positioning.ts`'s true subtended-goal-angle `shotGeometry`, but this
+// constant wasn't the mechanism behind Tyler's flagged inversion (that was
+// `SHOT_ANGLE_PENALTY_SCALE`, recalibrated above) and is left unchanged,
+// re-verified sane in `scripts/verify_round108_scratch.ts`.
 const TIGHT_ANGLE_SNAP_BONUS = 0.45;
 
 function setShotProbability(

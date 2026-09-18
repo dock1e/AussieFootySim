@@ -3,7 +3,7 @@ import type { Archetype, Position } from "../types/archetype.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 import { ZONE_FOR_POSITION, ZONE_FOR_LINE, ownZone, type Side, type Zone } from "./zones.ts";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
-import { yBound } from "./groundGeometry.ts";
+import { yBound, goalPosts } from "./groundGeometry.ts";
 import type { AFLStadium } from "../data/stadiums.ts";
 
 /**
@@ -810,6 +810,75 @@ export function nearestCandidate<T extends { handballDistance: number }>(candida
  * by the pair above; left in place rather than silently rewritten, per this
  * project's own convention of correcting forward via a dated addendum
  * rather than editing history.
+ *
+ * Round 108 — Tyler, reacting to the round-107 finding directly above:
+ * "Let's revise the way we calculate the close 60° shot now runs higher than
+ * a long straight one, because depth dominates angle at that range in the
+ * calibrated formula. That's flagged and explained in the code, not silently
+ * changed." Two changes, not one — a genuine calculation fix plus a
+ * recalibration, kept separate below so each can be checked on its own:
+ *
+ * (1) `angleSeverity` itself was still geometrically wrong even after round
+ * 107's real-metres conversion: `atan2(|y|, depth)` is scale-invariant (it
+ * only cares about the y/depth RATIO), which quietly assumes the goal is a
+ * single point at infinity rather than a real ~6.4m-wide target. It ignores
+ * the one real, fixed-size, already-modelled quantity that actually
+ * determines how hard a goal is to hit from an angle: the goal MOUTH itself
+ * (`groundGeometry.ts`'s `goalPosts`, AFL-regulation `goalPostSpacing` = 6.4m
+ * -> `goalY` = 3.2m half-width, shared by every venue's `markings`). Fixed by
+ * computing the TRUE angle the two real goalposts subtend from the shooter's
+ * real (x,y) — the standard two-vectors `atan2(cross, dot)` construction
+ * (`subtendedGoalAngle` below), robust across the whole ground including the
+ * close-and-wide cases a small-angle or law-of-cosines shortcut mishandles —
+ * normalised against the SAME construction evaluated at the SAME `depth`
+ * with `lateral = 0` (i.e. this shot's own dead-square twin, not a fixed
+ * global reference). That normalisation is what guarantees `angleSeverity`
+ * is EXACTLY 0 at dead-square for every depth and every venue by
+ * construction (division by an identical value), so both of round 42's
+ * headline calibration anchors ("goal square 97-99%", "50m dead square
+ * 33-84%") are dead-square cases and remain completely untouched by this
+ * change — confirmed directly in `verify_round108_scratch.ts`. This alone is
+ * a real, non-cosmetic change to the angle number itself (not just a
+ * rescaling of the old one): re-checked at the flagged 15m/60° reference
+ * point, the true subtended-angle severity comes out to ~0.745 (not the old
+ * ratio-based 0.667) — the true geometry is quantifiably a bit more
+ * punishing at that specific point, though not uniformly so everywhere (a
+ * moderate 30m/~27° case comes out LOWER under the true geometry than the
+ * old ratio, ~0.20 vs ~0.30 — this is a genuinely different, not just
+ * rescaled, quantity, and moves in either direction depending on the exact
+ * depth/lateral combination).
+ *
+ * (2) Even with (1) alone, hand-checking the flagged reference point showed
+ * the true-angle fix narrows the round-107 inversion but does not flip it
+ * (15m/60° difficulty rises from ~20.4 to ~27.0, still under 50m-square's
+ * ~42.5) — `SHOT_ANGLE_PENALTY_SCALE` itself was calibrated (round 42) years
+ * before `angleSeverity` had any grounded real-world scale to sit against,
+ * so it needed re-checking on its own terms, not just inheriting (1)'s fix.
+ * `SHOT_ANGLE_PENALTY_SCALE`: 85 -> 120. Chosen, not fitted: since neither
+ * `depth` nor `angleSeverity` depends on which player is shooting,
+ * `difficulty`'s two geometry terms are themselves player-independent, so
+ * "close+sharp no longer easier than far+square" reduces to one inequality
+ * on the constants alone (confirmed against the full real forward-rating
+ * spread in `verify_round108_scratch.ts`, not just this paragraph's algebra):
+ * `SHOT_DIFFICULTY_BASE + SHOT_DEPTH_PENALTY_SCALE*15 + SCALE*0.745 >=
+ * SHOT_DIFFICULTY_BASE + SHOT_DEPTH_PENALTY_SCALE*50 + SCALE*0`, i.e. SCALE
+ * >= ~106 for bare parity. 120 clears that by ~10.6 raw difficulty points —
+ * comfortably beyond `SHOT_DIFFICULTY_JITTER`'s own +/-8 noise band, so the
+ * reversal holds for every real player, not just on average, and isn't a
+ * coin-flip the jitter could undo. Deliberately NOT pushed further (an
+ * earlier working figure considered ~178, chasing full top-to-bottom
+ * dominance of the probability RANGES rather than the difficulty CONSTANTS)
+ * — that overshoots into unrealistic territory (a good kick's checkside snap
+ * dropping toward ~30% or worse) for a fix Tyler scoped narrowly ("that's
+ * flagged... not silently changed", about this one inversion, not a
+ * wholesale angle-difficulty re-tune) and stays proportionate to the other
+ * three `angleSeverity` consumers below, which keep their own existing scale
+ * constants unchanged this round (see each site's own round-108 note).
+ *
+ * Re-checked (`verify_round108_scratch.ts`): 15m/60° now runs below 50m
+ * dead-square across the full real forward-rating spread, not just on
+ * average — confirming this is a genuine reversal, not a rebalancing that
+ * merely narrows the old gap.
  */
 export const GOAL_LINE_DEPTH_FLOOR = 2;
 
@@ -867,13 +936,43 @@ export interface ShotGeometry {
  * venue's shape, where the old `atan2(|lane|, depth)` implicitly assumed
  * lane-units and zoneFrac-units were the same real scale everywhere (false
  * off the venue's centre line, per this section's own doc comment above).
+ *
+ * Round 108: `angleSeverity` itself is rewritten again — see
+ * `GOAL_LINE_DEPTH_FLOOR`'s own doc comment above for the full diagnosis and
+ * recalibration this responds to. `subtendedGoalAngle` below replaces the
+ * plain `atan2(|y|, depth)` ratio with the TRUE angle the real goal mouth
+ * (`groundGeometry.ts`'s `goalPosts`) subtends from the shooter's real
+ * position, normalised against that same construction's own dead-square
+ * value at the identical `depth` — guaranteeing `angleSeverity === 0` at
+ * `y === 0` by construction (same numerator and denominator), independent of
+ * venue or depth.
  */
+/**
+ * The real angle (radians, always >= 0) the goal mouth subtends from a point
+ * `depth` metres in front of the goal line and `lateral` metres to one side
+ * of its centre — `halfGoalWidth` either side. Standard two-vectors
+ * `atan2(cross, dot)` construction: robust everywhere `depth > 0`, including
+ * close-and-wide positions where `lateral` exceeds `halfGoalWidth` (the near
+ * post falls "behind" the shooter's forward-facing line) and a law-of-cosines
+ * or small-angle shortcut would mishandle the sign.
+ */
+function subtendedGoalAngle(depth: number, lateral: number, halfGoalWidth: number): number {
+  const nearY = halfGoalWidth - lateral;
+  const farY = -halfGoalWidth - lateral;
+  const cross = depth * farY - nearY * depth;
+  const dot = depth * depth + nearY * farY;
+  return Math.abs(Math.atan2(cross, dot));
+}
+
 export function shotGeometry(pos: AbstractPosition, side: Side, stadium: AFLStadium): ShotGeometry {
   const { x, y } = realMetresFor(pos, stadium);
   const a = stadium.lengthMeters / 2;
   const goalLineX = side === "home" ? a : -a;
   const rawDepth = Math.abs(goalLineX - x);
   const depth = Math.min(MAX_KICK_DISTANCE, Math.max(GOAL_LINE_DEPTH_FLOOR, rawDepth));
-  const angleSeverity = Math.atan2(Math.abs(y), depth) / (Math.PI / 2);
+  const posts = goalPosts(a, side === "home" ? 1 : -1, stadium.markings);
+  const subtended = subtendedGoalAngle(depth, y, posts.goalY);
+  const subtendedDeadSquare = subtendedGoalAngle(depth, 0, posts.goalY);
+  const angleSeverity = 1 - subtended / subtendedDeadSquare;
   return { depth, angleSeverity };
 }

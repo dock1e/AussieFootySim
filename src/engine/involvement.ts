@@ -8,7 +8,7 @@ import { onGroundPlayers } from "./team.ts";
 import type { Rng } from "./rng.ts";
 import {
   proximityFor,
-  distanceBetween,
+  realDistanceBetween,
   proximityWeight,
   spaceWeight,
   directionWeight,
@@ -18,6 +18,7 @@ import {
   MAX_HANDBALL_DISTANCE,
   type AbstractPosition,
 } from "./positioning.ts";
+import type { AFLStadium } from "../data/stadiums.ts";
 
 /**
  * Position-weighted involvement — Tactics and Positional Play.md Part 6 /
@@ -309,6 +310,12 @@ export interface KickPick extends NearbyPick {
  * filter — it answers "who's closing in on this carrier" / "how open is this
  * receiver," not "who's eligible to contest," and a grounded opponent still
  * occupies real ground for those questions.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: `distance`
+ * is now real metres via `realDistanceBetween` and the match's own `stadium`
+ * (not the flat abstract `distanceBetween`), since `proximityWeight`'s own
+ * eligibility gate (`PROXIMITY_RANGE_DISTANCE`) is now a real-metres
+ * threshold too — see that constant's own doc comment (`positioning.ts`).
  */
 export function nearbyDefenders(
   rng: Rng,
@@ -320,12 +327,13 @@ export function nearbyDefenders(
   trackedPositions: Map<number, AbstractPosition>,
   groundedUntilTick: Map<number, number>,
   tick: number,
+  stadium: AFLStadium,
 ): NearbyPick | null {
   const pool = onGroundPlayers(team);
   const withDistance = pool.map((player) => {
     const estimated = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const pos = trackedPositions.get(player.PlayerID) ?? estimated;
-    return { player, distance: distanceBetween(target, pos) };
+    return { player, distance: realDistanceBetween(target, pos, stadium) };
   });
   const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0 && (groundedUntilTick.get(d.player.PlayerID) ?? -Infinity) < tick);
   if (eligible.length === 0) return null;
@@ -367,6 +375,13 @@ export function nearbyDefenders(
  * `kickRangeWeight`/`handballRangeWeight`. There is no "zero eligible
  * candidates" failure mode here the way round 35 hit, so no fallback design
  * is needed on top of the real-position preference itself.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: `distance`
+ * is now real metres (`realDistanceBetween`, the match's own `stadium`), same
+ * as every other hard/soft distance signal this file computes — `spaceWeight`
+ * itself was rederived to the identical real-metres saturation point
+ * (`positioning.ts`'s own `SPACE_WEIGHT_SCALE` doc comment), so this
+ * function's result stays meaningful to it.
  */
 export function closestDefender(
   side: Side,
@@ -375,13 +390,14 @@ export function closestDefender(
   possession: Side,
   target: AbstractPosition,
   trackedPositions: Map<number, AbstractPosition>,
+  stadium: AFLStadium,
 ): NearbyPick | null {
   const pool = onGroundPlayers(team);
   let best: NearbyPick | null = null;
   for (const player of pool) {
     const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
-    const distance = distanceBetween(target, rangePos);
+    const distance = realDistanceBetween(target, rangePos, stadium);
     if (!best || distance < best.distance) best = { player, distance };
   }
   return best;
@@ -454,6 +470,7 @@ export function weightedKickTarget(
   opponentTeam: MatchTeam,
   disposerPos: AbstractPosition,
   trackedPositions: Map<number, AbstractPosition>,
+  stadium: AFLStadium,
 ): KickPick {
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
@@ -466,11 +483,16 @@ export function weightedKickTarget(
     // as it already was for `kickDistance`/`progress` — see
     // `closestDefender`'s own doc comment (above, this file) for why the
     // OPPONENT side of this question needed the same treatment.
-    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, rangePos, trackedPositions);
+    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, rangePos, trackedPositions, stadium);
     return {
       player,
       distance: closest ? closest.distance : Infinity,
-      kickDistance: distanceBetween(realDisposerPos, rangePos),
+      // Round 107 — [[Simulation Engine Report Review]] Phase C point 3: real
+      // metres via `realDistanceBetween`, so `kickRangeWeight`'s own
+      // rederived MAX_KICK_DISTANCE/SHORT_KICK_MAX_DISTANCE (real metres)
+      // compares against a genuinely real per-venue kick distance, not a flat
+      // abstract-unit proxy.
+      kickDistance: realDistanceBetween(realDisposerPos, rangePos, stadium),
       progress: (rangePos.zoneFrac - realDisposerPos.zoneFrac) * (side === "home" ? 1 : -1),
     };
   });
@@ -541,6 +563,7 @@ export function weightedHandballTarget(
   opponentTeam: MatchTeam,
   disposerPos: AbstractPosition,
   trackedPositions: Map<number, AbstractPosition>,
+  stadium: AFLStadium,
 ): NearbyPick {
   const disposerLane = laneFor(disposer.PlayerID, team.positions?.get(disposer.PlayerID), team.positions);
   const realDisposerPos = trackedPositions.get(disposer.PlayerID) ?? disposerPos;
@@ -552,11 +575,15 @@ export function weightedHandballTarget(
     // Round 36 — same real-preferred `rangePos` now used for "how open is
     // this candidate" too, not just handballDistance. See closestDefender's
     // own doc comment (above, this file).
-    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, rangePos, trackedPositions);
+    const closest = closestDefender(opponentSide, opponentTeam, zone, possession, rangePos, trackedPositions, stadium);
     return {
       player,
       distance: closest ? closest.distance : Infinity,
-      handballDistance: distanceBetween(realDisposerPos, rangePos),
+      // Round 107 — [[Simulation Engine Report Review]] Phase C point 3: real
+      // metres via `realDistanceBetween`, so the rederived, now-real-metres
+      // `MAX_HANDBALL_DISTANCE` cutoff below compares against a genuinely
+      // real per-venue handball distance.
+      handballDistance: realDistanceBetween(realDisposerPos, rangePos, stadium),
     };
   });
   // Round 35, same-round follow-up — real match data (see

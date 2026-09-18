@@ -12,6 +12,7 @@ import { updateConditionAfterRound } from "./progression.ts";
 import { autoFillLineup, lineupToMatchTeam } from "./selection.ts";
 import { nextDisgruntlementState, type DisgruntlementState } from "./disgruntlement.ts";
 import { generateMatchCoachesVotes, applyVotesToBoxScore, applyBrownlowVotesToBoxScore, type MatchCoachesVotes } from "./coachesVotes.ts";
+import { groundForMatch } from "../data/clubGrounds.ts";
 
 /**
  * Season orchestration — ties fixture.ts + match.ts + ladder.ts + finals.ts
@@ -218,11 +219,16 @@ export function simulateRound(season: Season, round: number, teams: Map<number, 
     const seed = matchSeed(season.seed, round, i);
     const homePlan = plans?.get(m.homeClubId);
     const awayPlan = plans?.get(m.awayClubId);
+    // Round 107 — [[Simulation Engine Report Review]] Phase C: the real venue this
+    // home club actually plays this round at (Tasmania/Gold Coast/GWS's own real
+    // fixture-based exceptions, see clubGrounds.ts's own doc comment), not the flat
+    // MCG default `simulateMatch` itself falls back to when `stadium` is omitted.
     const rawResult = simulateMatch(home, away, mulberry32(seed), seed, {
       homePlan,
       awayPlan,
       homeCondition: season.condition,
       awayCondition: season.condition,
+      stadium: groundForMatch(m.homeClubId, round, season.fixture),
     });
     // [[Coaches Votes and MVP Award]], round 90 — generated here, not lazily, because
     // `generateMatchCoachesVotes` needs `rawResult.events` (see that function's own doc comment),
@@ -261,11 +267,19 @@ export function runFinals(season: Season, teams: Map<number, MatchTeam>, plans?:
     const seed = matchSeed(season.seed, SEASON_ROUNDS + 1, finalsMatchIndex++);
     const homePlan = plans?.get(homeClubId);
     const awayPlan = plans?.get(awayClubId);
+    // Round 107 — [[Simulation Engine Report Review]] Phase C: `round`/`fixture` are
+    // deliberately omitted here (unlike simulateRound above) — a final isn't one of
+    // a club's own fixture.ts home rounds, so groundForMatch's own round/fixture-based
+    // exceptions (Tasmania/Gold Coast/GWS) don't apply; this resolves to the home
+    // seed's real primary ground. Real AFL finals are often played at a neutral or
+    // designated venue (the MCG for most finals) rather than the higher seed's home
+    // ground — a disclosed simplification, not modelled this round.
     return simulateMatch(home, away, mulberry32(seed), seed, {
       homePlan,
       awayPlan,
       homeCondition: season.condition,
       awayCondition: season.condition,
+      stadium: groundForMatch(homeClubId),
     });
   });
 

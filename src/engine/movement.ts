@@ -3,9 +3,10 @@ import type { Archetype, Position } from "../types/archetype.ts";
 import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import { laneFor } from "./involvement.ts";
-import { proximityFor, distanceBetween, type AbstractPosition } from "./positioning.ts";
+import { proximityFor, distanceBetween, realDistanceBetween, type AbstractPosition } from "./positioning.ts";
 import { ownZone, type Side, type Zone } from "./zones.ts";
 import { tacticGroupForSlot, defaultTacticForPosition, type Tactic, type TeamPlan, type GameStyle } from "./tactics.ts";
+import type { AFLStadium } from "../data/stadiums.ts";
 
 /**
  * Off-ball movement — Aug 2026 round 28. Tyler: "I want to keep developing
@@ -111,6 +112,31 @@ import { tacticGroupForSlot, defaultTacticForPosition, type Tactic, type TeamPla
  * own scope (no fixed matchup for Midfield/Ruck) is otherwise unchanged;
  * round 37 differentiates Midfield/Ruck movement by TACTIC and by the
  * live carrier, same as before, never by a fixed matchup.
+ *
+ * **Update, round 107** — [[Simulation Engine Report Review]] Phase C: this
+ * module's ONE hard real-distance gate, `MIDFIELD_CONTEST_RANGE` (whether a
+ * mid is close enough to a live opponent carrier to crash the contest at
+ * all), now takes the match's own `stadium` and goes through
+ * `realDistanceBetween` (`positioning.ts`) instead of the flat abstract
+ * `distanceBetween` — the same real-per-venue-metres reasoning Phase C point
+ * 3 applies everywhere else. `stepToward`'s own pacing math (`maxStepFor`'s
+ * per-tick step cap), this file's `AMBIENT_ROAM_RADIUS` (a positional wobble
+ * amplitude folded straight into zoneFrac/lane, never compared against a
+ * computed distance, so it isn't a "distance-based constant" in point 3's
+ * sense either), and every tactic pull-weight/offset table in this file
+ * (`DEFENDER_TRACK_WEIGHT`, `DEFENDER_GOAL_SIDE_OFFSET`, `FORWARD_LEAD_*`,
+ * `HIGH_PRESS_IDLE_*`, `MIDFIELD_TRACK_WEIGHT`, `MIDFIELD_RANK_TAPER`,
+ * `INDIVIDUAL_PULL_VARIANCE`, `THIRD_MAN_UP_BALL_PULL`) deliberately stay on
+ * `distanceBetween`'s flat abstract scale — disclosed, not overlooked. Each
+ * of those shapes a movement TARGET that `stepToward` then paces toward
+ * using that same abstract-space model; converting them would mean either
+ * inverting `positioning.ts`'s nonlinear u/v -> x/y mapping just to shape a
+ * cosmetic/tactical lean (not a hard gate an outcome depends on), or mixing
+ * real-metres offsets into an abstract coordinate `stepToward` still
+ * consumes directly — a materially bigger, separate change for a
+ * genuinely smaller realism gain than the hard gates Phase C point 3 is
+ * actually about. Flagged here as a smaller, disclosed, deferred follow-up,
+ * not silently out of scope.
  */
 
 /**
@@ -418,8 +444,18 @@ function resolvedTactic(plan: TeamPlan | null, player: Player, position: Positio
  * (`stepToward`, in `stepSide`) — no special "burst" speed to crash a
  * contest, same disclosed simplification `nudgeInvolvedPositions` already
  * carries for the identical reason.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: now real
+ * metres (was 0.5 abstract units at `positioning.ts`'s own disclosed
+ * ~40m/zoneFrac-unit scale — 0.5 * 40 = 20, by construction), and the
+ * comparison itself (`midfieldTarget` below) now goes through
+ * `realDistanceBetween` against the match's own `stadium`, not the flat
+ * `distanceBetween` — a mid 20 real metres from the carrier on a wide venue
+ * and 20 real metres from the carrier on a narrow one now both genuinely
+ * mean 20m, rather than both meaning "0.5 of one averaged, implied ground
+ * shape."
  */
-const MIDFIELD_CONTEST_RANGE = 0.5;
+const MIDFIELD_CONTEST_RANGE = 20;
 const MIDFIELD_CONTEST_PULL_MAX = 0.85;
 
 /**
@@ -591,14 +627,14 @@ export function midfieldAmbientOffset(playerId: number, zone: Zone): AbstractPos
  * same precondition `midfieldTarget` itself already required before round
  * 37) — a side ranking itself against its OWN carrier would be meaningless.
  */
-function midfieldRanks(team: MatchTeam, carrierPos: AbstractPosition, current: Map<number, AbstractPosition>): Map<number, number> {
+function midfieldRanks(team: MatchTeam, carrierPos: AbstractPosition, current: Map<number, AbstractPosition>, stadium: AFLStadium): Map<number, number> {
   const ranks = new Map<number, number>();
   const withDistance = onGroundPlayers(team)
     .filter((p) => {
       const group = tacticGroupForSlot(team.positions?.get(p.PlayerID), p.archetype as Archetype);
       return group === "Midfield" || group === "Ruck";
     })
-    .map((p) => ({ id: p.PlayerID, distance: distanceBetween(current.get(p.PlayerID) ?? carrierPos, carrierPos) }))
+    .map((p) => ({ id: p.PlayerID, distance: realDistanceBetween(current.get(p.PlayerID) ?? carrierPos, carrierPos, stadium) }))
     .sort((a, b) => a.distance - b.distance);
   withDistance.forEach((entry, i) => ranks.set(entry.id, i));
   return ranks;
@@ -612,16 +648,17 @@ export function midfieldTarget(
   rank: number | undefined,
   playerId: number,
   zone: Zone,
+  stadium: AFLStadium,
 ): AbstractPosition {
   // Round 92 — no genuine opponent carrier to crash toward (own side has the
   // ball, or nobody does) or the carrier is outside crash range: ambient roam
   // around the static anchor instead of a motionless snap to it. See
   // `midfieldAmbientOffset`'s own doc comment.
-  if (!carrierPos || distanceBetween(home, carrierPos) > MIDFIELD_CONTEST_RANGE) {
+  if (!carrierPos || realDistanceBetween(home, carrierPos, stadium) > MIDFIELD_CONTEST_RANGE) {
     const offset = midfieldAmbientOffset(playerId, zone);
     return { zoneFrac: clampZone(home.zoneFrac + offset.zoneFrac), lane: clampLane(home.lane + offset.lane) };
   }
-  const distance = distanceBetween(home, carrierPos);
+  const distance = realDistanceBetween(home, carrierPos, stadium);
   const key = tactic && MIDFIELD_TRACK_WEIGHT[tactic] !== undefined ? tactic : DEFAULT_MIDFIELD_TACTIC;
   const trackWeight = MIDFIELD_TRACK_WEIGHT[key] as number;
   const taper = MIDFIELD_RANK_TAPER[Math.min(rank ?? 0, MIDFIELD_RANK_TAPER.length - 1)];
@@ -642,6 +679,7 @@ function targetFor(
   teamPositions: Map<number, Position> | undefined,
   opponentCarrierPos: AbstractPosition | undefined,
   midfieldRank: number | undefined,
+  stadium: AFLStadium,
 ): AbstractPosition {
   const home = proximityFor(player, side, position, zone, possession, style, teamPositions);
   const group = tacticGroupForSlot(position, player.archetype as Archetype);
@@ -652,7 +690,7 @@ function targetFor(
   // here): that function itself now handles the "no genuine carrier to crash toward" case via
   // ambient roam rather than this dispatcher falling through to a bare, motionless `home`. See
   // midfieldTarget's own doc comment.
-  if (group === "Midfield" || group === "Ruck") return midfieldTarget(home, opponentCarrierPos, tactic, midfieldRank, player.PlayerID, zone);
+  if (group === "Midfield" || group === "Ruck") return midfieldTarget(home, opponentCarrierPos, tactic, midfieldRank, player.PlayerID, zone, stadium);
   return home; // a defender/forward with no resolvable opponent this match
 }
 
@@ -667,14 +705,15 @@ function stepSide(
   current: Map<number, AbstractPosition>,
   out: Map<number, AbstractPosition>,
   carrierPos: AbstractPosition | undefined,
+  stadium: AFLStadium,
 ): void {
   const carrierIsOpponent = carrierPos !== undefined && possession !== side;
-  const ranks = carrierIsOpponent ? midfieldRanks(team, carrierPos, current) : undefined;
+  const ranks = carrierIsOpponent ? midfieldRanks(team, carrierPos, current, stadium) : undefined;
   for (const player of onGroundPlayers(team)) {
     const position = team.positions?.get(player.PlayerID);
     const opponentId = matchups.get(player.PlayerID);
     const opponentPos = opponentId !== undefined ? current.get(opponentId) : undefined;
-    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions, carrierIsOpponent ? carrierPos : undefined, ranks?.get(player.PlayerID));
+    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions, carrierIsOpponent ? carrierPos : undefined, ranks?.get(player.PlayerID), stadium);
     const from = current.get(player.PlayerID) ?? target;
     out.set(player.PlayerID, stepToward(from, target, maxStepFor(player)));
   }
@@ -693,11 +732,12 @@ export function stepPositions(
   carrier: Player | null,
   matchups: Map<number, number>,
   current: Map<number, AbstractPosition>,
+  stadium: AFLStadium,
 ): Map<number, AbstractPosition> {
   const carrierPos = carrier ? current.get(carrier.PlayerID) : undefined;
   const next = new Map<number, AbstractPosition>();
-  stepSide(home, "home", homePlan, homeStyle, zone, possession, matchups, current, next, carrierPos);
-  stepSide(away, "away", awayPlan, awayStyle, zone, possession, matchups, current, next, carrierPos);
+  stepSide(home, "home", homePlan, homeStyle, zone, possession, matchups, current, next, carrierPos, stadium);
+  stepSide(away, "away", awayPlan, awayStyle, zone, possession, matchups, current, next, carrierPos, stadium);
   return next;
 }
 

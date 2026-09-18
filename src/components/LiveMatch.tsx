@@ -184,14 +184,14 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
       // play) - no one to offer a Coach's Call to, so simulate the whole
       // match up front exactly like every Match-tab game did before this
       // feature existed.
-      const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness });
+      const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness, stadium: venue });
       setResult(fresh);
       setMatchInProgress(null);
       setQuartersSimulated(4);
       return;
     }
 
-    const match = startMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness });
+    const match = startMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness, stadium: venue });
     simulateQuarter(match, 1);
     setMatchInProgress(match);
     setQuartersSimulated(1);

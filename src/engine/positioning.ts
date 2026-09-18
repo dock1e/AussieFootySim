@@ -3,6 +3,8 @@ import type { Archetype, Position } from "../types/archetype.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 import { ZONE_FOR_POSITION, ZONE_FOR_LINE, ownZone, type Side, type Zone } from "./zones.ts";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
+import { yBound } from "./groundGeometry.ts";
+import type { AFLStadium } from "../data/stadiums.ts";
 
 /**
  * A real, engine-side position/distance model — Aug 2026 round 23. Tyler,
@@ -134,11 +136,16 @@ const LINE_MOBILITY: Record<Line, number> = {
  * bypassing that old safety net.
  *
  * Four real, distinct, evenly-spaced lanes (0.3 apart — comfortably clear of
- * `PROXIMITY_RANGE_DISTANCE` (0.25) below, so no two followers register as
- * "in proximity range" of each other purely from standing at the same
- * zoneFrac, and comfortably inside the +-0.6 half-back/half-forward flank
- * lane so this quartet doesn't visually or gameplay-wise merge with them)
- * fixes this at the root: C/R/RR/ROV now genuinely spread across the width
+ * `PROXIMITY_RANGE_DISTANCE` below [0.25 abstract units at the time this was
+ * written; Round 107 rederived that constant to 10 real metres, but a 0.3
+ * raw-lane gap still clears it comfortably on every real venue — `yBound`
+ * near centre-ground is tens of metres, so 0.3 of it is well over 10m — so
+ * this reasoning still holds, just against a real-metres threshold now], so
+ * no two followers register as "in proximity range" of each other purely
+ * from standing at the same zoneFrac, and comfortably inside the +-0.6
+ * half-back/half-forward flank lane so this quartet doesn't visually or
+ * gameplay-wise merge with them) fixes this at the root: C/R/RR/ROV now
+ * genuinely spread across the width
  * of the centre corridor instead of collapsing onto one point, both at a
  * centre bounce (which has its own separate `ground.ts` override anyway —
  * see `isCentreBounce`) and, more importantly, throughout general play,
@@ -367,6 +374,17 @@ export function carrierPosition(carrier: Player, position: Position | null | und
  * precision for what's fundamentally a gameplay abstraction. Same
  * "calibrated empirically, disclosed as not literally derived" status as
  * `TACKLE_ATTEMPT_HANDICAP`/`CONTEST_EXECUTION_DIFFICULTY` (`match.ts`).
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C: every hard
+ * eligibility/range gate below (`PROXIMITY_*`, `MAX_KICK_DISTANCE`,
+ * `SHORT_KICK_MAX_DISTANCE`, `MAX_HANDBALL_DISTANCE`, `MIDFIELD_CONTEST_RANGE`,
+ * `match.ts`'s `CHASE_PURSUIT_DISTANCE`) has moved onto `realDistanceBetween`
+ * below instead — this function itself is KEPT, unchanged, and still the
+ * right tool for `movement.ts`'s own pacing/target-shaping math
+ * (`stepToward`'s per-tick step-clamping, and the tactic-offset tables that
+ * shape a defender/forward/midfield TARGET position) — see that file's own
+ * top comment for the disclosed reason those stay on the flat abstract scale
+ * this round rather than also converting to real per-venue metres.
  */
 export function distanceBetween(a: AbstractPosition, b: AbstractPosition): number {
   const zoneGap = a.zoneFrac - b.zoneFrac;
@@ -375,19 +393,93 @@ export function distanceBetween(a: AbstractPosition, b: AbstractPosition): numbe
 }
 
 /**
+ * Round 107 — [[Simulation Engine Report Review]] Phase C, point 2, Tyler's
+ * own exact brief: "keep `zoneFrac`/`lane` as the normalized (u, v)
+ * coordinate they already effectively are, and multiply through the match's
+ * actual `lengthMeters`/`widthMeters`/`superellipseExponent` at read-time
+ * using `groundGeometry.ts`'s already-built, already-verified (448/448
+ * checks, round 104) `yBound` function — reusing proven math rather than
+ * inventing a second geometry engine." Implemented exactly that, no more:
+ * `zoneFrac` (0-4, raw/home-relative — see `AbstractPosition`'s own doc
+ * comment) maps onto `groundGeometry.ts`'s own `u` in [-1, 1] via
+ * `u = (zoneFrac - 2) / 2` (zoneFrac 4 = home's attacking end = u = +1,
+ * matching `goalSquare`/`goalPosts`/`arcBoundaryHalfAngle`'s own "+1 = home
+ * (+x) end" convention in that file); `x = u * a` is then exact and linear
+ * (no curvature on the length axis at all — this is *why* the pre-existing
+ * flat "~40m/unit" approximation was already fine lengthwise, see
+ * `MAX_KICK_DISTANCE`'s own doc comment below). `lane` (-1..1, already the
+ * same real-pitch-width convention `groundGeometry.ts`'s own `v` uses) maps
+ * onto real y via `y = lane * yBound(a, b, n, x)` — the boundary's own real
+ * half-width AT THIS x, not a flat half-width — so a lane=1 position genuinely
+ * narrows toward 0 as x approaches either goal line, exactly the curvature a
+ * real oval ground has and the isotropic old model couldn't represent at all.
+ *
+ * Deliberately NOT `groundGeometry.ts`'s own `toGround`/`playerNodeGround` —
+ * both of those bake in Tyler's own rendering-specific insets (0.97/0.93 or
+ * 0.94, "so a drawn node doesn't visually clip the boundary") that have
+ * nothing to do with real gameplay geometry; this calls `yBound` directly,
+ * matching the brief's own wording precisely.
+ */
+export function realMetresFor(pos: AbstractPosition, stadium: AFLStadium): { x: number; y: number } {
+  const a = stadium.lengthMeters / 2;
+  const b = stadium.widthMeters / 2;
+  const n = stadium.superellipseExponent;
+  const u = (pos.zoneFrac - 2) / 2;
+  const x = u * a;
+  const y = pos.lane * yBound(a, b, n, x);
+  return { x, y };
+}
+
+/**
+ * The real-metres analogue of `distanceBetween` above — genuine Euclidean
+ * distance between two abstract positions, on THIS match's actual venue.
+ * Every named "distance-based constant" [[Simulation Engine Report Review]]
+ * Phase C point 3 asked to be re-derived is now compared against THIS, not
+ * `distanceBetween`, so a Ruck's ground-ball eligibility radius, a
+ * defender's real closing distance, and a kick/handball's real range all
+ * genuinely differ between a broad venue (MCG, `superellipseExponent` 2.08,
+ * 138.0m wide) and a needle venue (GMHBA/Kardinia Park, 2.35,
+ * `elongated_flat_flank`, 115.0m wide) — and, within a single match, between
+ * a contest happening near the centre square (where `yBound` is at its
+ * widest) and one happening near a goal square (where it pinches toward 0),
+ * exactly the effect a real oval ground has that the old isotropic
+ * `distanceBetween` couldn't represent even at a single fixed venue.
+ */
+export function realDistanceBetween(a: AbstractPosition, b: AbstractPosition, stadium: AFLStadium): number {
+  const pa = realMetresFor(a, stadium);
+  const pb = realMetresFor(b, stadium);
+  const dx = pa.x - pb.x;
+  const dy = pa.y - pb.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
  * Within this, a defender is close enough to be a genuinely strong
  * candidate (full weight in `involvement.ts`'s `nearbyDefenders`). Between
  * this and `PROXIMITY_RANGE_DISTANCE`, still eligible but discounted.
  * Beyond `PROXIMITY_RANGE_DISTANCE`, not eligible at all — this is what
- * makes a genuine "nobody in range" outcome possible. Calibrated empirically
- * against real match data (`scripts/verify_round23_scratch.ts`) so the
- * nobody-in-range rate lands somewhere plausible rather than never firing
- * (pointless) or firing so often it guts the tackle/pressure economy rounds
- * 21-22 already calibrated — see that script and `Contest Resolution
- * Redesign.md` for the actual observed rate this landed on.
+ * makes a genuine "nobody in range" outcome possible. Originally calibrated
+ * empirically against real match data (`scripts/verify_round23_scratch.ts`)
+ * as 0.1/0.25 on the old flat abstract-unit scale, no stated real-metres
+ * target of its own.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: now real
+ * metres, compared via `realDistanceBetween` rather than `distanceBetween` —
+ * both call sites in `involvement.ts` (`nearbyDefenders`) switched
+ * accordingly. Re-derived via the same ~40m/zoneFrac-unit reference this
+ * project's every other distance constant already used before this round
+ * (`MAX_KICK_DISTANCE`'s own doc comment; also the exact figure line 720's
+ * own `MARK_STAND_BACK_DISTANCE` comment independently confirms for 0.25 ->
+ * "~10m"): 0.1 -> 4m, 0.25 -> 10m. Re-checked, not just mechanically
+ * rescaled — `scripts/verify_round107_scratch.ts`'s own real-match aggregate
+ * nobody-in-range rate is the actual confirmation this still "lands
+ * somewhere plausible" now that the underlying distance metric is genuinely
+ * anisotropic (real per-venue length vs. width, not one flat scale) rather
+ * than mechanically trusting the naive conversion — see that script and this
+ * round's ROADMAP.md entry for the measured rate.
  */
-export const PROXIMITY_CLOSE_DISTANCE = 0.1;
-export const PROXIMITY_RANGE_DISTANCE = 0.25;
+export const PROXIMITY_CLOSE_DISTANCE = 4;
+export const PROXIMITY_RANGE_DISTANCE = 10;
 export const PROXIMITY_MID_FACTOR = 0.4;
 
 export function proximityWeight(distance: number): number {
@@ -418,8 +510,17 @@ export function proximityWeight(distance: number): number {
  * player in a wildly empty part of the ground (e.g. the opponent's own
  * `onGroundPlayers` pool momentarily thin near them) from swamping every
  * other candidate's archetype/position suitability entirely.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: `distance`
+ * is now real metres (`closestDefender`'s own `realDistanceBetween` output),
+ * not the old abstract scale, so this curve's own saturation point has to
+ * move with it. Old: `SPACE_WEIGHT_MAX` (4) was reached at `distance =
+ * (SPACE_WEIGHT_MAX-1)/SCALE = 3/6 = 0.5` abstract units (~20m at the ~40m/
+ * unit reference). New `SCALE = 0.15` reaches the identical saturation point
+ * at the identical real distance (`3/0.15 = 20`m) — the curve's SHAPE and
+ * calibrated meaning are unchanged, only the unit its input arrives in.
  */
-export const SPACE_WEIGHT_SCALE = 6;
+export const SPACE_WEIGHT_SCALE = 0.15;
 export const SPACE_WEIGHT_MAX = 4;
 
 export function spaceWeight(distance: number): number {
@@ -467,10 +568,11 @@ export function directionWeight(progress: number): number {
  * venues as of round 104, ~163m typical — was ~155-170m/~160m across the
  * pre-round-104 12-venue table, no material change) across 4 zoneFrac units
  * gives roughly 40m per unit for the dominant, lengthwise kicking direction.
- * `MAX_KICK_DISTANCE` = 1.5 lands close to the upper end of Tyler's own
- * 45-60m range for a mostly-lengthwise kick (~60m), while still allowing a
- * shorter combined length+lateral `distanceBetween` value for an angled
- * kick to reach a target. Same reasoned-not-derived, disclosed-approximation
+ * `MAX_KICK_DISTANCE` (was 1.5 abstract units, see Round 107 addendum below)
+ * lands close to the upper end of Tyler's own 45-60m range for a
+ * mostly-lengthwise kick (~60m), while still allowing a shorter combined
+ * length+lateral `distanceBetween` value for an angled kick to reach a
+ * target. Same reasoned-not-derived, disclosed-approximation
  * status `distanceBetween` itself already carries — this project doesn't
  * have a literal, uniform metres-per-unit conversion for this abstract model
  * (see [[ROADMAP]] gap #77), so this is deliberately a round figure grounded
@@ -478,8 +580,17 @@ export function directionWeight(progress: number): number {
  * `weightedChoice`'s own existing all-zero-weight fallback (a uniform pick)
  * is what happens on the rare tick where genuinely nobody is within range —
  * disclosed there, not re-implemented here.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: now real
+ * metres — Tyler's own cited "45-60m" range needed no reinterpretation at
+ * all, just dropping the abstract-unit indirection (1.5 units * ~40m/unit =
+ * 60m exactly, by construction). Every comparison against this constant
+ * (`kickRangeWeight` below, `shotGeometry`'s own depth clamp) now goes
+ * through `realDistanceBetween`/`realMetresFor` instead of the flat
+ * abstract scale, so a real 60m kick genuinely means 60m on every venue, not
+ * 60m on one averaged/implied ground shape.
  */
-export const MAX_KICK_DISTANCE = 1.5;
+export const MAX_KICK_DISTANCE = 60;
 
 /**
  * Aug 2026 round 38 — Match Realism Review Finding 2: Tyler's own field
@@ -488,16 +599,21 @@ export const MAX_KICK_DISTANCE = 1.5;
  * kick), but `kickRangeWeight` below previously only expressed the far
  * end of that range as a hard cutoff — every target inside `MAX_KICK_DISTANCE`
  * was weighted identically regardless of whether it was 10m or 55m away.
- * `SHORT_KICK_MAX_DISTANCE` = 0.75 lands at ~30m via the same ~40m/unit
- * conversion `MAX_KICK_DISTANCE`'s own doc comment above establishes,
+ * `SHORT_KICK_MAX_DISTANCE` = 30m (was 0.75 abstract units at the ~40m/unit
+ * conversion `MAX_KICK_DISTANCE`'s own doc comment above establishes),
  * marking the boundary between Tyler's "short" and "long" bands. This
  * doesn't change target selection by itself (see `kickRangeWeight`'s new
  * taper below) — it's also reused by `match.ts` to classify a kick's real
  * travel distance for the new long-kick execution check (Finding 2), and
  * `weightedKickTarget`'s new `KickPick.kickDistance` field is what makes
  * that real per-candidate distance available to classify.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: now real
+ * metres, same `realDistanceBetween` output `MAX_KICK_DISTANCE` consumes —
+ * the 30m figure itself needed no reinterpretation, only dropping the
+ * abstract-unit indirection.
  */
-export const SHORT_KICK_MAX_DISTANCE = 0.75;
+export const SHORT_KICK_MAX_DISTANCE = 30;
 
 /**
  * Aug 2026 round 38 — companion to `SHORT_KICK_MAX_DISTANCE` above: a kick
@@ -537,16 +653,20 @@ export function kickRangeWeight(distance: number): number {
  *
  * `MAX_HANDBALL_DISTANCE` is deliberately much smaller than
  * `MAX_KICK_DISTANCE`, same reasoned-not-derived, disclosed-approximation
- * status as that constant: using `distanceBetween`'s own ~40m/zoneFrac-unit
- * scale (`MAX_KICK_DISTANCE`'s own doc comment), a real handball rarely
- * travels much beyond 15-20m even at full stretch, which lands at roughly
- * 0.4-0.5 units — `0.5` chosen as a round figure at the upper end of that
- * range (generous rather than stingy, since `weightedChoice`'s all-zero
- * fallback is a uniform pick, and a slightly-too-generous cutoff is a much
- * smaller error than one that starves the receiver pool most ticks). Checked
- * against real match data in `scripts/verify_round35_scratch.ts` rather than
- * left as an unverified guess, same discipline as every other constant in
- * this file.
+ * status as that constant: a real handball rarely travels much beyond
+ * 15-20m even at full stretch — `20` (metres) chosen as a round figure at
+ * the upper end of that range (generous rather than stingy, since
+ * `weightedChoice`'s all-zero fallback is a uniform pick, and a
+ * slightly-too-generous cutoff is a much smaller error than one that starves
+ * the receiver pool most ticks). Checked against real match data in
+ * `scripts/verify_round35_scratch.ts` rather than left as an unverified
+ * guess, same discipline as every other constant in this file.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: now real
+ * metres (was 0.5 abstract units at the ~40m/zoneFrac-unit scale
+ * `MAX_KICK_DISTANCE`'s own doc comment establishes) — the 15-20m reasoning
+ * above needed no reinterpretation, only dropping the abstract-unit
+ * indirection (0.5 * 40 = 20, by construction).
  *
  * Deliberately NOT paired with a `directionWeight`-style backward discount
  * the way `weightedKickTarget` is: a backward or lateral handball is a
@@ -556,7 +676,7 @@ export function kickRangeWeight(distance: number): number {
  * actually about. Adding one here would be solving a problem nobody
  * reported and real football doesn't support penalising.
  */
-export const MAX_HANDBALL_DISTANCE = 0.5;
+export const MAX_HANDBALL_DISTANCE = 20;
 
 export function handballRangeWeight(distance: number): number {
   return distance <= MAX_HANDBALL_DISTANCE ? 1 : 0;
@@ -653,8 +773,45 @@ export function nearestCandidate<T extends { handballDistance: number }>(candida
  * restatement of — the pure-distance case. Reasoned-not-derived, disclosed
  * exactly like `MAX_KICK_DISTANCE`/`CONTEST_EXECUTION_DIFFICULTY` and every
  * other placeholder constant here, pending Phase 6's balance simulator.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C points 2 & 3:
+ * `shotGeometry` below is rewritten to take the match's own `stadium` and
+ * compute `depth`/`angleSeverity` from TRUE real x/y metres
+ * (`realMetresFor`), not the flat abstract `zoneFrac`/`lane` pair. This
+ * constant's own 2m figure needed no reinterpretation (0.05 * 40 = 2, by
+ * construction) — only `angleSeverity`'s computation actually changes in
+ * substance: the old `atan2(|lane|, depth)` silently treated one raw `lane`
+ * unit and one raw `zoneFrac`-derived `depth` unit as the same real
+ * distance, which `groundGeometry.ts`'s round-104 work already established
+ * is false everywhere except dead centre (the pitch is ~161m long by ~138m
+ * wide at the MCG, and `yBound` shrinks further still as `depth` approaches
+ * either goal line) — so the old angle was quietly wrong by a venue- and
+ * position-dependent amount everywhere but straight in front of goal. The
+ * two calibration numbers above are unaffected on the dead-square axis
+ * (`angleSeverity = 0` regardless of how the angle is computed) but the
+ * sharp-angle figure (60°, 13%-64%) was calibrated against the OLD, biased
+ * angle and needed the same re-check `verify_round107_scratch.ts` owed
+ * `PROXIMITY_RANGE_DISTANCE` et al.
+ *
+ * Re-checked (`verify_round107_scratch.ts` Section 3): a real close-in shot
+ * (15m out) at a true 60° angle (`angleSeverity = 60/90 = 0.667`, computed
+ * the new way) now runs 75.0%-94.9% across the same real forward-rating
+ * spread — HIGHER than the 50m-dead-square band (44.4%-83.3%), not lower as
+ * the old "drops it" framing implied. Not a regression: `depth` swings the
+ * difficulty formula harder than `angleSeverity` does at this range —
+ * `SHOT_DEPTH_PENALTY_SCALE`(2.25/m) over the 35m gap from 15m to 50m is
+ * 78.75 points, versus `SHOT_ANGLE_PENALTY_SCALE`(85) × a full 60°
+ * (`angleSeverity` 0.667) costing 56.7 points — so a close shot stays
+ * meaningfully easier than a long straight one even at a sharp angle. The
+ * angle penalty itself is still real and correctly signed: matched at the
+ * SAME 15m depth, 60° scores materially below 0° (dead square) — confirmed
+ * directly in Section 3. The 13%-64% figure above is now historical
+ * (calibrated against the old, off-centre-biased angle math) and superseded
+ * by the pair above; left in place rather than silently rewritten, per this
+ * project's own convention of correcting forward via a dated addendum
+ * rather than editing history.
  */
-export const GOAL_LINE_DEPTH_FLOOR = 0.05;
+export const GOAL_LINE_DEPTH_FLOOR = 2;
 
 /**
  * Found investigating round 42's own real-data verification
@@ -685,15 +842,38 @@ export const GOAL_LINE_DEPTH_FLOOR = 0.05;
  * hard as it gets" rather than an absurd extrapolation.
  */
 export interface ShotGeometry {
-  /** zoneFrac-units in front of the goal line — ~40m/unit, see this section's own doc comment. Clamped to [GOAL_LINE_DEPTH_FLOOR, MAX_KICK_DISTANCE]. */
+  /** Real metres in front of the goal line, along the venue's own length axis. Clamped to [GOAL_LINE_DEPTH_FLOOR, MAX_KICK_DISTANCE]. */
   depth: number;
   /** 0 (dead square in front of goal) .. 1 (along the goal line — no real angle on goal). */
   angleSeverity: number;
 }
 
-export function shotGeometry(pos: AbstractPosition, side: Side): ShotGeometry {
-  const rawDepth = side === "home" ? 4 - pos.zoneFrac : pos.zoneFrac;
+/**
+ * Round 107 — [[Simulation Engine Report Review]] Phase C points 2 & 3:
+ * takes the match's own `stadium` and reduces to real x/y metres via
+ * `realMetresFor` (round 104's `yBound`, read-time-multiplied through this
+ * venue's actual `lengthMeters`/`widthMeters`/`superellipseExponent`)
+ * before computing `depth`/`angleSeverity`, rather than treating raw
+ * `zoneFrac`/`lane` units as already-comparable distances the way the
+ * pre-round-107 version did. `goalLineX` is the real x of the attacking
+ * goal line (±half the real length, matching this function's own existing
+ * `side === "home"` convention); `depth` is the real distance from the
+ * shooter's real x to that line, clamped exactly as before (`GOAL_LINE_
+ * DEPTH_FLOOR`..`MAX_KICK_DISTANCE`, both now real metres, so the clamp's
+ * own meaning is unchanged even though its inputs are more accurate).
+ * `angleSeverity` uses the shooter's real `y` (not raw `lane`) against that
+ * same real `depth` — a true real-world angle, correctly accounting for
+ * how much the pitch narrows toward either goal line on this specific
+ * venue's shape, where the old `atan2(|lane|, depth)` implicitly assumed
+ * lane-units and zoneFrac-units were the same real scale everywhere (false
+ * off the venue's centre line, per this section's own doc comment above).
+ */
+export function shotGeometry(pos: AbstractPosition, side: Side, stadium: AFLStadium): ShotGeometry {
+  const { x, y } = realMetresFor(pos, stadium);
+  const a = stadium.lengthMeters / 2;
+  const goalLineX = side === "home" ? a : -a;
+  const rawDepth = Math.abs(goalLineX - x);
   const depth = Math.min(MAX_KICK_DISTANCE, Math.max(GOAL_LINE_DEPTH_FLOOR, rawDepth));
-  const angleSeverity = Math.atan2(Math.abs(pos.lane), depth) / (Math.PI / 2);
+  const angleSeverity = Math.atan2(Math.abs(y), depth) / (Math.PI / 2);
   return { depth, angleSeverity };
 }

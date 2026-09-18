@@ -7,8 +7,9 @@ import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } f
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers, benchPlayers } from "./team.ts";
 import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
-import { carrierPosition, proximityFor, distanceBetween, proximityWeight, spaceWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
+import { carrierPosition, proximityFor, realDistanceBetween, proximityWeight, spaceWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
 import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
+import { getStadium, DEFAULT_STADIUM_ID, type AFLStadium } from "../data/stadiums.ts";
 import {
   tacticGroupForSlot,
   defaultTacticForPosition,
@@ -333,6 +334,18 @@ export interface SimulateMatchOptions {
   homePlan?: TeamPlan;
   awayPlan?: TeamPlan;
   /**
+   * Sep 2026 round 107 — [[Simulation Engine Report Review]] Phase C. The
+   * real venue to play this match at (`data/stadiums.ts`) — deliberately
+   * optional, same backward-compat shape `homePlan`/`homeCondition` already
+   * establish: every caller written before this round (scripts/simulate.ts,
+   * the balance simulator, ad-hoc Match-tab games) keeps compiling and
+   * running unchanged, defaulting to the MCG (`Ctx.stadium`'s own doc
+   * comment) rather than requiring every call site to be updated at once.
+   * `season.ts`/`LiveMatch.tsx` pass the real resolved venue via
+   * `clubGrounds.ts`'s `groundForMatch`.
+   */
+  stadium?: AFLStadium;
+  /**
    * Per-player condition/fatigue — Engine.md "In-season condition": "low
    * condition suppresses effective ratings for a match without touching the
    * underlying long-term attributes," see progression.ts's
@@ -583,7 +596,16 @@ const LONG_KICK_MISS_DISTANCE_PENALTY = 0.15;
 // ballTargetFor (round 45) and shotChanceOnEntry (round 46) already set for
 // functions, just applied to constants here instead.
 export const SHOT_DIFFICULTY_BASE = -70;
-export const SHOT_DEPTH_PENALTY_SCALE = 90;
+// Round 107 — [[Simulation Engine Report Review]] Phase C point 3: `depth`
+// (shotGeometry's own output) is now real metres, not the old ~40m/unit
+// abstract scale, so this scale term is divided through by that same 40 to
+// keep `SHOT_DEPTH_PENALTY_SCALE * depth` producing the IDENTICAL difficulty
+// contribution for the identical real shot (90/40 = 2.25) — `difficulty`
+// itself, and every calibration figure quoted in this section's own doc
+// comment ("goal square 97-99%", "50m dead square 33-84%"), are consumed
+// linearly downstream (`runShot`'s difficulty roll), so this rescale is
+// exact, not a re-tune.
+export const SHOT_DEPTH_PENALTY_SCALE = 2.25;
 export const SHOT_ANGLE_PENALTY_SCALE = 85;
 const SHOT_DIFFICULTY_JITTER = 8;
 const GOAL_ACCURACY_MAX = 0.995;
@@ -626,7 +648,11 @@ const GOAL_ACCURACY_ANGLE_PENALTY = 0.5;
  */
 const SHOT_CHANCE_ON_ENTRY_MAX = 0.85;
 const SHOT_CHANCE_ON_ENTRY_MIN = 0.1;
-const SHOT_CHANCE_ON_ENTRY_DEPTH_PENALTY = 0.15;
+// Round 107 — same real-metres rescale as SHOT_DEPTH_PENALTY_SCALE just
+// above, same reason: `depth` is now real metres (0.15/40 = 0.00375),
+// exactly preserving this already-calibrated formula's real output for the
+// real distances it was checked against (`scripts/verify_round46_scratch.ts`).
+const SHOT_CHANCE_ON_ENTRY_DEPTH_PENALTY = 0.00375;
 const SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY = 0.55;
 /**
  * Aug 2026 round 47 — ROADMAP backlog item #25, the deferred half of round
@@ -717,14 +743,28 @@ const P_KICK_GOES_OUT_ON_FULL = 0.03;
 /**
  * Standing the Mark — Aug 2026 round 92. Tyler: "the player that takes the
  * mark should backup 10 meters from the mark to give himself space to kick."
- * `0.25` zoneFrac-units lands at ~10m via `MAX_KICK_DISTANCE`'s own
- * established ~40m/unit conversion (positioning.ts). Deliberately modelled as
- * the mark/free-kick TAKER gaining separation, rather than literally
- * relocating a specific defender: several of `standTheMark`'s own call sites
- * (an uncontested mark, a free kick with nobody named as the "presser") have
- * no persistent defender dot to move at all, so nudging the one player every
- * path always has is the honest, uniform mechanism — not a claim about which
- * named player in real AFL actually steps back.
+ * `0.25` zoneFrac-units lands at ~10m via the length axis's ~40m/unit rate
+ * (`lengthMeters/4`, `positioning.ts`'s linear `x = u * a` mapping) at an
+ * MCG-like venue (161.4m long -> 40.35m/unit -> 10.09m). Deliberately
+ * modelled as the mark/free-kick TAKER gaining separation, rather than
+ * literally relocating a specific defender: several of `standTheMark`'s own
+ * call sites (an uncontested mark, a free kick with nobody named as the
+ * "presser") have no persistent defender dot to move at all, so nudging the
+ * one player every path always has is the honest, uniform mechanism — not a
+ * claim about which named player in real AFL actually steps back.
+ *
+ * **Update, round 107** — [[Simulation Engine Report Review]] Phase C point
+ * 3: deliberately left unconverted. This is a raw offset folded straight
+ * into `pos.zoneFrac` at its one call site below, never compared against a
+ * computed distance, so it isn't a "distance-based constant" in point 3's
+ * sense — same category as movement.ts's tactic pull-weight/offset table and
+ * `AMBIENT_ROAM_RADIUS`, disclosed there. The "~10m" figure above is now a
+ * cross-venue approximation rather than an exact conversion: real AFL
+ * venues' `lengthMeters` ranges 155.5m-175.0m, so the true rate
+ * (`lengthMeters/4`) spans 38.9-43.75 m/unit, putting the real stand-back
+ * distance at 9.7m-10.9m depending on venue rather than a flat 10m. Left
+ * reading one representative rate instead of the match's own `stadium` — a
+ * small, disclosed inconsistency, not a material one given the ~1m spread.
  */
 const MARK_STAND_BACK_DISTANCE = 0.25;
 /**
@@ -1026,10 +1066,21 @@ const HANDBALL_RECEIVE_PRESSURE_PENALTY = 70;
  * process-map-diagram figure) — self-declared plausible rather than
  * grounded in a specific reported number, same honestly-disclosed status as
  * `P_FORWARD_MARK_IS_LEAD`.
+ *
+ * Round 107 — [[Simulation Engine Report Review]] Phase C point 3: both now
+ * real metres, and the `distance` they're compared against/multiplied by
+ * (`closestDefender`'s own return value, and the fresh `realDistanceBetween`
+ * call below) now comes from the match's own real `stadium` rather than the
+ * flat abstract scale. `CHASE_PURSUIT_DISTANCE`: 0.35 * 40 = 14m, unchanged
+ * in real terms. `CHASE_DISTANCE_PENALTY`: divided through by 40 (70/40 =
+ * 1.75) so `CHASE_DISTANCE_PENALTY * distance` produces the identical
+ * handicap for the identical real chase distance — e.g. at the old outer
+ * edge, 0.35 units * 70 = 24.5 old-scale penalty points; 14m * 1.75 = 24.5,
+ * the same number, confirming the rescale is exact rather than a re-tune.
  */
-const CHASE_PURSUIT_DISTANCE = 0.35;
+const CHASE_PURSUIT_DISTANCE = 14;
 const CHASE_CATCH_HANDICAP_BASE = 15;
-const CHASE_DISTANCE_PENALTY = 70;
+const CHASE_DISTANCE_PENALTY = 1.75;
 
 function ruckRating(p: Player): number {
   return computeContestRating(p, ["strengthOverhead", "verticalLeap"]);
@@ -1151,6 +1202,22 @@ export interface Ctx {
    */
   homeLineCoachEffectiveness: Partial<Record<MatchDayCoachRole, number>>;
   awayLineCoachEffectiveness: Partial<Record<MatchDayCoachRole, number>>;
+  /**
+   * Sep 2026 round 107 — [[Simulation Engine Report Review]] Phase C. The
+   * real venue this match is being played at (`data/stadiums.ts`), resolved
+   * once at `startMatch` (a match doesn't change grounds mid-play) and read
+   * by every real-metres distance/geometry call this file makes
+   * (`shotGeometry`, `closestDefender`, `nearbyDefenders`,
+   * `weightedKickTarget`, `weightedHandballTarget`, `realDistanceBetween`,
+   * `movement.ts`'s `stepPositions`) — see `positioning.ts`'s own
+   * `realMetresFor`/`realDistanceBetween` doc comment for the underlying
+   * `yBound`-based conversion. Always populated (not optional like
+   * `homePlan`/`homeCondition`) — unlike tactics/condition, every match is
+   * played somewhere, so `startMatch` defaults to `DEFAULT_STADIUM_ID` (the
+   * MCG) rather than leaving this nullable, matching how `homeLineFocus`
+   * above has no opt-out either.
+   */
+  stadium: AFLStadium;
 }
 
 function teamOf(ctx: Ctx, side: Side): MatchTeam {
@@ -2086,7 +2153,7 @@ function shotChanceGivenReceiver(ctx: Ctx, state: State, possessingPlan: TeamPla
   const receiverPos =
     ctx.trackedPositions.get(receiverPick.player.PlayerID) ??
     proximityFor(receiverPick.player, state.possession, possessingTeam.positions?.get(receiverPick.player.PlayerID), newZone, state.possession, undefined, possessingTeam.positions);
-  const { depth, angleSeverity } = shotGeometry(receiverPos, state.possession);
+  const { depth, angleSeverity } = shotGeometry(receiverPos, state.possession, ctx.stadium);
   const geometryShotChance = shotChanceOnEntry(depth, angleSeverity) * gameStyleForwardEntryMultiplier(styleFor(possessingPlan));
   return ctx.rng() < geometryShotChance;
 }
@@ -2219,8 +2286,8 @@ function resolveUnpressuredDisposal(
   // safe to compute before the decision, since a kick's own target zone
   // doesn't depend on which target ends up actually used.
   const newZoneIfKick = advanceZone(state.zone, state.possession);
-  const kickCandidate = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZoneIfKick, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
-  const handballCandidate = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, state.zone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  const kickCandidate = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZoneIfKick, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions, ctx.stadium);
+  const handballCandidate = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, state.zone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions, ctx.stadium);
   // This is the "nobody in range, zero pressure" call site (see this
   // function's own name/doc comment) — there's no live defender here to
   // derive a pressure figure from, so this is honestly 0, not a guess.
@@ -2453,7 +2520,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       // plausibly close enough to be pursuing at all.
       let chaser = state.chaserId ? onGroundPlayers(defendingTeam).find((p) => p.PlayerID === state.chaserId) : undefined;
       if (!chaser) {
-        const closest = closestDefender(defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions);
+        const closest = closestDefender(defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions, ctx.stadium);
         // Aug 2026 round 39 — closestDefender itself is deliberately NOT
         // grounding-aware (see nearbyDefenders' own doc comment,
         // involvement.ts): it also drives kick/handball space scoring, where
@@ -2474,10 +2541,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       if (chaser) {
         // Round 36 — same real-preferred pattern for the chaser's own
         // position feeding the catch-probability roll below.
-        const distance = distanceBetween(
+        const distance = realDistanceBetween(
           carrierPos,
           ctx.trackedPositions.get(chaser.PlayerID) ??
             proximityFor(chaser, defendingSide, defendingTeam.positions?.get(chaser.PlayerID), state.zone, state.possession, undefined, defendingTeam.positions),
+          ctx.stadium,
         );
         const chaserTactic = tacticFor(defendingPlan, chaser, defendingTeam.positions);
         const chaserInForwardHalf = isForward50(state.zone, defendingSide);
@@ -2567,7 +2635,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // nearbyDefenders itself now applies to every candidate defender, see that
   // function's own doc comment (involvement.ts).
   const carrierPos = ctx.trackedPositions.get(carrier.PlayerID) ?? carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), state.zone, possessingTeam.positions);
-  const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
+  const nearby = tagger ? null : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, carrierPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick, ctx.stadium);
   const defender = tagger ?? nearby?.player ?? null;
 
   if (!defender) {
@@ -2772,8 +2840,8 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // `nearby` were already computed above (finding `defender` itself), not
   // freshly calculated here.
   const newZoneIfKick = advanceZone(state.zone, state.possession);
-  const kickCandidate = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZoneIfKick, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
-  const handballCandidate = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, state.zone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions);
+  const kickCandidate = weightedKickTarget(ctx.rng, state.possession, possessingTeam, newZoneIfKick, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions, ctx.stadium);
+  const handballCandidate = weightedHandballTarget(ctx.rng, state.possession, possessingTeam, state.zone, state.possession, carrier, defendingSide, defendingTeam, disposerPos, ctx.trackedPositions, ctx.stadium);
   const pressure = tagger ? 1 : proximityWeight(nearby!.distance);
   const isKick = decideKickVsHandball(ctx, carrier, spaceWeight(kickCandidate.distance), spaceWeight(handballCandidate.distance), pressure);
   if (isKick) line.kicks += 1;
@@ -3140,7 +3208,7 @@ function runContest(ctx: Ctx, state: State): State {
   // Round 34: real tracked position preferred here too — see involvement.ts's
   // nearbyDefenders doc comment.
   const attackerPos = ctx.trackedPositions.get(attackerRep.PlayerID) ?? carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone, attackingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick, ctx.stadium);
   if (!nearby) {
     return resolveUncontestedGather(ctx, state, attackingSide, defendingSide, defendingTeam, attackerRep, contestType);
   }
@@ -3481,7 +3549,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   // Round 34: real tracked position preferred here too — see involvement.ts's
   // nearbyDefenders doc comment.
   const receiverPos = ctx.trackedPositions.get(receiver.PlayerID) ?? carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick, ctx.stadium);
   if (!nearby) return attemptUncontestedMark();
 
   const defender = nearby.player;
@@ -3715,7 +3783,7 @@ function runHandballContest(ctx: Ctx, state: State): State {
   // Round 34: real tracked position preferred here too — see involvement.ts's
   // nearbyDefenders doc comment.
   const receiverPos = ctx.trackedPositions.get(receiver.PlayerID) ?? carrierPosition(receiver, possessingTeam.positions?.get(receiver.PlayerID), zone, possessingTeam.positions);
-  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
+  const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, zone, possessingSide, receiverPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick, ctx.stadium);
   if (!nearby) return attemptCleanReceive();
 
   const defender = nearby.player;
@@ -3853,7 +3921,7 @@ function runShot(ctx: Ctx, state: State): State {
   // shotGeometry consumes no rng at all) so a free-kick shot's own roll can read the real angle;
   // see setShotProbability's own doc comment for the tight-angle-favours-snap extension this enables.
   const shooterPos = ctx.trackedPositions.get(shooter.PlayerID) ?? carrierPosition(shooter, possessingTeam.positions?.get(shooter.PlayerID), state.zone, possessingTeam.positions);
-  const { depth, angleSeverity } = shotGeometry(shooterPos, state.possession);
+  const { depth, angleSeverity } = shotGeometry(shooterPos, state.possession, ctx.stadium);
   const isSetShot = ctx.rng() < setShotProbability(shooter, state.shotContext, possessingPlan, possessingTeam.positions, angleSeverity);
   const rating =
     (isSetShot
@@ -3871,7 +3939,7 @@ function runShot(ctx: Ctx, state: State): State {
   // under the real Laws of the Game).
   const nearby = isSetShot || state.shotContext === "freeKick"
     ? null
-    : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, shooterPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick);
+    : nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, state.possession, shooterPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick, ctx.stadium);
   const snapPressurePenalty = nearby ? proximityWeight(nearby.distance) * SNAP_LIVE_PRESSURE_PENALTY : 0;
   const difficulty =
     SHOT_DIFFICULTY_BASE + SHOT_DEPTH_PENALTY_SCALE * depth + SHOT_ANGLE_PENALTY_SCALE * angleSeverity + snapPressurePenalty + (ctx.rng() - 0.5) * 2 * SHOT_DIFFICULTY_JITTER;
@@ -4018,6 +4086,8 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
   const recordEvents = opts.recordEvents ?? true;
   const homePlan = opts.homePlan ? sanitizePlan(home.players, opts.homePlan, home.positions) : null;
   const awayPlan = opts.awayPlan ? sanitizePlan(away.players, opts.awayPlan, away.positions) : null;
+  // Round 107 — [[Simulation Engine Report Review]] Phase C: see Ctx.stadium's own doc comment.
+  const stadium = opts.stadium ?? getStadium(DEFAULT_STADIUM_ID);
 
   const ctx: Ctx = {
     home,
@@ -4059,6 +4129,7 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
     awayLineFocus: new Map(MATCH_DAY_COACH_ROLES.map((role) => [role, defaultLineFocusFor(role)])),
     homeLineCoachEffectiveness: opts.homeLineCoachEffectiveness ?? {},
     awayLineCoachEffectiveness: opts.awayLineCoachEffectiveness ?? {},
+    stadium,
   };
 
   // Every selected player gets a zeroed box-score line even if the ball never finds them.
@@ -4275,6 +4346,7 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       match.state.carrier,
       match.ctx.matchups,
       match.ctx.trackedPositions,
+      match.ctx.stadium,
     );
   };
   // Raw frames this quarter: `TICK_RATE_MULTIPLIER` for every one decision

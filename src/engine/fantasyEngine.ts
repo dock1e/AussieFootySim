@@ -58,6 +58,15 @@ export function ribbonWindowTicks(ticksPerQuarter: number): number {
   return Math.round(ticksForMinutes(5, ticksPerQuarter));
 }
 
+/** Sep 2026 round 113 — bench-stack "seconds since rotation" display, `m:ss` past the first minute so it stays compact next to a 20px node, `Ns` below it. */
+export function formatSecondsSince(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}:${String(rem).padStart(2, "0")}`;
+}
+
 // ---------------------------------------------------------------------------
 // Per-player fantasy event log — `{tick, quarter, type, points}`, built once per revealed event list.
 // The cumulative curve, the ribbon's Δ-window, and "what changed" all read this one log, never a
@@ -227,6 +236,16 @@ export interface PlayerMatchFantasyMetrics {
   longestStintMinutes: number;
   delta5: number;
   whatChanged: string;
+  /**
+   * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] Section R2.4's bench-stack "seconds
+   * since rotation". `null` for anyone currently on-ground (including a player who's never left it) or
+   * never tracked at all pre-match; otherwise ticks since their last tracked on-ground appearance,
+   * converted to real seconds by the caller via `secondsPerTick`. A player who started the match on the
+   * interchange and hasn't been rotated on yet reads as "seconds since kick-off" (baseline tick 0) —
+   * deliberately, not a special-cased blank: it's the same honest "how long have they been out there"
+   * number the brief asks for, and kick-off is genuinely the last moment they were "on" in any sense.
+   */
+  ticksSinceOffGround: number | null;
 }
 
 interface RawAccumulator {
@@ -236,10 +255,18 @@ interface RawAccumulator {
   longestRunTicks: number;
   runStartTick: number | null;
   runLastTick: number | null;
+  /**
+   * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] bench-stack "seconds since rotation".
+   * Unlike `runLastTick` (nulled by `closeRun` the moment a player leaves the ground, so the stint's own
+   * length can be measured), this is never reset — it just keeps the tick of the most recent event a
+   * player was actually tracked at, present or not, so it survives to the end of the loop and still means
+   * something for a player who's currently benched. `null` only for a player never once tracked all match.
+   */
+  lastPresentTick: number | null;
 }
 
 function emptyAccumulator(): RawAccumulator {
-  return { presentCount: 0, attended: 0, kickIns: 0, longestRunTicks: 0, runStartTick: null, runLastTick: null };
+  return { presentCount: 0, attended: 0, kickIns: 0, longestRunTicks: 0, runStartTick: null, runLastTick: null, lastPresentTick: null };
 }
 
 function closeRun(acc: RawAccumulator) {
@@ -298,6 +325,7 @@ export function computeFantasyMetrics(ctx: FantasyMetricsContext, playerIds: num
         a.presentCount += 1;
         if (a.runStartTick === null) a.runStartTick = ev.tick;
         a.runLastTick = ev.tick;
+        a.lastPresentTick = ev.tick;
       } else {
         closeRun(a);
       }
@@ -345,6 +373,10 @@ export function computeFantasyMetrics(ctx: FantasyMetricsContext, playerIds: num
     const cba = bouncesHeld > 0 ? (a.attended / bouncesHeld) * 100 : 0;
     const longestRunTicks = Math.max(a.longestRunTicks, a.runLastTick !== null && a.runStartTick !== null ? a.runLastTick - a.runStartTick : 0);
 
+    // Currently on-ground iff their last tracked appearance was the very last processed event.
+    const isCurrentlyOnGround = totalEvents > 0 && a.lastPresentTick === latestTick;
+    const ticksSinceOffGround = isCurrentlyOnGround ? null : latestTick - (a.lastPresentTick ?? 0);
+
     out.set(id, {
       fp,
       tog: togFraction * 100,
@@ -361,6 +393,7 @@ export function computeFantasyMetrics(ctx: FantasyMetricsContext, playerIds: num
       longestStintMinutes: minutesForTicks(longestRunTicks, ctx.ticksPerQuarter),
       delta5: fpBetween(log, tickA, latestTick),
       whatChanged: whatChangedText(ctx.events, id, tickA, latestTick),
+      ticksSinceOffGround,
     });
   }
   return out;

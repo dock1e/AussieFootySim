@@ -22,6 +22,7 @@ import type { AFLStadium, FieldMarkingsConfig } from "../data/stadiums";
 import { clubByName } from "../types/club";
 import { fantasyPointsFor } from "../engine/ratings";
 import { PX_PER_METRE, boundaryPath, goalSquare, goalPosts, arcPath, interchangeGatePath, corridorBuffer, BOUNDARY_SAMPLES } from "../engine/groundGeometry";
+import { FANTASY_COLOR, secondsPerTick, formatSecondsSince, type PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
 
 /**
  * Sep 2026, Phase 10 round 104 — [[Venue-Accurate Ground Renderer]]. Renamed
@@ -89,20 +90,35 @@ import { PX_PER_METRE, boundaryPath, goalSquare, goalPosts, arcPath, interchange
  * anchor the instant they stop being named — see `applyInvolvementCooldown`'s
  * own doc comment for the full root-cause diagnosis and why round 19's speed
  * cap alone didn't fully close this.
+ *
+ * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3/R2.4 (Tyler, live testing a Melbourne
+ * v Collingwood match: "both dark circles on green, numbers invisible," plus the board/bench duplicating
+ * interchange players). Node fill/ring/text scheme rewritten entirely (see `drawNode`'s own doc comment)
+ * and node size increased; the old plain-pill bench markers at the interchange gate are replaced with a
+ * full per-side vertical bench-stack (`drawBenchStack`) showing each interchange player's own node, FP and
+ * seconds-since-rotation, and the separate HTML `BenchStrip` that used to render below the canvas is
+ * deleted outright (its "under the ground" space handed to LiveMatch.tsx's play-by-play panel instead).
+ * Every dynamic/geometry mechanic above this point (chase-the-target, speed cap, involvement cooldown,
+ * venue geometry) is unaffected — this round only touched what a node/bench looks like, never where
+ * anything actually IS.
  */
 const HOME_COLOR_FALLBACK = "#ff5a36"; // used only if `clubByName(team.name)` can't resolve a real club (synthetic/test teams) — see resolveClubColor
 const AWAY_COLOR_FALLBACK = "#4b8fe0";
 /**
- * Node radii — Tyler's own spec: "Node radius 2.6-3.2m." Read as normal/
- * involved, mirroring the old pixel-literal `DOT_RADIUS`/`INVOLVED_DOT_RADIUS`
- * pair (9/13px) they replace. At this round's `PX_PER_METRE` (6) these render
- * larger on screen than the old fixed pixels did (15.6/19.2px) — a real,
- * visible size change, not a bug: Tyler's own metre figures, not tuned to
- * reproduce the old look.
+ * Node diameters — Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3: "Node size up to
+ * 22px diameter (from ~15px)." Supersedes this round's own `DOT_RADIUS_M`/`INVOLVED_DOT_RADIUS_M` (2.6m/
+ * 3.2m — round 104's read of Tyler's separate "Node radius 2.6-3.2m" ground-spec, rendering ~31/38px
+ * diameter at this file's `PX_PER_METRE`). The brief's own "~15px" baseline undershoots what was actually
+ * on screen, likely eyeballed rather than measured — but its literal 22px TARGET is unambiguous and
+ * testable, so that's what's authoritative here, not the "from" figure. Kept as literal pixel targets
+ * (not re-expressed as a metre spec) since that's how the brief states them; `INVOLVED_DOT_DIAMETER_PX`
+ * preserves the *old* normal:involved ratio (~1.23x) as a "this one's live" size bump — the brief doesn't
+ * give its own involved figure, so this is carried over rather than invented fresh.
  */
-const DOT_RADIUS_M = 2.6;
-const INVOLVED_DOT_RADIUS_M = 3.2;
-const DOT_STROKE_WIDTH_M = 0.5; // Tyler: "0.5m white stroke" — new; the old renderer had no base stroke at all, only an extra ring for involved dots (kept below, on top of this).
+const DOT_DIAMETER_PX = 22;
+const INVOLVED_DOT_DIAMETER_PX = 27;
+const DOT_RADIUS_M = DOT_DIAMETER_PX / 2 / PX_PER_METRE;
+const INVOLVED_DOT_RADIUS_M = INVOLVED_DOT_DIAMETER_PX / 2 / PX_PER_METRE;
 const BALL_RADIUS_M = 0.9; // Tyler: "Ball is a 1.8m yellow node" (diameter 1.8m). Kept the established spin/lace ellipse mechanism (see BALL_RESTING_ROTATION below) scaled to this footprint, rather than replacing it with a flat circle — "1.8m node" describes the ball's size, not a request to drop 15+ rounds of drop-punt-spin polish.
 const BALL_ASPECT = 1.4; // preserves the old ellipse's 7:5 (=1.4) rx:ry ratio verbatim
 // Time for a dot's rendered position to close half the remaining distance to
@@ -237,9 +253,84 @@ function applyInvolvementCooldown(
   });
 }
 
-/** `MatchTeam.name` is a real club name for every real caller (LiveMatch.tsx resolves it straight from `clubByName` itself for the very same club — see that file's `homeClubId` line) — falls back to the old generic accent/info colours for anything synthetic (tests, the balance simulator) that isn't a real club. */
-function resolveClubColor(team: MatchTeam, fallback: string): string {
-  return clubByName(team.name)?.primaryColor ?? fallback;
+/** `MatchTeam.name` is a real club name for every real caller (LiveMatch.tsx resolves it straight from `clubByName` itself for the very same club — see that file's `homeClubId` line) — falls back to the old generic accent/info colours for anything synthetic (tests, the balance simulator) that isn't a real club.
+ *
+ * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3: replaces the old `resolveClubColor`
+ * (primary only) — the new node scheme needs a real club's SECONDARY colour too (home's own ring), not
+ * just its primary. */
+function resolveClubColors(team: MatchTeam, fallbackPrimary: string): { primary: string; secondary: string } {
+  const club = clubByName(team.name);
+  return { primary: club?.primaryColor ?? fallbackPrimary, secondary: club?.secondaryColor ?? "#ffffff" };
+}
+
+/** Fill/ring pair for one side's nodes — on-ground dots and bench-stack nodes alike share this exact shape, see `drawNode`. */
+interface NodeColors {
+  fill: string;
+  ring: string;
+  ringWidth: number;
+}
+
+// Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3: "home fill = primary, away fill =
+// white-ish #f2f4f8 with a 2.5px primary ring... never two dark fills against each other." Reverse-
+// engineered against the brief's own Melbourne/Collingwood worked example (its hex values match those two
+// clubs' real primary/secondary in types/club.ts): AWAY NEVER USES ITS OWN SECONDARY — away's fill is this
+// one fixed near-white constant and its ring is its own primary. That's what makes the light/dark split
+// unconditional: home's fill is whatever real colour that club has, but away's fill never is, so the two
+// sides can never both land on a dark (or both a light) fill regardless of which two real clubs are
+// playing.
+const AWAY_NODE_FILL = "#f2f4f8";
+
+function nodeColorsFor(side: Side, homeColors: { primary: string; secondary: string }, awayColors: { primary: string; secondary: string }): NodeColors {
+  return side === "home"
+    ? { fill: homeColors.primary, ring: homeColors.secondary, ringWidth: 2 }
+    : { fill: AWAY_NODE_FILL, ring: awayColors.primary, ringWidth: 2.5 };
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace("#", "");
+  return { r: parseInt(clean.substring(0, 2), 16), g: parseInt(clean.substring(2, 4), 16), b: parseInt(clean.substring(4, 6), 16) };
+}
+
+function srgbChannelToLinear(c: number): number {
+  const cs = c / 255;
+  return cs <= 0.04045 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4);
+}
+
+/** WCAG relative luminance (0 = black, 1 = white) — the same methodology `types/club.ts`'s `secondaryColor` doc comment already established for this codebase (round 51, `verify_round51_scratch.ts`'s contrast pass), reused here rather than invented fresh. */
+function relativeLuminance(hex: string): number {
+  const { r, g, b } = hexToRgb(hex);
+  return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) + 0.0722 * srgbChannelToLinear(b);
+}
+
+function contrastRatio(a: number, b: number): number {
+  const lighter = Math.max(a, b);
+  const darker = Math.min(a, b);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+const NODE_TEXT_LIGHT = "#f2f4f8"; // Tyler R2.3's own two literal guernsey-number text colours
+const NODE_TEXT_DARK = "#12161c";
+
+/**
+ * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3: "10px, #f2f4f8 on dark fills, #12161c
+ * on light fills" reads as a hardcoded home/away split in the brief's own prose, but a node's fill is just
+ * "the club's primary colour" for home — and real primaries include at least one pale/yellow club colour,
+ * where light-on-light text would be unreadable. Picks whichever of the brief's two literal colours has
+ * the higher WCAG contrast ratio against THIS fill, so it's correct for every real club's own colours, not
+ * just the brief's one worked example.
+ */
+function pickTextColor(fillHex: string): string {
+  const fillL = relativeLuminance(fillHex);
+  const contrastLight = contrastRatio(fillL, relativeLuminance(NODE_TEXT_LIGHT));
+  const contrastDark = contrastRatio(fillL, relativeLuminance(NODE_TEXT_DARK));
+  return contrastLight >= contrastDark ? NODE_TEXT_LIGHT : NODE_TEXT_DARK;
+}
+
+/** One interchange player's bench-stack display data (R2.4) — precomputed once per animation frame from `fantasyMetrics`/`ticksPerQuarter` (both mirrored into refs, same "read live via ref" pattern as every other per-frame value in this file) rather than threading raw match events down into this component. */
+interface BenchNodeData {
+  player: Player;
+  fp: number;
+  secondsSinceRotation: number;
 }
 
 /** Traces a metre-space polyline onto the canvas path via `toPixel`, `moveTo` for the first point and `lineTo` for the rest. Caller owns `beginPath`/`closePath`/fill-or-stroke, same as any other path-building helper. */
@@ -408,6 +499,64 @@ function drawSeatingBowl(ctx: CanvasRenderingContext2D, venue: AFLStadium) {
   ctx.globalAlpha = 1;
 }
 
+const BENCH_NODE_RADIUS_PX = 10; // R2.4: "one 20px circular node per interchange player" — literal screen px, like the plain pill this replaces, not metre-derived
+const BENCH_NODE_GAP_PX = 4;
+const BENCH_LABEL_HEIGHT_PX = 11;
+const BENCH_ROW_WIDTH_PX = 74; // node + gap + the FP/seconds text column, wide enough for "99" and "12:34" at 9px mono
+
+/**
+ * R2.4 bench-stack — Tyler: "each bench icon becomes a compact vertical stack anchored to its side of the
+ * ground." Replaces the old `drawBench` sub-helper's plain coloured H/A pill entirely (that pill IS the
+ * "bench icon already drawn there" the brief refers to). Same node visual language as an on-ground dot
+ * (`drawNode`), just at a fixed 20px size and 70% opacity, plus an FP figure and a seconds-since-rotation
+ * readout per Tyler's own spec. Returns the on-canvas centre of every node it drew, in the exact shape of
+ * a `DotPosition` (`involved: false` always — a bench player is never "involved" in the live-play sense
+ * `computeDotPositions` means by that flag) — this lets the caller fold bench nodes straight into the
+ * EXISTING hover/click hit-test list (`dotAt`) with no new hit-testing system.
+ */
+function drawBenchStack(
+  ctx: CanvasRenderingContext2D,
+  anchor: { x: number; y: number },
+  side: Side,
+  colors: NodeColors,
+  players: BenchNodeData[],
+  highlightedId: number | null,
+): DotPosition[] {
+  const rowHeight = BENCH_NODE_RADIUS_PX * 2 + BENCH_NODE_GAP_PX;
+  const stackHeight = BENCH_LABEL_HEIGHT_PX + players.length * rowHeight;
+  const left = anchor.x - BENCH_ROW_WIDTH_PX / 2;
+  const top = anchor.y - stackHeight / 2;
+  const nodeCx = left + BENCH_NODE_RADIUS_PX;
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = `600 9px "IBM Plex Mono", monospace`;
+  // Fixed light ink rather than literally "the club's own colour" — a club whose primary is itself
+  // near-black (several real ones are) would make its own label unreadable against this canvas's dark
+  // background. Reuses the ribbon/board's own established ink token rather than a new one-off colour.
+  ctx.fillStyle = FANTASY_COLOR.inkPrimary;
+  ctx.fillText("BENCH", left, top + 9);
+
+  const hitTargets: DotPosition[] = [];
+  players.forEach((bp, i) => {
+    const cy = top + BENCH_LABEL_HEIGHT_PX + i * rowHeight + BENCH_NODE_RADIUS_PX;
+    drawNode(ctx, nodeCx, cy, bp.player.jumperNumber, BENCH_NODE_RADIUS_PX, colors, 0.7, bp.player.PlayerID === highlightedId);
+
+    const textX = nodeCx + BENCH_NODE_RADIUS_PX + 6;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = FANTASY_COLOR.inkSecondary;
+    ctx.font = `600 9px "IBM Plex Mono", monospace`;
+    ctx.fillText(String(Math.round(bp.fp)), textX, cy - 1);
+    ctx.fillStyle = FANTASY_COLOR.inkLabel; // Tyler's own literal #6f7c93 — this token IS that value, see fantasyEngine.ts
+    ctx.font = `9px "IBM Plex Mono", monospace`;
+    ctx.fillText(formatSecondsSince(bp.secondsSinceRotation), textX, cy + 9);
+
+    hitTargets.push({ playerId: bp.player.PlayerID, lname: bp.player.lname, jumperNumber: bp.player.jumperNumber, side, x: nodeCx, y: cy, involved: false });
+  });
+  return hitTargets;
+}
+
 /**
  * The 15m interchange gate + both benches — Tyler: "with both team benches
  * outside it in club colours." The flank (+y or -y side) is read straight
@@ -416,8 +565,22 @@ function drawSeatingBowl(ctx: CanvasRenderingContext2D, venue: AFLStadium) {
  * on the same real flank as each other (just offset in x), so one sign
  * covers both. Bench positions themselves are the venue's own real metres,
  * not derived — `data/stadiums.ts` already gives them per venue.
+ *
+ * Sep 2026 round 113 — now returns the bench-stack hit-targets `drawBenchStack` produced (see that
+ * function's own doc comment), instead of drawing a static pill with no interactivity at all.
  */
-function drawInterchangeGate(ctx: CanvasRenderingContext2D, venue: AFLStadium, aM: number, bM: number, nExp: number, homeColor: string, awayColor: string) {
+function drawInterchangeGate(
+  ctx: CanvasRenderingContext2D,
+  venue: AFLStadium,
+  aM: number,
+  bM: number,
+  nExp: number,
+  homeNode: NodeColors,
+  awayNode: NodeColors,
+  homeBench: BenchNodeData[],
+  awayBench: BenchNodeData[],
+  highlightedId: number | null,
+): DotPosition[] {
   const flank: 1 | -1 = venue.architecture.homeBenchPosition.y >= 0 ? 1 : -1;
   const halfWidth = venue.markings.interchangeGateWidth / 2;
   const gate = interchangeGatePath(aM, bM, nExp, flank, halfWidth, 20);
@@ -427,23 +590,12 @@ function drawInterchangeGate(ctx: CanvasRenderingContext2D, venue: AFLStadium, a
   ctx.lineWidth = BOUNDARY_LINE_WIDTH_PX + 2;
   ctx.stroke();
 
-  const drawBench = (pos: { x: number; y: number }, color: string, label: string) => {
-    const p = toPixel(pos.x, pos.y);
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.85;
-    ctx.fillRect(p.x - 14, p.y - 7, 28, 14);
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = "#0a0e14";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(p.x - 14, p.y - 7, 28, 14);
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 9px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(label, p.x, p.y);
-  };
-  drawBench(venue.architecture.homeBenchPosition, homeColor, "H");
-  drawBench(venue.architecture.awayBenchPosition, awayColor, "A");
+  const homeAnchor = toPixel(venue.architecture.homeBenchPosition.x, venue.architecture.homeBenchPosition.y);
+  const awayAnchor = toPixel(venue.architecture.awayBenchPosition.x, venue.architecture.awayBenchPosition.y);
+  return [
+    ...drawBenchStack(ctx, homeAnchor, "home", homeNode, homeBench, highlightedId),
+    ...drawBenchStack(ctx, awayAnchor, "away", awayNode, awayBench, highlightedId),
+  ];
 }
 
 /** "A 50m scale bar inside the bottom-left" (Tyler, section 5) — a fixed on-screen ruler, not anchored to any particular ground location. */
@@ -485,7 +637,15 @@ function drawScaleBar(ctx: CanvasRenderingContext2D) {
  * `drawGround(ctx)` was — everything here is cheap pure geometry plus canvas
  * calls, no per-frame allocation heavier than the old version had.
  */
-function drawGround(ctx: CanvasRenderingContext2D, venue: AFLStadium, homeColor: string, awayColor: string) {
+function drawGround(
+  ctx: CanvasRenderingContext2D,
+  venue: AFLStadium,
+  homeNode: NodeColors,
+  awayNode: NodeColors,
+  homeBench: BenchNodeData[],
+  awayBench: BenchNodeData[],
+  highlightedId: number | null,
+): DotPosition[] {
   const aM = venue.lengthMeters / 2;
   const bM = venue.widthMeters / 2;
   const nExp = venue.superellipseExponent;
@@ -567,49 +727,82 @@ function drawGround(ctx: CanvasRenderingContext2D, venue: AFLStadium, homeColor:
 
   for (const end of [1, -1] as const) drawGoalPosts(ctx, aM, end, markings);
 
-  drawInterchangeGate(ctx, venue, aM, bM, nExp, homeColor, awayColor);
+  const benchHitTargets = drawInterchangeGate(ctx, venue, aM, bM, nExp, homeNode, awayNode, homeBench, awayBench, highlightedId);
   drawScaleBar(ctx);
+  return benchHitTargets;
 }
 
-function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition, color: string, highlighted = false) {
-  const radiusM = dot.involved ? INVOLVED_DOT_RADIUS_M : DOT_RADIUS_M;
-  const radius = radiusM * PX_PER_METRE;
-  // Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section B cross-highlight: one extra ring, same
-  // idiom as the `involved` ring just below, drawn first so the dot itself still sits on top.
+/**
+ * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3 rewrite. Was: a fixed team-colour fill
+ * plus a flat white 0.5m stroke, with a bold-sans guernsey number sized off the dot's own radius — Tyler's
+ * own live-testing complaint was literally "both sides read as dark circles on green, numbers invisible."
+ * New scheme entirely replaces that fill/stroke pair with `NodeColors`' fill+ring (see `nodeColorsFor`'s
+ * own doc comment for the home/away convention), a fixed-size dark halo so a light fill never blends into
+ * the turf's own pale markings, and a fixed 10px IBM Plex Mono 600 number whose colour is chosen per-fill
+ * by `pickTextColor` rather than hardcoded by side. Shared by `drawDot` (on-ground, variable radius) and
+ * `drawBenchStack` (fixed 20px bench nodes) — same visual language at two sizes/opacities, not two
+ * separate implementations to keep in sync.
+ */
+function drawNode(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  jumperNumber: number,
+  radiusPx: number,
+  colors: NodeColors,
+  fillOpacity: number,
+  highlighted: boolean,
+) {
+  // Selected/cross-highlighted ring — Tyler R2.3: "keeps the existing accent ring #b9a6ff at 3px, drawn
+  // outside the club ring." Recoloured/widened from round 112's `#9a80ff`/2px; the +7 offset clears both
+  // the club ring and (for an on-ground dot) the `involved` ring at every combination of the two.
   if (highlighted) {
     ctx.beginPath();
-    ctx.arc(dot.x, dot.y, radius + 6, 0, Math.PI * 2);
-    ctx.strokeStyle = "#9a80ff";
-    ctx.lineWidth = 2;
+    ctx.arc(x, y, radiusPx + 7, 0, Math.PI * 2);
+    ctx.strokeStyle = "#b9a6ff";
+    ctx.lineWidth = 3;
     ctx.globalAlpha = 0.9;
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
+
+  // Dark halo — Tyler: "so light-filled nodes stay separated from the pale green centre-square lines."
+  // Drawn before the fill/ring, at a fixed offset, so it reads as a soft separator behind them.
   ctx.beginPath();
-  ctx.arc(dot.x, dot.y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.globalAlpha = dot.involved ? 1 : 0.72;
+  ctx.arc(x, y, radiusPx + 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(6,10,16,.55)";
+  ctx.globalAlpha = fillOpacity;
   ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(x, y, radiusPx, 0, Math.PI * 2);
+  ctx.fillStyle = colors.fill;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(x, y, radiusPx, 0, Math.PI * 2);
+  ctx.strokeStyle = colors.ring;
+  ctx.lineWidth = colors.ringWidth;
+  ctx.stroke();
   ctx.globalAlpha = 1;
 
-  ctx.beginPath();
-  ctx.arc(dot.x, dot.y, radius, 0, Math.PI * 2);
-  ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = DOT_STROKE_WIDTH_M * PX_PER_METRE;
-  ctx.stroke();
+  ctx.fillStyle = pickTextColor(colors.fill);
+  ctx.font = `600 10px "IBM Plex Mono", monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(jumperNumber), x, y + 0.5);
+}
 
+function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition, colors: NodeColors, highlighted = false) {
+  const radiusPx = (dot.involved ? INVOLVED_DOT_RADIUS_M : DOT_RADIUS_M) * PX_PER_METRE;
+  drawNode(ctx, dot.x, dot.y, dot.jumperNumber, radiusPx, colors, dot.involved ? 1 : 0.72, highlighted);
   if (dot.involved) {
     ctx.beginPath();
-    ctx.arc(dot.x, dot.y, radius + 4, 0, Math.PI * 2);
+    ctx.arc(dot.x, dot.y, radiusPx + 4, 0, Math.PI * 2);
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2;
     ctx.stroke();
   }
-
-  ctx.fillStyle = "#0a0e14";
-  ctx.font = `bold ${Math.round(radius * 0.85)}px sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(String(dot.jumperNumber), dot.x, dot.y + 0.5);
 }
 
 /**
@@ -646,89 +839,54 @@ function drawBall(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }, 
   ctx.restore();
 }
 
-/**
- * Interchange bench — Round 16 (Aug 2026), Tyler: "we need to visually
- * represent our players on the interchange in the sim screen." Rendered as a
- * plain HTML strip directly under the canvas — visually attached to the same
- * card — rather than at the real bench's own ground position, since the turf
- * shape has no spare room there for a legible row of dots (see the original
- * round-16 reasoning, unchanged by this round's geometry rebuild).
- * `benchPlayers` returns `[]` for any team with no real on-ground/bench
- * distinction, so this renders nothing for those.
- *
- * Sep 2026 round 104: now takes real club colours (`homeColor`/`awayColor`,
- * the same ones the ground's own dots and interchange-gate bench markers use)
- * instead of the old generic accent/info-blue constants — leaving this strip
- * on generic orange/blue directly under now-club-coloured ground dots would
- * read as a visible mismatch, not a deliberate scope boundary.
- */
-function BenchStrip({ home, away, homeColor, awayColor }: { home: MatchTeam; away: MatchTeam; homeColor: string; awayColor: string }) {
-  const homeBench = benchPlayers(home);
-  const awayBench = benchPlayers(away);
-  if (homeBench.length === 0 && awayBench.length === 0) return null;
+// Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: the plain-HTML `BenchStrip`/
+// `BenchSide` pair that used to render here (a two-column strip of name pills directly under the canvas,
+// Round 16 Aug 2026) is deleted outright, not reworked. Tyler: "delete the two horizontal bench pill
+// strips under the ground... the row they occupy is reclaimed by the play-by-play panel." The bench is now
+// drawn ON the ground itself, attached to the interchange-gate's own bench markers — see `drawBenchStack`
+// above `drawInterchangeGate`. LiveMatch.tsx's play-by-play card height was grown to reclaim this space.
 
-  return (
-    // `shrink-0` — Sep 2026 [[LiveMatch Cockpit Rebuild]] bugfix: the canvas above is now a
-    // flex-shrink/grow sibling (see GroundView's own root doc comment) rather than a fixed-width
-    // block, so without this the flex algorithm could squeeze the bench strip too when space is
-    // tight. It should always keep its own natural (small, text-only) height.
-    <div className="mt-2 shrink-0 grid grid-cols-2 gap-2 text-[11px]">
-      <BenchSide label={`${home.name} bench`} players={homeBench} color={homeColor} align="left" />
-      <BenchSide label={`${away.name} bench`} players={awayBench} color={awayColor} align="right" />
-    </div>
-  );
-}
-
-function BenchSide({
-  label,
-  players,
-  color,
-  align,
-}: {
-  label: string;
-  players: MatchTeam["players"];
-  color: string;
-  align: "left" | "right";
-}) {
-  return (
-    <div className={align === "right" ? "text-right" : ""}>
-      <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
-      <div className={`flex flex-wrap gap-1.5 ${align === "right" ? "justify-end" : ""}`}>
-        {players.length === 0 ? (
-          <span className="text-slate-600">&mdash;</span>
-        ) : (
-          players.map((p) => (
-            <span
-              key={p.PlayerID}
-              className="inline-flex items-center gap-1 rounded-full bg-base-800 py-0.5 pl-0.5 pr-2 text-slate-300"
-              title={`${p.fname} ${p.lname} — on the interchange`}
-            >
-              <span
-                className="flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold text-white"
-                style={{ backgroundColor: color, opacity: 0.72 }}
-              >
-                {p.jumperNumber}
-              </span>
-              {p.lname}
-            </span>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** Venue identity chip — Tyler section 5: "short name, true dimensions, aspect ratio, corridor buffer." Plain HTML, absolutely positioned over the canvas (`pointer-events-none` so it never blocks hover/click hit-testing) — doesn't affect the panel's own layout/sizing, same reasoning as `BenchStrip` living outside the canvas. */
+/** Venue identity chip — Tyler section 5: "short name, true dimensions, aspect ratio, corridor buffer." Plain HTML, positioned by its parent wrapper (see GroundView's own return — round 113 added `TeamLegend` as a sibling in that same wrapper) rather than absolutely positioning itself — doesn't affect the panel's own layout/sizing, same reasoning as this chip living outside the canvas always has. */
 function VenueChip({ venue }: { venue: AFLStadium }) {
   const aM = venue.lengthMeters / 2;
   const buffer = corridorBuffer(aM);
   return (
-    <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-base-600 bg-base-900/80 px-2 py-1 text-[10px] leading-tight text-slate-300 backdrop-blur-sm">
+    <div className="rounded-md border border-base-600 bg-base-900/80 px-2 py-1 text-[10px] leading-tight text-slate-300 backdrop-blur-sm">
       <div className="font-semibold text-slate-200">{venue.commonName}</div>
       <div className="tabular-nums text-slate-400">
         {venue.lengthMeters.toFixed(1)}m &times; {venue.widthMeters.toFixed(1)}m &middot; {venue.aspectRatio.toFixed(2)}:1
       </div>
       <div className="tabular-nums text-slate-500">Corridor buffer {buffer >= 0 ? "+" : ""}{buffer.toFixed(1)}m</div>
+    </div>
+  );
+}
+
+/**
+ * R2.3 two-chip legend — Tyler: "MELB filled dark, COLL filled light, 9px mono" at the ground's top-left
+ * under the venue card. Swatches reuse each side's own already-resolved `NodeColors` so the legend is
+ * pixel-identical to what's actually drawn on the ground, not a separately-chosen "representative" colour.
+ * Abbreviation via `clubByName` (round 51's own field), falling back to the team's own name for a
+ * synthetic team with no real club match — same fallback spirit as `resolveClubColors`.
+ */
+function TeamLegend({ home, away, homeNode, awayNode }: { home: MatchTeam; away: MatchTeam; homeNode: NodeColors; awayNode: NodeColors }) {
+  const homeAbbr = clubByName(home.name)?.abbreviation ?? home.name.slice(0, 4).toUpperCase();
+  const awayAbbr = clubByName(away.name)?.abbreviation ?? away.name.slice(0, 4).toUpperCase();
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-base-600 bg-base-900/80 px-2 py-1 text-[9px] leading-tight backdrop-blur-sm">
+      <LegendChip label={homeAbbr} colors={homeNode} />
+      <LegendChip label={awayAbbr} colors={awayNode} />
+    </div>
+  );
+}
+
+function LegendChip({ label, colors }: { label: string; colors: NodeColors }) {
+  return (
+    <div className="flex items-center gap-1.5 font-mono uppercase tracking-wide text-slate-300">
+      <span
+        className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+        style={{ backgroundColor: colors.fill, boxShadow: `inset 0 0 0 1px ${colors.ring}` }}
+      />
+      {label}
     </div>
   );
 }
@@ -759,7 +917,19 @@ export interface GroundViewProps {
    */
   highlightedPlayerId?: number | null;
   onHoverPlayer?: (playerId: number | null) => void;
+  /**
+   * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: FP + seconds-since-rotation for the
+   * bench-stack nodes drawn on the ground (see `drawBenchStack`). The exact same map LiveMatch.tsx already
+   * computes once per tick for the ribbon/board/drawer — reused here rather than a bespoke bench-only
+   * shape. Optional: defaults to an empty map so a caller with no fantasy data (a test, any future
+   * non-fantasy-aware caller) still renders bench nodes, just with fp/time both reading 0.
+   */
+  fantasyMetrics?: Map<number, PlayerMatchFantasyMetrics>;
+  /** Converts `ticksSinceOffGround` (ticks) to real seconds for the bench-stack's rotation-time readout — see `secondsPerTick`. Defaults to the engine's own real per-match constant (match.ts's `DEFAULT_TICKS_PER_QUARTER`, not exported, so restated literally here). */
+  ticksPerQuarter?: number;
 }
+
+const EMPTY_FANTASY_METRICS: Map<number, PlayerMatchFantasyMetrics> = new Map();
 
 export function GroundView({
   home,
@@ -774,6 +944,8 @@ export function GroundView({
   onSelectPlayer,
   highlightedPlayerId = null,
   onHoverPlayer,
+  fantasyMetrics = EMPTY_FANTASY_METRICS,
+  ticksPerQuarter = 130,
 }: GroundViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<DotPosition | null>(null);
@@ -800,12 +972,21 @@ export function GroundView({
   awayStyleRef.current = awayStyle;
   const highlightedPlayerIdRef = useRef(highlightedPlayerId);
   highlightedPlayerIdRef.current = highlightedPlayerId;
+  // Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4 bench-stack data, same "mirror the
+  // prop into a ref every render" pattern as everything else here.
+  const fantasyMetricsRef = useRef(fantasyMetrics);
+  fantasyMetricsRef.current = fantasyMetrics;
+  const ticksPerQuarterRef = useRef(ticksPerQuarter);
+  ticksPerQuarterRef.current = ticksPerQuarter;
 
   const renderedRef = useRef<Map<number, DotPosition>>(new Map());
   // Aug 2026 round 26 — see applyInvolvementCooldown's own doc comment. Keyed
   // by playerId, same lifetime/reset rules as renderedRef below.
   const lastInvolvedRef = useRef<Map<number, { x: number; y: number; atSeconds: number }>>(new Map());
   const lastDrawnDotsRef = useRef<DotPosition[]>([]); // what's actually on screen right now, for hover hit-testing
+  // Sep 2026 round 113 — R2.4: same idea as lastDrawnDotsRef, for the bench-stack nodes drawn each frame
+  // (see drawBenchStack) — dotAt() below scans both.
+  const lastDrawnBenchNodesRef = useRef<DotPosition[]>([]);
   const teamsKeyRef = useRef("");
   const driftElapsedRef = useRef(0); // seconds, only advances while isPlaying
   const lastFrameAtRef = useRef(performance.now());
@@ -903,16 +1084,32 @@ export function GroundView({
 
       const ctx = canvasRef.current?.getContext("2d");
       if (ctx) {
-        const homeColor = resolveClubColor(currentHome, HOME_COLOR_FALLBACK);
-        const awayColor = resolveClubColor(currentAway, AWAY_COLOR_FALLBACK);
-        drawGround(ctx, currentVenue, homeColor, awayColor);
+        const homeColors = resolveClubColors(currentHome, HOME_COLOR_FALLBACK);
+        const awayColors = resolveClubColors(currentAway, AWAY_COLOR_FALLBACK);
+        const homeNode = nodeColorsFor("home", homeColors, awayColors);
+        const awayNode = nodeColorsFor("away", homeColors, awayColors);
         const highlightedId = highlightedPlayerIdRef.current;
+
+        // Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: bench-stack FP/rotation-time
+        // data, recomputed fresh every frame from the live `fantasyMetrics` ref (same "no snapshot, always
+        // reads the current value" shape as every other per-frame value above) — cheap, since a bench is
+        // at most 5 players a side.
+        const secPerTick = secondsPerTick(ticksPerQuarterRef.current);
+        const currentFantasyMetrics = fantasyMetricsRef.current;
+        const toBenchData = (p: Player): BenchNodeData => {
+          const m = currentFantasyMetrics.get(p.PlayerID);
+          return { player: p, fp: m?.fp ?? 0, secondsSinceRotation: m?.ticksSinceOffGround != null ? m.ticksSinceOffGround * secPerTick : 0 };
+        };
+        const homeBench = benchPlayers(currentHome).map(toBenchData);
+        const awayBench = benchPlayers(currentAway).map(toBenchData);
+
+        lastDrawnBenchNodesRef.current = drawGround(ctx, currentVenue, homeNode, awayNode, homeBench, awayBench, highlightedId);
         for (const dot of drawn) {
-          if (!dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeColor : awayColor, dot.playerId === highlightedId);
+          if (!dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeNode : awayNode, dot.playerId === highlightedId);
         }
         // Draw involved dots last so they render on top of the rest.
         for (const dot of drawn) {
-          if (dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeColor : awayColor, dot.playerId === highlightedId);
+          if (dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeNode : awayNode, dot.playerId === highlightedId);
         }
         drawBall(ctx, ballRenderedRef.current, ballRotationRef.current);
       }
@@ -951,6 +1148,17 @@ export function GroundView({
         closestDist = dist;
       }
     }
+    // Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: bench-stack nodes get hover/click
+    // parity with on-ground dots by extending this SAME nearest-neighbour search over a second
+    // per-frame-populated ref, rather than a parallel HTML-overlay hit-test system — see
+    // lastDrawnBenchNodesRef's own population in frame() above.
+    for (const bench of lastDrawnBenchNodesRef.current) {
+      const dist = Math.hypot(bench.x - mx, bench.y - my);
+      if (dist < closestDist) {
+        closest = bench;
+        closestDist = dist;
+      }
+    }
     return closest;
   }
 
@@ -975,8 +1183,12 @@ export function GroundView({
     if (player) onSelectPlayer(player, dot.side);
   }
 
-  const homeColor = resolveClubColor(home, HOME_COLOR_FALLBACK);
-  const awayColor = resolveClubColor(away, AWAY_COLOR_FALLBACK);
+  // Sep 2026 round 113 — R2.3: render-scope (not per-frame-ref) colours, purely for `TeamLegend`'s static
+  // swatches below — the canvas's own per-frame colours are computed independently inside frame() above.
+  const homeColorsForLegend = resolveClubColors(home, HOME_COLOR_FALLBACK);
+  const awayColorsForLegend = resolveClubColors(away, AWAY_COLOR_FALLBACK);
+  const homeNodeColors = nodeColorsFor("home", homeColorsForLegend, awayColorsForLegend);
+  const awayNodeColors = nodeColorsFor("away", homeColorsForLegend, awayColorsForLegend);
 
   // Tyler section 4: "Hover a node -> position code, metres from its
   // attacking goal, and live fantasy points" — replaces the old Disposals/
@@ -1005,6 +1217,10 @@ export function GroundView({
         (hovered.y - GROUND_HEIGHT / 2) / PX_PER_METRE,
       )
     : 0;
+  // Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: a bench node's x/y is its
+  // bench-stack drawing position, not a real spot on the ground — "metres from goal" would be a
+  // meaningless number for it, so the tooltip below drops that line for a bench hover and shows FP alone.
+  const hoveredIsBench = hovered ? benchPlayers(hovered.side === "home" ? home : away).some((p) => p.PlayerID === hovered.playerId) : false;
 
   return (
     /*
@@ -1022,8 +1238,13 @@ export function GroundView({
      * `engine/ground.ts` — so this had to stay ratio-driven, not a hardcoded box). `max-w-full` is a
      * safety clamp for the rare case a venue's ratio would otherwise overflow the column's width.
      * `items-start` keeps the canvas's own top-left corner exactly at this root's — the hover
-     * tooltip's positioning math assumes exactly that. `BenchStrip` keeps its natural size via its
-     * own `shrink-0` so the two share the available height correctly.
+     * tooltip's positioning math assumes exactly that.
+     *
+     * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: `BenchStrip`, the second flex
+     * child this comment used to describe, is deleted (the bench moved onto the ground canvas itself —
+     * see `drawBenchStack`), so the canvas is now this container's only flex child. R2.1's own "must not
+     * move a pixel between tick 0 and tick 200" requirement holds structurally as a result: nothing here
+     * ever adds or removes a sibling once mounted.
      */
     <div className="relative flex h-full min-h-0 flex-col items-start gap-1">
       <canvas
@@ -1038,7 +1259,10 @@ export function GroundView({
         }}
         onClick={handleClick}
       />
-      <VenueChip venue={venue} />
+      <div className="pointer-events-none absolute left-2 top-2 z-10 flex flex-col gap-1">
+        <VenueChip venue={venue} />
+        <TeamLegend home={home} away={away} homeNode={homeNodeColors} awayNode={awayNodeColors} />
+      </div>
       {hovered && (
         <div
           className="pointer-events-none absolute z-10 min-w-[160px] rounded-lg border border-base-600 bg-base-900/95 px-3 py-2 text-xs shadow-lg"
@@ -1051,13 +1275,16 @@ export function GroundView({
             {hovered.side === "home" ? home.name : away.name}
             {hoveredPosition ? ` · ${hoveredPosition}` : ""}
           </div>
-          <div className="mt-1 flex items-center gap-3 tabular-nums text-slate-300">
-            <span>{hoveredMetresFromGoal.toFixed(0)}m from goal</span>
-            {hoveredFantasy !== undefined && <span>{hoveredFantasy} pts</span>}
-          </div>
+          {hoveredIsBench ? (
+            hoveredFantasy !== undefined && <div className="mt-1 tabular-nums text-slate-300">{hoveredFantasy} pts</div>
+          ) : (
+            <div className="mt-1 flex items-center gap-3 tabular-nums text-slate-300">
+              <span>{hoveredMetresFromGoal.toFixed(0)}m from goal</span>
+              {hoveredFantasy !== undefined && <span>{hoveredFantasy} pts</span>}
+            </div>
+          )}
         </div>
       )}
-      <BenchStrip home={home} away={away} homeColor={homeColor} awayColor={awayColor} />
     </div>
   );
 }

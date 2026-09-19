@@ -541,9 +541,16 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
                 onSelectPlayer={(p, s) => setSelectedPlayer({ player: p, side: s })}
                 highlightedPlayerId={hoveredPlayerId ?? selectedPlayer?.player.PlayerID ?? null}
                 onHoverPlayer={setHoveredPlayerId}
+                fantasyMetrics={fantasyMetrics}
+                ticksPerQuarter={result.ticksPerQuarter}
               />
             </div>
-            <div className="card min-h-0 !p-2 lg:h-[150px] lg:shrink-0">
+            {/* Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: was 150px; the two
+                horizontal bench-pill strips that used to sit under GroundView (`BenchStrip`, now
+                deleted — the bench moved onto the ground itself, see GroundView.tsx's own R2.4 notes)
+                are gone, and R2.4 explicitly asks for their reclaimed row to go to this panel: "the
+                play-by-play panel... grows to fill it." 150 + the brief's own ~48px estimate = 198. */}
+            <div className="card min-h-0 !p-2 lg:h-[198px] lg:shrink-0">
               <PlayByPlay events={result.events.slice(0, playback.currentIndex + 1)} />
             </div>
             <div className="card flex shrink-0 flex-wrap items-center gap-2 !py-2">
@@ -614,6 +621,29 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
 
 type RibbonScope = "mine" | "both" | "watchlist";
 
+// Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.1: the whole point of these constants
+// is that NOTHING about the ribbon's total height can vary with content ever again. 44 (title row +
+// scope-filter row, 22 each) + 22 (column headers) + 5*27 (body rows) = 201, reserved on the outer
+// container from first mount, pre-match included — R2.1's own literal arithmetic.
+const RIBBON_HEADER_HEIGHT = 44;
+const RIBBON_COLHEADER_HEIGHT = 22;
+const RIBBON_ROW_HEIGHT = 27;
+const RIBBON_ROW_COUNT = 5;
+const RIBBON_BODY_HEIGHT = RIBBON_ROW_HEIGHT * RIBBON_ROW_COUNT;
+const RIBBON_TOTAL_HEIGHT = RIBBON_HEADER_HEIGHT + RIBBON_COLHEADER_HEIGHT + RIBBON_BODY_HEIGHT;
+const RIBBON_GRID_COLUMNS = "22px 118px 52px 40px 138px 1fr 62px";
+
+interface RibbonRow {
+  player: Player;
+  side: Side;
+  rank: number;
+  /** Live: real Δ5/FP/curve/paceDelta/whatChanged from `fantasyMetrics`. Pre-match: `undefined` — the row reads off `seasonAvg` instead (below), same slot, same key, no remount when the match starts and this stops being undefined. */
+  m: PlayerMatchFantasyMetrics | undefined;
+  seasonAvg: number;
+  /** Live only: `m.delta5 > 0`. A "mover" gets full-colour Δ/what-changed; everyone else (including every pre-match row) renders at the R2.2 "dim, honest, stable" filler treatment rather than disappearing. */
+  isMover: boolean;
+}
+
 /**
  * Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section A. Replaces `YourMoversBand`/the old
  * `useFantasyHistory` wall-clock strip outright. Every number comes from `fantasyMetrics`
@@ -621,6 +651,19 @@ type RibbonScope = "mine" | "both" | "watchlist";
  * `curveGeometryFor` — no separately-sampled series. "Watchlist" has no data model anywhere in this
  * codebase yet (no "add to watchlist" affordance exists) — the scope filter is real and switchable, but
  * that option honestly renders an empty state rather than faking a list; disclosed in the vault note.
+ *
+ * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.1/R2.2 rewrite: pre-match and live used
+ * to be two structurally different returns (different header row count, a variable-height "nothing's
+ * moved"/"no season average" sentence, a `rows.length` that could be 0-5) — exactly the reflow R2.1
+ * reported. Now ONE fixed-201px shape at every tick from first mount: always both header rows, always
+ * the column-header row, always up to `RIBBON_ROW_COUNT` absolutely-positioned body slots (`top:
+ * rank*27px`, CSS-transitioned — R2.2's "animate rank changes... never re-mount the list", keyed by
+ * `player.PlayerID` so React reuses the same DOM node across a re-sort rather than tearing it down).
+ * Ranking is unified too: live mode no longer FILTERS to `delta5 > 0` (that's what made the strip 0-5
+ * rows and let a departing mover pop out of the DOM) — it sorts the WHOLE candidate pool by
+ * `(delta5 desc, fp desc)` and takes the top 5 regardless of sign, styling anyone with `delta5 <= 0` as
+ * a dim "filler" row per R2.2 rather than omitting them. A real mover fading below 0 over successive
+ * ticks now visibly dims and slides down in rank instead of vanishing.
  */
 function MomentumRibbon({
   homeTeam,
@@ -653,152 +696,137 @@ function MomentumRibbon({
   const candidateSides: Side[] = scope === "both" ? [yourSide, theirSide] : scope === "mine" ? [yourSide] : [];
   const candidates = candidateSides.flatMap((side) => onGroundPlayers(teamFor(side)).map((player) => ({ player, side })));
 
-  if (!matchStarted) {
-    // Pre-match: "PROJECTED OUTPUT" by season average — never a strip of zeroes.
-    const projected = candidates
-      .map(({ player, side }) => ({ player, side, seasonAvg: seasonAvgFpOf(player.PlayerID) }))
-      .sort((a, b) => b.seasonAvg - a.seasonAvg)
-      .slice(0, 5);
-    return (
-      <div className="shrink-0 overflow-hidden rounded-card border" style={{ background: FANTASY_COLOR.headerBg, borderColor: FANTASY_COLOR.hairline }}>
-        <div
-          className="flex items-center px-2 text-[9px] font-semibold uppercase tracking-[0.07em]"
-          style={{ height: 22, color: FANTASY_COLOR.inkLabel, background: FANTASY_COLOR.columnHeaderBg }}
-        >
-          Projected output
-        </div>
-        {projected.length === 0 ? (
-          <div className="flex items-center px-3 text-xs" style={{ height: 27 * 2, color: FANTASY_COLOR.inkTertiary }}>
-            No season average data yet.
-          </div>
-        ) : (
-          projected.map(({ player, side, seasonAvg }, i) => (
-            <button
-              key={player.PlayerID}
-              onClick={() => onSelectPlayer(player, side)}
-              className="flex w-full items-center gap-2 px-2 text-left"
-              style={{ height: 27, background: i % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg, borderTop: `1px solid ${FANTASY_COLOR.hairline}` }}
-            >
-              <span className="w-[22px] shrink-0 font-mono text-[11px]" style={{ color: FANTASY_COLOR.inkLabel }}>
-                {i + 1}
-              </span>
-              <span className="w-[140px] shrink-0 truncate text-[12px] font-semibold" style={{ fontFamily: "Barlow, sans-serif", color: FANTASY_COLOR.inkPrimary }}>
-                {player.lname} <span style={{ color: FANTASY_COLOR.inkLabel }}>{teamFor(side).positions?.get(player.PlayerID) ?? ""}</span>
-              </span>
-              <span className="ml-auto font-mono text-[13px] tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
-                {seasonAvg.toFixed(1)} avg
-              </span>
-            </button>
-          ))
-        )}
-      </div>
-    );
-  }
-
   const windowTicks = ribbonWindowTicks(ticksPerQuarter);
-  const rows = candidates
-    .map(({ player, side }) => ({ player, side, m: fantasyMetrics.get(player.PlayerID) }))
-    .filter((r): r is { player: Player; side: Side; m: PlayerMatchFantasyMetrics } => !!r.m && r.m.delta5 > 0 && r.m.whatChanged !== "")
-    .sort((a, b) => b.m.delta5 - a.m.delta5 || b.m.fp - a.m.fp)
-    .slice(0, 5);
+  const windowMinutes = Math.round((windowTicks * 30) / ticksPerQuarter);
+
+  const rows: RibbonRow[] = (
+    matchStarted
+      ? candidates
+          .map(({ player, side }) => ({ player, side, m: fantasyMetrics.get(player.PlayerID) }))
+          .filter((r): r is { player: Player; side: Side; m: PlayerMatchFantasyMetrics } => !!r.m)
+          .sort((a, b) => b.m.delta5 - a.m.delta5 || b.m.fp - a.m.fp)
+          .slice(0, RIBBON_ROW_COUNT)
+          .map((r, i) => ({ player: r.player, side: r.side, rank: i, m: r.m, seasonAvg: seasonAvgFpOf(r.player.PlayerID), isMover: r.m.delta5 > 0 }))
+      : candidates
+          .map(({ player, side }) => ({ player, side, seasonAvg: seasonAvgFpOf(player.PlayerID) }))
+          .sort((a, b) => b.seasonAvg - a.seasonAvg)
+          .slice(0, RIBBON_ROW_COUNT)
+          .map((r, i) => ({ player: r.player, side: r.side, rank: i, m: undefined, seasonAvg: r.seasonAvg, isMover: false }))
+  ) as RibbonRow[];
 
   return (
-    <div className="shrink-0 overflow-hidden rounded-card border" style={{ background: FANTASY_COLOR.headerBg, borderColor: FANTASY_COLOR.hairline }}>
-      <div className="flex items-center justify-between px-2" style={{ height: 22, background: FANTASY_COLOR.columnHeaderBg }}>
-        <span className="text-[9px] font-semibold uppercase tracking-[0.07em]" style={{ color: FANTASY_COLOR.inkLabel }}>
-          Momentum · last {Math.round((windowTicks * 30) / ticksPerQuarter)} min
-        </span>
-        <div className="flex gap-1">
-          {([
-            ["mine", "My 22"],
-            ["both", "Both teams"],
-            ["watchlist", "Watchlist"],
-          ] as [RibbonScope, string][]).map(([value, label]) => (
-            <button
-              key={value}
-              onClick={() => setScope(value)}
-              className="rounded px-1.5 text-[9px] font-medium uppercase tracking-wide"
-              style={{
-                color: scope === value ? FANTASY_COLOR.inkPrimary : FANTASY_COLOR.inkLabel,
-                background: scope === value ? "rgba(124,92,240,0.25)" : "transparent",
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+    <div className="shrink-0 overflow-hidden rounded-card border" style={{ height: RIBBON_TOTAL_HEIGHT, background: FANTASY_COLOR.headerBg, borderColor: FANTASY_COLOR.hairline }}>
+      <div className="flex items-center px-2 text-[9px] font-semibold uppercase tracking-[0.07em]" style={{ height: RIBBON_COLHEADER_HEIGHT, color: FANTASY_COLOR.inkLabel }}>
+        {matchStarted ? `Momentum · last ${windowMinutes} min` : "Projected output"}
+      </div>
+      <div className="flex items-center gap-1 px-2" style={{ height: RIBBON_COLHEADER_HEIGHT, background: FANTASY_COLOR.columnHeaderBg }}>
+        {([
+          ["mine", "My 22"],
+          ["both", "Both teams"],
+          ["watchlist", "Watchlist"],
+        ] as [RibbonScope, string][]).map(([value, label]) => (
+          <button
+            key={value}
+            onClick={() => setScope(value)}
+            className="rounded px-1.5 text-[9px] font-medium uppercase tracking-wide"
+            style={{
+              color: scope === value ? FANTASY_COLOR.inkPrimary : FANTASY_COLOR.inkLabel,
+              background: scope === value ? "rgba(124,92,240,0.25)" : "transparent",
+            }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
       <div
         className="grid items-center px-2 text-[9px] font-semibold uppercase tracking-[0.07em]"
-        style={{ height: 22, gridTemplateColumns: "22px 118px 52px 40px 138px 1fr 62px", color: FANTASY_COLOR.inkLabel, background: FANTASY_COLOR.columnHeaderBg, gap: 6 }}
+        style={{ height: RIBBON_COLHEADER_HEIGHT, gridTemplateColumns: RIBBON_GRID_COLUMNS, color: FANTASY_COLOR.inkLabel, background: FANTASY_COLOR.columnHeaderBg, gap: 6 }}
       >
         <span />
         <span>Player</span>
         <span className="text-right">Δ 5 min</span>
         <span className="text-right">FP</span>
         <span>Curve</span>
-        <span>What changed</span>
+        <span>{matchStarted ? "What changed" : ""}</span>
         <span className="text-right">Proj</span>
       </div>
-      {rows.length === 0 ? (
-        <div className="flex items-center px-3 text-xs" style={{ height: 27, color: FANTASY_COLOR.inkTertiary }}>
-          Nothing's moved in the last {Math.round((windowTicks * 30) / ticksPerQuarter)} minutes.
-        </div>
-      ) : (
-        rows.map(({ player, side, m }, i) => {
-          const geometry = curveGeometryFor(events, player.PlayerID, ticksPerQuarter);
+      <div className="relative" style={{ height: RIBBON_BODY_HEIGHT }}>
+        {rows.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center px-3 text-center text-xs" style={{ color: FANTASY_COLOR.inkTertiary }}>
+            {scope === "watchlist" ? "Nothing on your watchlist yet — no add-to-watchlist screen exists yet." : "No players in this scope."}
+          </div>
+        )}
+        {rows.map(({ player, side, rank, m, seasonAvg, isMover }) => {
+          const geometry = curveGeometryFor(matchStarted ? events : [], player.PlayerID, ticksPerQuarter);
           const isHovered = hoveredPlayerId === player.PlayerID;
+          const dim = !matchStarted || !isMover;
+          const numberInk = dim ? FANTASY_COLOR.inkLabel : FANTASY_COLOR.inkTertiary;
           return (
             <button
               key={player.PlayerID}
               onClick={() => onSelectPlayer(player, side)}
               onMouseEnter={() => onHoverPlayer(player.PlayerID)}
               onMouseLeave={() => onHoverPlayer(null)}
-              className="grid w-full items-center px-2 text-left"
+              className="absolute left-0 right-0 grid w-full items-center px-2 text-left"
               style={{
-                height: 27,
-                gridTemplateColumns: "22px 118px 52px 40px 138px 1fr 62px",
+                top: rank * RIBBON_ROW_HEIGHT,
+                height: RIBBON_ROW_HEIGHT,
+                gridTemplateColumns: RIBBON_GRID_COLUMNS,
                 gap: 6,
-                background: isHovered ? "rgba(124,92,240,0.12)" : i % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg,
+                background: isHovered ? "rgba(124,92,240,0.12)" : rank % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg,
                 borderTop: `1px solid ${FANTASY_COLOR.hairline}`,
+                transition: "top 180ms ease, opacity 180ms ease",
               }}
             >
               <span className="font-mono text-[11px]" style={{ color: FANTASY_COLOR.inkLabel }}>
-                {i + 1}
+                {rank + 1}
               </span>
               <span className="truncate text-[12px] font-semibold" style={{ fontFamily: "Barlow, sans-serif", color: FANTASY_COLOR.inkPrimary }}>
                 {player.lname} <span style={{ color: FANTASY_COLOR.inkLabel }}>{teamFor(side).positions?.get(player.PlayerID) ?? ""}</span>
               </span>
-              <span
-                className="text-right font-mono text-[13px] tabular-nums"
-                style={{ color: m.delta5 > 0 ? FANTASY_COLOR.gain : m.delta5 < 0 ? FANTASY_COLOR.loss : FANTASY_COLOR.inkTertiary }}
-              >
-                {m.delta5 > 0 ? "+" : ""}
-                {Math.round(m.delta5)}
-              </span>
-              <span className="text-right font-mono text-[12px] tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
-                {Math.round(m.fp)}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <FpCurveSvg geometry={geometry} />
-                <span
-                  className="font-mono text-[9.5px] tabular-nums"
-                  style={{ color: m.paceDelta > 0 ? FANTASY_COLOR.gain : m.paceDelta <= -15 ? FANTASY_COLOR.loss : FANTASY_COLOR.inkTertiary }}
-                >
-                  {m.paceDelta > 0 ? "+" : ""}
-                  {m.paceDelta}
-                </span>
-              </span>
-              <span className="truncate text-[11px]" style={{ color: FANTASY_COLOR.inkSecondary }}>
-                {m.whatChanged}
-              </span>
-              <span className="text-right font-mono text-[12px] tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
-                {Math.round(m.proj)}
-              </span>
+              {matchStarted && m ? (
+                <>
+                  <span className="text-right font-mono text-[13px] tabular-nums" style={{ color: dim ? FANTASY_COLOR.inkLabel : m.delta5 < 0 ? FANTASY_COLOR.loss : FANTASY_COLOR.gain }}>
+                    {dim ? "—" : `${m.delta5 > 0 ? "+" : ""}${Math.round(m.delta5)}`}
+                  </span>
+                  <span className="text-right font-mono text-[12px] tabular-nums" style={{ color: numberInk }}>
+                    {Math.round(m.fp)}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <FpCurveSvg geometry={geometry} />
+                    <span className="font-mono text-[9.5px] tabular-nums" style={{ color: dim ? FANTASY_COLOR.inkLabel : m.paceDelta > 0 ? FANTASY_COLOR.gain : m.paceDelta <= -15 ? FANTASY_COLOR.loss : FANTASY_COLOR.inkTertiary }}>
+                      {m.paceDelta > 0 && !dim ? "+" : ""}
+                      {dim ? "—" : m.paceDelta}
+                    </span>
+                  </span>
+                  <span className="truncate text-[11px]" style={{ color: dim ? FANTASY_COLOR.inkLabel : FANTASY_COLOR.inkSecondary }}>
+                    {m.whatChanged || "—"}
+                  </span>
+                  <span className="text-right font-mono text-[12px] tabular-nums" style={{ color: numberInk }}>
+                    {Math.round(m.proj)}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-right font-mono text-[13px] tabular-nums" style={{ color: FANTASY_COLOR.inkLabel }}>
+                    —
+                  </span>
+                  <span className="text-right font-mono text-[12px] tabular-nums" style={{ color: FANTASY_COLOR.inkLabel }}>
+                    —
+                  </span>
+                  <FpCurveSvg geometry={geometry} />
+                  <span className="truncate text-[11px]" style={{ color: FANTASY_COLOR.inkLabel }}>
+                    Season avg
+                  </span>
+                  <span className="text-right font-mono text-[12px] font-semibold tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
+                    {seasonAvg.toFixed(1)}
+                  </span>
+                </>
+              )}
             </button>
           );
-        })
-      )}
+        })}
+      </div>
     </div>
   );
 }
@@ -1044,9 +1072,28 @@ function downloadCsv(filename: string, rows: string[][]) {
 /**
  * Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section B. Replaces `LeftTeamTable` outright: the
  * rail is now THE only live board (the old "Your Movers" strip duplicated this same data — see the
- * vault note). All 22 (18 on-ground + 4 bench) per side, bench always last regardless of sort, 4
- * switchable column sets, click-to-sort with shift-click tiebreak, CSV export, cross-highlight with the
- * ground view via `hoveredPlayerId`/`onHoverPlayer`.
+ * vault note). All 23 (18 on-ground + 5 interchange, the 2026 AFL rule change — see `MatchTeam.players`'
+ * own doc comment) per side, bench always last regardless of sort, 4 switchable column sets,
+ * click-to-sort with shift-click tiebreak, CSV export, cross-highlight with the ground view via
+ * `hoveredPlayerId`/`onHoverPlayer`.
+ *
+ * Sep 2026 round 112 comment correction, round 113: this previously said "4 bench" — round 112's own
+ * verify script had already found 5 (`onGround=18, bench=5`) the same round this comment was written;
+ * the doc comment just never got updated to match. See [[Match Day Fantasy Layer Revision 2]] R2.4's
+ * own disclosure for the fuller account (also the brief's separate "22"/"26" figures, both stale echoes
+ * of the pre-round-112 22-man-squad assumption — ROADMAP's round 112 section, gap #92).
+ *
+ * R2.4 asked to "remove the INT rows from the left rail entirely... a display state on the existing
+ * row, not a re-parenting of the row." Checking `rowsFor` below against that: it already is — a rotated
+ * player's `PlayerID` never changes rows or tables, `team.positions.get(id)` already flips to the
+ * literal string `"INT"` the instant `match.ts`'s interchange swap fires (both the automatic
+ * fitness-triggered rotation and a manual Coach's Call swap — see `match.ts`'s own
+ * `performInterchangeSwap`), and `onGroundPlayers`/`benchPlayers` read the SAME live `team.onGround` Set
+ * that swap mutates, so `isBench`/sort position update on the very next render with no add/remove. The
+ * one real gap was cosmetic — "a muted INT" — fixed below (the position cell dims specifically for a
+ * bench row). The actual duplication R2.4 was flagging turned out to be cross-component: these same 5
+ * players ALSO rendered as a second, separate pill strip under the ground (`GroundView.tsx`'s old
+ * `BenchStrip`) — removed this round; see that file's own R2.4 notes.
  */
 function LiveBoard({
   team,
@@ -1211,7 +1258,7 @@ function LiveBoard({
                     borderTop: row.isBench && !rows[i - 1]?.isBench ? `1px solid ${FANTASY_COLOR.hairline}` : undefined,
                   }}
                 >
-                  <td className="py-0.5 text-left" style={{ color: FANTASY_COLOR.inkLabel }}>
+                  <td className="py-0.5 text-left" style={{ color: FANTASY_COLOR.inkLabel, opacity: row.isBench ? 0.6 : 1 }}>
                     {team.positions?.get(row.player.PlayerID) ?? "—"}
                   </td>
                   <td className="max-w-[90px] truncate py-0.5 font-semibold" title={playerFullName(row.player)} style={{ fontFamily: "Barlow, sans-serif", color: FANTASY_COLOR.inkPrimary }}>

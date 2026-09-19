@@ -1,17 +1,19 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { MatchEvent, BoxScoreLine } from "../engine/match";
-import { CONTEST_STAT_FIELDS } from "../engine/match";
-import type { ContestType } from "../engine/contestTypes";
 import { playerFullName, type Player } from "../types/player";
-import type { Position } from "../types/archetype";
-import { ZONES, ZONE_NAMES, ownZone, type Side, type Zone } from "../engine/zones";
+import type { Position, Archetype } from "../types/archetype";
+import type { Side } from "../engine/zones";
+import type { Season } from "../engine/season";
 import { fantasyPointsFor } from "../engine/ratings";
 import { playerLinesByQuarter } from "../engine/summary";
 import { seedMorale } from "../engine/morale";
 import { fitnessBand, moraleBand, NumberWithPill } from "./StatusPill";
 import { useSaveStore } from "../store/useSaveStore";
 import { useSeasonStore } from "../store/useSeasonStore";
-import { PlayerProfileContent } from "./PlayerProfileModal";
+import { PlayerProfileContent, TIER_TONE } from "./PlayerProfileModal";
+import { fpLedgerRows, fpLedgerTotal, displayPercentile, FANTASY_COLOR, type PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
+import { benchmarkPlayer } from "../engine/benchmarking";
+import { recentGameFantasyPoints, type SeasonPlayerTotals, type LeagueStat } from "../engine/seasonSummary";
 
 /**
  * Sep 2026 round 103 — [[Full-Time Review and Unified Player Drawer]]. The one shared "click a
@@ -49,45 +51,17 @@ export interface PlayerMatchDrawerProps {
   position?: Position;
   onGround?: boolean;
   fitness?: number;
+  /** Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section C. Undefined for a context with no live match state to compute these from (e.g. an archived match the caller couldn't derive them for) — the nerd layer degrades gracefully rather than requiring them. */
+  fantasyMetrics?: PlayerMatchFantasyMetrics;
+  seasonAvgFp?: number;
+  /** Season-wide raw totals (not per-game averages) — feeds "VS EVERY ARCHETYPE"'s percentile cohort. */
+  seasonTotals?: Map<number, SeasonPlayerTotals>;
   onClose: () => void;
   /** The ordered list Previous/Next walks — deliberately caller-supplied rather than a universal ordering this component invents, since "next" means something different from the Player Stats table than it does from the live cockpit's own fantasy-points sort. */
   roster: { player: Player; side: Side }[];
   /** Same callback shape every existing `onSelectPlayer` call site already uses — Previous/Next just calls this again with the adjacent roster entry. */
   onSelect: (player: Player, side: Side) => void;
 }
-
-/** Every `ContestType` `CONTEST_STAT_FIELDS` knows about, in roughly the order a coach thinks about them — carried over unchanged from the old `LiveMatch.tsx`-private `CONTEST_STAT_DISPLAY`. */
-const CONTEST_STAT_DISPLAY: { type: ContestType; label: string }[] = [
-  { type: "markContested", label: "Contested Marking" },
-  { type: "markLead", label: "Marking on a Lead" },
-  { type: "groundBall", label: "Hard Ball Gets" },
-  { type: "tackle", label: "Tackle vs Evasion" },
-  { type: "clearance", label: "Clearances" },
-  { type: "ruck", label: "Ruck Contests" },
-];
-
-const POSSESSION_STATS = new Set<keyof BoxScoreLine>(["disposals", "marks", "clearances"]);
-const CONTEST_ONLY_STATS = new Set<keyof BoxScoreLine>(["tackles", "hitouts"]);
-
-/** Buckets every event where any of `statSet` fired for `player` into *their own* attacking-direction zone — carried over unchanged from the old `PlayerMatchStatsModal`. */
-function zoneCountsFor(player: Player, side: Side, events: MatchEvent[], statSet: Set<keyof BoxScoreLine>): Partial<Record<Zone, number>> {
-  const counts: Partial<Record<Zone, number>> = {};
-  for (const ev of events) {
-    const matched = ev.statDeltas.some((d) => d.playerId === player.PlayerID && statSet.has(d.stat));
-    if (!matched) continue;
-    const z = ownZone(side, ev.zone);
-    counts[z] = (counts[z] ?? 0) + 1;
-  }
-  return counts;
-}
-
-/** The classic AFL "eye test" line — matches the D/M/T/G convention `FullTimeResult.tsx`'s own Best on Ground block already used before this round's rebuild. */
-const FOUR_TILES: { key: keyof BoxScoreLine; label: string }[] = [
-  { key: "disposals", label: "Disposals" },
-  { key: "marks", label: "Marks" },
-  { key: "tackles", label: "Tackles" },
-  { key: "goals", label: "Goals" },
-];
 
 /** Rows for the fuller "By quarter" tab table — deliberately excludes AussieFootySim Rating: `ratings.ts`'s own doc comment already discloses it's pool-normalised against the match's FINAL totals and reads as nonsense mid-match, which applies just as much to one isolated quarter. */
 const QUARTER_TABLE_ROWS: { key: keyof BoxScoreLine; label: string }[] = [
@@ -100,7 +74,25 @@ const QUARTER_TABLE_ROWS: { key: keyof BoxScoreLine; label: string }[] = [
   { key: "goals", label: "G" },
 ];
 
-export function PlayerMatchDrawer({ player, side, line, events, position, onGround, fitness, onClose, roster, onSelect }: PlayerMatchDrawerProps) {
+export function PlayerMatchDrawer({
+  player,
+  // Sep 2026 round 112: `side` is still a real, caller-supplied part of `PlayerMatchDrawerProps` (every
+  // existing call site passes it, and `roster`/`onSelect` are typed around it) — just no longer read
+  // inside this function's own body now that `MatchStatsTab` derives everything from `fantasyMetrics`
+  // instead of re-deriving zone breakdowns from `side`. Left out of the destructuring (not renamed to
+  // `_side`) since that's the plain way to accept-but-not-bind one field of a wider prop type.
+  line,
+  events,
+  position,
+  onGround,
+  fitness,
+  fantasyMetrics,
+  seasonAvgFp,
+  seasonTotals,
+  onClose,
+  roster,
+  onSelect,
+}: PlayerMatchDrawerProps) {
   const [tab, setTab] = useState<DrawerTab>("match");
 
   const idx = roster.findIndex((r) => r.player.PlayerID === player.PlayerID);
@@ -170,7 +162,17 @@ export function PlayerMatchDrawer({ player, side, line, events, position, onGrou
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {tab === "match" && <MatchStatsTab player={player} side={side} line={line} events={events} />}
+          {tab === "match" && (
+            <MatchStatsTab
+              player={player}
+              line={line}
+              fantasyMetrics={fantasyMetrics}
+              seasonAvgFp={seasonAvgFp}
+              seasonTotals={seasonTotals}
+              fitness={fitness}
+              season={season}
+            />
+          )}
           {tab === "quarter" && <ByQuarterTab player={player} events={events} />}
           {tab === "career" && (
             <PlayerProfileContent player={player} seasonArchives={seasonArchives} season={season} year={year} clubHistory={clubHistory} />
@@ -198,122 +200,258 @@ export function PlayerMatchDrawer({ player, side, line, events, position, onGrou
   );
 }
 
-function MatchStatsTab({ player, side, line, events }: { player: Player; side: Side; line: BoxScoreLine | undefined; events: MatchEvent[] }) {
-  const possessionZoneCounts = zoneCountsFor(player, side, events, POSSESSION_STATS);
-  const contestOnlyZoneCounts = zoneCountsFor(player, side, events, CONTEST_ONLY_STATS);
-  const maxPossessionZoneCount = Math.max(1, ...ZONES.map((z) => possessionZoneCounts[z] ?? 0));
-  const maxContestOnlyZoneCount = Math.max(1, ...ZONES.map((z) => contestOnlyZoneCounts[z] ?? 0));
-  const hasContestOnlyActivity = ZONES.some((z) => (contestOnlyZoneCounts[z] ?? 0) > 0);
-  const quarterLines = playerLinesByQuarter(events, [player.PlayerID])[player.PlayerID] ?? [];
-
+/**
+ * Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section C. Replaces the old zone-heatmap/contest-
+ * win-rate body outright (that view is retired, not hidden — see the vault note's own scope decision).
+ * Every number here comes from `fantasyMetrics` (the CALLER's `computeFantasyMetrics` call, one pass
+ * over the real event log — see `fantasyEngine.ts`) plus the season/box-score data already threaded
+ * through the drawer — this component does no derivation of its own. `fantasyMetrics`/`seasonAvgFp`/
+ * `seasonTotals` are each optional so a caller with no live match state to compute them from still
+ * gets an honestly degraded view (dashes and "not enough data" instead of a crash or fabricated zero).
+ * Uses the same literal `FANTASY_COLOR` palette as the ribbon/board, not the drawer's own `base-900`
+ * theme — a deliberate, disclosed style fork scoped to just this tab body (tabs bar/Previous/Next stay
+ * on the app's normal theme, per the brief's own "keep those untouched").
+ */
+function MatchStatsTab({
+  player,
+  line,
+  fantasyMetrics,
+  seasonAvgFp,
+  seasonTotals,
+  fitness,
+  season,
+}: {
+  player: Player;
+  line: BoxScoreLine | undefined;
+  fantasyMetrics?: PlayerMatchFantasyMetrics;
+  seasonAvgFp?: number;
+  seasonTotals?: Map<number, SeasonPlayerTotals>;
+  fitness?: number;
+  season: Season | null;
+}) {
   return (
     <div className="space-y-4">
-      <div>
-        <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">This Match</div>
-        <div className="grid grid-cols-4 gap-2 text-center">
-          {FOUR_TILES.map(({ key, label }) => (
-            <div key={key} className="rounded-lg bg-base-900 py-2">
-              <div className="text-lg font-bold tabular-nums text-slate-100">{line?.[key] ?? 0}</div>
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <HeaderTiles fantasyMetrics={fantasyMetrics} seasonAvgFp={seasonAvgFp} />
+      <FpLedgerSection line={line} />
+      <NerdSection title="Role this match">
+        <RoleThisMatch fantasyMetrics={fantasyMetrics} fitness={fitness} />
+      </NerdSection>
+      <NerdSection title="Vs every archetype">
+        <VsEveryArchetype player={player} seasonTotals={seasonTotals} />
+      </NerdSection>
+      <NerdSection title="Last 5 games">
+        <Last5Games player={player} season={season} />
+      </NerdSection>
+    </div>
+  );
+}
+
+function NerdSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: FANTASY_COLOR.inkLabel }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function HeaderTiles({ fantasyMetrics, seasonAvgFp }: { fantasyMetrics?: PlayerMatchFantasyMetrics; seasonAvgFp?: number }) {
+  const proj = fantasyMetrics?.proj;
+  const projFloor = fantasyMetrics?.projFloor;
+  const projCeiling = fantasyMetrics?.projCeiling;
+  return (
+    <div className="grid grid-cols-4 gap-2 text-center">
+      <StatTile label="Live FP" value={Math.round(fantasyMetrics?.fp ?? 0).toString()} />
+      <StatTile
+        label="Proj"
+        value={proj !== undefined ? Math.round(proj).toString() : "—"}
+        sub={projFloor !== undefined && projCeiling !== undefined ? `${Math.round(projFloor)}–${Math.round(projCeiling)}` : undefined}
+      />
+      <StatTile label="Season avg" value={seasonAvgFp !== undefined ? Math.round(seasonAvgFp).toString() : "—"} />
+      <StatTile label="TOG" value={fantasyMetrics ? `${Math.round(fantasyMetrics.tog)}%` : "—"} />
+    </div>
+  );
+}
+
+function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-lg py-2" style={{ background: FANTASY_COLOR.rowBg, border: `1px solid ${FANTASY_COLOR.hairline}` }}>
+      <div className="font-mono text-lg font-bold tabular-nums" style={{ color: FANTASY_COLOR.inkPrimary }}>
+        {value}
+      </div>
+      {sub && (
+        <div className="font-mono text-[10px] tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
+          {sub}
+        </div>
+      )}
+      <div className="text-[10px] uppercase tracking-wide" style={{ color: FANTASY_COLOR.inkLabel }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+/** One row per scoring stat, in the brief's own weight-table order — `ledgerTotal === fantasyPointsFor(line)` holds by construction (both read `FANTASY_POINT_WEIGHTS`), see `fpLedgerRows`/`fpLedgerTotal`'s own doc comments; `verify_round112_scratch.ts` asserts it as a unit test rather than this component re-asserting it at render time. */
+function FpLedgerSection({ line }: { line: BoxScoreLine | undefined }) {
+  const rows = fpLedgerRows(line);
+  const total = fpLedgerTotal(line);
+  const maxAbsPoints = Math.max(1, ...rows.map((r) => Math.abs(r.points)));
+  const gridCols = "76px 26px 34px 1fr 40px";
+  return (
+    <div className="rounded-lg p-3" style={{ background: FANTASY_COLOR.rowBg, border: `1px solid ${FANTASY_COLOR.hairline}` }}>
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: FANTASY_COLOR.inkLabel }}>
+        FP ledger
+      </div>
+      <div className="space-y-1">
+        {rows.map((r) => {
+          const isZero = r.count === 0;
+          const barPct = (Math.abs(r.points) / maxAbsPoints) * 100;
+          return (
+            <div key={r.stat} className="grid items-center gap-2 text-xs" style={{ gridTemplateColumns: gridCols, opacity: isZero ? 0.4 : 1 }}>
+              <span style={{ color: FANTASY_COLOR.inkSecondary, fontFamily: "Barlow, sans-serif" }}>{r.label}</span>
+              <span className="text-right font-mono tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
+                {r.count}
+              </span>
+              <span className="text-right font-mono tabular-nums" style={{ color: FANTASY_COLOR.inkLabel }}>
+                ×{r.weight}
+              </span>
+              <span className="h-1.5 overflow-hidden rounded-full" style={{ background: FANTASY_COLOR.columnHeaderBg }}>
+                <span
+                  className="block h-full rounded-full"
+                  style={{ width: `${barPct}%`, background: r.points < 0 ? FANTASY_COLOR.loss : FANTASY_COLOR.gain }}
+                />
+              </span>
+              <span className="text-right font-mono tabular-nums font-semibold" style={{ color: FANTASY_COLOR.inkPrimary }}>
+                {r.points}
+              </span>
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
-
-      <div>
-        <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Contest Win Rates</div>
-        <div className="space-y-2">
-          {CONTEST_STAT_DISPLAY.map(({ type, label }) => {
-            const fields = CONTEST_STAT_FIELDS[type];
-            const attempts = line?.[fields.attempts] ?? 0;
-            const wins = line?.[fields.wins] ?? 0;
-            const pct = attempts > 0 ? (wins / attempts) * 100 : 0;
-            return (
-              <div key={type}>
-                <div className="mb-0.5 flex items-center justify-between text-xs">
-                  <span className="text-slate-400">{label}</span>
-                  <span className="tabular-nums">
-                    <span className={`font-semibold ${pct >= 65 ? "text-accent-light" : "text-slate-200"}`}>
-                      {attempts > 0 ? `${Math.round(pct)}%` : "—"}
-                    </span>{" "}
-                    <span className="text-slate-500">
-                      ({wins}/{attempts})
-                    </span>
-                  </span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-base-700">
-                  <div className={`h-full rounded-full ${pct >= 65 ? "bg-good" : "bg-primary"}`} style={{ width: `${pct}%` }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="mt-1.5 text-[11px] text-slate-500">Win rate for each contest type this player has actually contested so far this match.</div>
+      <div className="mt-2 grid items-center gap-2 pt-2 text-xs font-semibold" style={{ gridTemplateColumns: gridCols, borderTop: `1px solid ${FANTASY_COLOR.hairline}` }}>
+        <span style={{ color: FANTASY_COLOR.inkPrimary, fontFamily: "Barlow, sans-serif" }}>Total</span>
+        <span />
+        <span />
+        <span />
+        <span className="text-right font-mono tabular-nums" style={{ color: FANTASY_COLOR.accentLit }}>
+          {Math.round(total)}
+        </span>
       </div>
+    </div>
+  );
+}
 
-      <div>
-        <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Where They're Winning the Ball</div>
-        <div className="space-y-1.5">
-          {ZONES.map((z) => {
-            const count = possessionZoneCounts[z] ?? 0;
-            const pct = (count / maxPossessionZoneCount) * 100;
-            return (
-              <div key={z}>
-                <div className="mb-0.5 flex items-center justify-between text-xs">
-                  <span className="text-slate-400">{ZONE_NAMES[z]}</span>
-                  <span className="tabular-nums font-semibold">{count}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-base-700">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="mt-1.5 text-[11px] text-slate-500">
-          Genuine possessions only (disposals, marks, clearances), in {player.Team}'s own attacking direction.
-        </div>
+function RoleThisMatch({ fantasyMetrics, fitness }: { fantasyMetrics?: PlayerMatchFantasyMetrics; fitness?: number }) {
+  const cbaText = fantasyMetrics && fantasyMetrics.cbaTotal > 0 ? `${fantasyMetrics.cbaAttended}/${fantasyMetrics.cbaTotal} · ${Math.round(fantasyMetrics.cba)}%` : "—";
+  // Amber/red thresholds (60%/35%) are this section's own, deliberately NOT `StatusPill.tsx`'s
+  // `fitnessBand` bands (90/75/55) — see the vault note's own disclosure. Reuses only the palette's
+  // existing `goal`/`loss` hex for amber/red rather than inventing new colours.
+  const fitnessColor = fitness === undefined ? FANTASY_COLOR.inkPrimary : fitness < 35 ? FANTASY_COLOR.loss : fitness < 60 ? FANTASY_COLOR.goal : FANTASY_COLOR.inkPrimary;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <RoleTile label="Centre bounce attendance" value={cbaText} title="Share of centre bounces this player was inside the centre square for." />
+      <RoleTile
+        label="Kick-ins taken"
+        value={String(fantasyMetrics?.kickIns ?? 0)}
+        title="Estimated from the first player involved right after an opposition shot — a heuristic, not a directly tracked engine stat."
+      />
+      <RoleTile label="Longest unbroken stint" value={fantasyMetrics ? `${Math.round(fantasyMetrics.longestStintMinutes)} min` : "—"} />
+      <RoleTile label="Fitness now" value={fitness !== undefined ? `${Math.round(fitness)}%` : "—"} valueColor={fitnessColor} />
+    </div>
+  );
+}
+
+function RoleTile({ label, value, valueColor, title }: { label: string; value: string; valueColor?: string; title?: string }) {
+  return (
+    <div className="rounded-lg p-2.5" style={{ background: FANTASY_COLOR.rowBg, border: `1px solid ${FANTASY_COLOR.hairline}` }} title={title}>
+      <div className="text-[10px] uppercase tracking-wide" style={{ color: FANTASY_COLOR.inkLabel }}>
+        {label}
       </div>
+      <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums" style={{ color: valueColor ?? FANTASY_COLOR.inkPrimary }}>
+        {value}
+      </div>
+    </div>
+  );
+}
 
-      {hasContestOnlyActivity && (
-        <div>
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Where They're Involved (Tackles &amp; Hitouts)</div>
-          <div className="space-y-1.5">
-            {ZONES.map((z) => {
-              const count = contestOnlyZoneCounts[z] ?? 0;
-              const pct = (count / maxContestOnlyZoneCount) * 100;
-              return (
-                <div key={z}>
-                  <div className="mb-0.5 flex items-center justify-between text-xs">
-                    <span className="text-slate-400">{ZONE_NAMES[z]}</span>
-                    <span className="tabular-nums font-semibold">{count}</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-base-700">
-                    <div className="h-full rounded-full bg-slate-500" style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
+/** The brief's own worked example ("Disposals 24.3 82nd pct") narrowed to the 3 stats it actually names — deliberately not `PlayerProfileModal.tsx`'s own wider `KEY_STATS` (that tab's Career Profile benchmarking is a different, broader view one column over in the same drawer). */
+const ARCHETYPE_PERCENTILE_STATS: { stat: LeagueStat; label: string }[] = [
+  { stat: "disposals", label: "Disposals" },
+  { stat: "clearances", label: "Clearances" },
+  { stat: "fantasyPoints", label: "Fantasy points" },
+];
+
+function VsEveryArchetype({ player, seasonTotals }: { player: Player; seasonTotals?: Map<number, SeasonPlayerTotals> }) {
+  const archetype = player.archetype as Archetype;
+  return (
+    <div className="space-y-2">
+      {ARCHETYPE_PERCENTILE_STATS.map(({ stat, label }) => {
+        const result = seasonTotals ? benchmarkPlayer(player.PlayerID, stat, seasonTotals, archetype) : null;
+        if (!result) {
+          return (
+            <div key={stat} className="text-xs" style={{ color: FANTASY_COLOR.inkLabel }}>
+              {label}: not enough same-archetype company yet this season.
+            </div>
+          );
+        }
+        const pct = displayPercentile(result.rank, result.cohortSize);
+        return (
+          <div key={stat}>
+            <div className="mb-0.5 flex items-center justify-between text-xs">
+              <span style={{ color: FANTASY_COLOR.inkSecondary }}>{label}</span>
+              <span className="font-mono tabular-nums">
+                <span className="font-semibold" style={{ color: FANTASY_COLOR.inkPrimary }}>
+                  {result.average.toFixed(1)}
+                </span>{" "}
+                <span className={TIER_TONE[result.tier]}>
+                  {pct}th pct · {result.tier}
+                </span>
+              </span>
+            </div>
+            <div className="relative h-1.5 overflow-hidden rounded-full" style={{ background: FANTASY_COLOR.columnHeaderBg }}>
+              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: FANTASY_COLOR.accentLit }} />
+              <div className="absolute top-0 h-full w-px" style={{ left: "50%", background: "rgba(255,255,255,.25)" }} title="50th percentile" />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })}
+    </div>
+  );
+}
 
-      {quarterLines.length > 0 && (
-        <div>
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Quarter by Quarter</div>
-          <div className="grid grid-cols-4 gap-1.5">
-            {quarterLines.map((q) => (
-              <div key={q.quarter} className="rounded-lg bg-base-900 p-1.5 text-center">
-                <div className="text-[10px] uppercase tracking-wide text-slate-500">Q{q.quarter}</div>
-                <div className="mt-0.5 text-sm font-semibold tabular-nums text-slate-200">{q.line.disposals}d</div>
-                <div className="text-[10px] tabular-nums text-slate-400">
-                  {q.line.goals}g &middot; {Math.round(q.fantasyPoints)}fp
-                </div>
+function Last5Games({ player, season }: { player: Player; season: Season | null }) {
+  const games = season ? recentGameFantasyPoints(season, player.PlayerID, 5) : [];
+  if (games.length === 0) {
+    return (
+      <div className="text-xs" style={{ color: FANTASY_COLOR.inkLabel }}>
+        No completed games recorded yet this season.
+      </div>
+    );
+  }
+  const max = Math.max(...games);
+  const min = Math.min(...games);
+  const last3 = games.slice(-3);
+  const rolling3 = last3.reduce((sum, v) => sum + v, 0) / last3.length;
+  const tons = games.filter((v) => v >= 100).length;
+  return (
+    <div>
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${games.length}, 1fr)` }}>
+        {games.map((fp, i) => {
+          const brightness = max > 0 ? 0.4 + 0.6 * Math.max(0, fp / max) : 0.4;
+          return (
+            <div key={i} className="rounded-lg py-2 text-center" style={{ background: FANTASY_COLOR.rowBg, border: `1px solid ${FANTASY_COLOR.hairline}` }}>
+              <div className="font-mono text-sm font-bold tabular-nums" style={{ color: FANTASY_COLOR.inkPrimary, opacity: brightness }}>
+                {Math.round(fp)}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-1.5 text-[11px]" style={{ color: FANTASY_COLOR.inkTertiary }}>
+        3-game rolling {rolling3.toFixed(1)} · ceiling {Math.round(max)} · floor {Math.round(min)} · {tons} ton{tons === 1 ? "" : "s"} from {games.length}
+      </div>
     </div>
   );
 }

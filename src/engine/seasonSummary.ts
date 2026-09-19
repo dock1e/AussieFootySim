@@ -1,7 +1,7 @@
 import type { Player } from "../types/player.ts";
 import { getPlayerById } from "../data/loadPlayers.ts";
 import type { MatchTeam } from "./team.ts";
-import { fantasyPointsFor, computeAussieFootySimRatings } from "./ratings.ts";
+import { fantasyPointsFor, computeAussieFootySimRatings, FANTASY_POINT_WEIGHTS } from "./ratings.ts";
 import { computeLadder, type LadderRow, type MatchOutcome } from "./ladder.ts";
 import { roundsForClub, type FixtureMatch } from "./fixture.ts";
 import { isRoundPlayed, type Season, type PlayedMatch } from "./season.ts";
@@ -229,7 +229,21 @@ export function realSeasonEntryToTotals(playerId: number, e: RealSeasonEntry): S
   totals.behinds = e.behinds;
   totals.shotsAtGoal = e.goals + e.behinds;
   totals.goalAssists = e.goalAssists;
-  totals.fantasyPoints = 3 * e.kicks + 2 * e.handballs + 3 * e.marks + 4 * e.tackles + 1 * e.hitouts + 1 * e.freeKicksFor - 3 * e.freeKicksAgainst + 6 * e.goals + 1 * e.behinds;
+  // Sep 2026 round 112 — [[Match Day Fantasy Layer]]: was a second, hand-retyped copy of
+  // `fantasyPointsFor`'s own nine numbers (a `RealSeasonEntry` isn't a `BoxScoreLine`, so it can't call
+  // that function directly) — now reads the same named weight table `ratings.ts` exports, so there is
+  // exactly one place these numbers are ever typed.
+  const w = FANTASY_POINT_WEIGHTS;
+  totals.fantasyPoints =
+    (w.kicks ?? 0) * e.kicks +
+    (w.handballs ?? 0) * e.handballs +
+    (w.marks ?? 0) * e.marks +
+    (w.tackles ?? 0) * e.tackles +
+    (w.hitouts ?? 0) * e.hitouts +
+    (w.freeKicksFor ?? 0) * e.freeKicksFor +
+    (w.freeKicksAgainst ?? 0) * e.freeKicksAgainst +
+    (w.goals ?? 0) * e.goals +
+    (w.behinds ?? 0) * e.behinds;
   return totals;
 }
 
@@ -316,6 +330,22 @@ export function seasonPlayerLast5Totals(season: Season): Map<number, SeasonPlaye
   const maxRound = Math.max(...season.played.map((m) => m.round));
   const recentRounds = season.played.filter((m) => m.round > maxRound - 5);
   return aggregateBoxScores(recentRounds);
+}
+
+/**
+ * Sep 2026 round 112 — [[Match Day Fantasy Layer]] drawer's "LAST 5 GAMES" strip: unlike
+ * `seasonPlayerLast5Totals` above (a single aggregate over the window), this needs one fantasy-points
+ * figure PER game so each can get its own column. Filters to matches this player actually has a
+ * box-score line in (an omitted-from-selection round leaves no trace, same as every other reader of
+ * `result.boxScore`), oldest to newest so the most recent game reads as the rightmost column.
+ */
+export function recentGameFantasyPoints(season: Season, playerId: number, count: number): number[] {
+  return season.played
+    .filter((m) => !!m.result.boxScore[playerId])
+    .sort((a, b) => b.round - a.round)
+    .slice(0, count)
+    .reverse()
+    .map((m) => fantasyPointsFor(m.result.boxScore[playerId]));
 }
 
 /** Transforms any totals map (season or all-time) into its own per-game average — divides every stat by that entry's own `gamesPlayed`, 0 if they haven't played at all (defensive only; an entry only ever exists because it has at least one game). Reused for both "Average (Season)" and "Average (All Time)" — the two view modes only differ in which totals map they start from, not in how the average itself is computed. */

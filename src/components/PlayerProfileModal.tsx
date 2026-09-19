@@ -154,7 +154,8 @@ const TABLE_COLUMNS: { key: LeagueStat; label: string }[] = [
   { key: "hitouts", label: "HO" },
 ];
 
-const TIER_TONE: Record<BenchmarkTier, string> = {
+/** Sep 2026 round 112 — exported so `PlayerMatchDrawer.tsx`'s "Vs every archetype" (Match Stats tab) colours its own tier labels identically to this same drawer's "Career profile" tab, one column over — same one-source-of-truth reasoning as `PlayerProfileContent`'s own export just below. */
+export const TIER_TONE: Record<BenchmarkTier, string> = {
   "ELITE": "text-amber-400",
   "ABOVE AVG.": "text-emerald-400",
   "AVERAGE": "text-slate-300",

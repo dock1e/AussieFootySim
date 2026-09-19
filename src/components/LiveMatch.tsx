@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CLUBS, clubByName } from "../types/club";
 import { playerFullName, type Player } from "../types/player";
 import { getPlayersByClub } from "../data/loadPlayers";
-import { onGroundPlayers, type MatchTeam } from "../engine/team";
+import { onGroundPlayers, benchPlayers, type MatchTeam } from "../engine/team";
 import { autoFillLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
 import {
   simulateMatch,
@@ -19,6 +19,7 @@ import {
   type MatchResult,
   type MatchInProgress,
   type BoxScoreLine,
+  type MatchEvent,
 } from "../engine/match";
 import type { LineCoachFocus } from "../engine/lineCoaching";
 import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
@@ -27,12 +28,21 @@ import type { Side } from "../engine/zones";
 import { mulberry32 } from "../engine/rng";
 import { fantasyPointsFor } from "../engine/ratings";
 import { quarterlyPoints, type QuarterPoints } from "../engine/summary";
+import { seasonPlayerTotals, toAverageMap } from "../engine/seasonSummary";
+import {
+  computeFantasyMetrics,
+  curveGeometryFor,
+  ribbonWindowTicks,
+  FANTASY_COLOR,
+  type PlayerMatchFantasyMetrics,
+} from "../engine/fantasyEngine";
 import { groundForMatch } from "../data/clubGrounds";
 import { DEFAULT_GAME_STYLE, type TeamPlan, type GameStyle } from "../engine/tactics";
 import { useMatchPlayback, type PlaybackSpeed, type MatchPlayback } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
 import { useSaveStore } from "../store/useSaveStore";
+import { useSeasonStore } from "../store/useSeasonStore";
 import { GroundView } from "./GroundView";
 import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
@@ -93,6 +103,10 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
    * from `homeIds`/`awayIds` again on every render.
    */
   const [selectedPlayer, setSelectedPlayer] = useState<{ player: Player; side: Side } | null>(null);
+  /** Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section B's cross-highlight: hovering a `LiveBoard`
+   * row highlights its ground node and vice versa. Lifted here (not local to either component) since
+   * both `LiveBoard` and `GroundView` are siblings in the render tree below. */
+  const [hoveredPlayerId, setHoveredPlayerId] = useState<number | null>(null);
 
   const myClub = useGameStore((s) => s.myClub);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
@@ -312,10 +326,34 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
     return () => onCockpitActiveChange?.(false);
   }, [showCockpit, onCockpitActiveChange]);
 
-  // See useFantasyHistory's own doc comment (above teamTotals/TeamStatBars,
-  // where ScoreBlock/LivePlayerStats used to be) for why this is a rolling
-  // real-time window, not a tick count.
-  const fantasyHistory = useFantasyHistory(playback.liveBoxScore, result?.seed);
+  // Sep 2026 round 112 — [[Match Day Fantasy Layer]]: replaces the old `useFantasyHistory` wall-clock
+  // ring buffer. Every ribbon/board/drawer number for this match now comes from one pass over the
+  // revealed events via `engine/fantasyEngine.ts`'s `computeFantasyMetrics` — see that module's own doc
+  // comment and the vault note for why this is match-time based rather than real-wall-clock based.
+  const season = useSeasonStore((s) => s.season);
+  // Raw totals computed once here, not separately inside `seasonAvgFpMap` and again at the drawer's own
+  // `seasonTotals` prop — `benchmarkPlayer` (the drawer's "Vs every archetype") needs the RAW map (it
+  // calls `toAverageMap` on it itself), while the ribbon/board's pace numbers want the pre-averaged one;
+  // sharing one underlying `seasonPlayerTotals(season)` scan avoids paying for that season-wide reduce
+  // twice per render on a screen that re-renders every tick.
+  const seasonTotals = useMemo(() => (season ? seasonPlayerTotals(season) : undefined), [season]);
+  const seasonAvgFpMap = useMemo(() => (seasonTotals ? toAverageMap(seasonTotals) : new Map()), [seasonTotals]);
+  const seasonAvgFpOf = (playerId: number) => seasonAvgFpMap.get(playerId)?.fantasyPoints ?? 0;
+  const revealedEvents = result ? result.events.slice(0, playback.currentIndex + 1) : [];
+  const allMatchIds = [...homeIds, ...awayIds];
+  const fantasyMetrics: Map<number, PlayerMatchFantasyMetrics> = result
+    ? computeFantasyMetrics(
+        {
+          events: revealedEvents,
+          ticksPerQuarter: result.ticksPerQuarter,
+          stadium: venue,
+          lines: playback.liveBoxScore,
+          fitnessOf: (id) => (matchInProgress ? fitnessFor(matchInProgress, homeIds.has(id) ? "home" : "away", id) : 100),
+          seasonAvgFpOf,
+        },
+        allMatchIds,
+      )
+    : new Map();
 
   if (playback.isComplete && result && quartersSimulated >= 4 && !pendingCoachsCall) {
     return <FullTimeResult result={result} homeTeam={homeTeam} awayTeam={awayTeam} onNewMatch={newMatchup} />;
@@ -401,7 +439,7 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
 
   // Sep 2026 round 103 — [[Full-Time Review and Unified Player Drawer]]'s shared drawer's own
   // Previous/Next roster: both teams combined (your side first), sorted by live fantasy points —
-  // the same ordering `LeftTeamTable`/`DangerMen` already sort by, so Prev/Next tracks the same
+  // the same ordering `LiveBoard`/`DangerMen` already sort by, so Prev/Next tracks the same
   // "who's most involved right now" read the rest of this cockpit already uses.
   const drawerRoster = [
     ...yourTeam.players.map((player) => ({ player, side: yourSide })),
@@ -427,12 +465,16 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
       />
 
       {!pendingCoachsCall && (
-        <YourMoversBand
-          team={yourTeam}
-          side={yourSide}
-          liveBoxScore={playback.liveBoxScore}
-          deltaFor={fantasyHistory.deltaFor}
-          sparklineFor={fantasyHistory.sparklineFor}
+        <MomentumRibbon
+          homeTeam={homeTeam}
+          awayTeam={awayTeam}
+          yourSide={yourSide}
+          events={revealedEvents}
+          ticksPerQuarter={result.ticksPerQuarter}
+          fantasyMetrics={fantasyMetrics}
+          seasonAvgFpOf={seasonAvgFpOf}
+          hoveredPlayerId={hoveredPlayerId}
+          onHoverPlayer={setHoveredPlayerId}
           onSelectPlayer={(p, s) => setSelectedPlayer({ player: p, side: s })}
         />
       )}
@@ -460,13 +502,18 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
           onInterchange={(outgoingId, incomingId) => handleInterchange(pendingCoachsCall.side, outgoingId, incomingId)}
         />
       ) : (
-        <div className="grid gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[392px_minmax(0,1fr)_316px]">
-          <LeftTeamTable
+        <div className="grid gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[460px_minmax(0,1fr)_316px]">
+          <LiveBoard
             team={yourTeam}
             side={yourSide}
+            otherTeam={theirTeam}
+            otherSide={theirSide}
             liveBoxScore={playback.liveBoxScore}
-            fitnessFor={matchInProgress ? (playerId) => fitnessFor(matchInProgress, yourSide, playerId) : undefined}
-            deltaFor={fantasyHistory.deltaFor}
+            fantasyMetrics={fantasyMetrics}
+            fitnessOf={(side, playerId) => (matchInProgress ? fitnessFor(matchInProgress, side, playerId) : 100)}
+            hoveredPlayerId={hoveredPlayerId}
+            selectedPlayerId={selectedPlayer?.player.PlayerID ?? null}
+            onHoverPlayer={setHoveredPlayerId}
             onSelectPlayer={(p, s) => setSelectedPlayer({ player: p, side: s })}
           />
 
@@ -492,6 +539,8 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
                 homeStyle={homeStyle}
                 awayStyle={awayStyle}
                 onSelectPlayer={(p, s) => setSelectedPlayer({ player: p, side: s })}
+                highlightedPlayerId={hoveredPlayerId ?? selectedPlayer?.player.PlayerID ?? null}
+                onHoverPlayer={setHoveredPlayerId}
               />
             </div>
             <div className="card min-h-0 !p-2 lg:h-[150px] lg:shrink-0">
@@ -533,6 +582,15 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
         </div>
       )}
 
+      {/* Sep 2026 round 112 — the drawer's own `fitness` prop below was found live while verifying the new
+          "Fitness now" nerd tile (Section C item 3): it fell back to `undefined` (tile shows "—") for an
+          AI-vs-AI match, the ONLY fitness consumer in this file that didn't — every sibling call
+          (`fitnessOf` above, `LineCoachPanel`'s `fitnessFor`, `QuarterTimeDecisionRoom`'s `fitnessOf`)
+          falls back to 100 when there's no interactive `matchInProgress` (see this file's own
+          `matchInProgress` doc comment: it "stays null for an AI-vs-AI game", which is most matches Tyler
+          watches that aren't his own club's). Pre-existing since round 103's original drawer wiring, not
+          something this round introduced — just newly, prominently exposed by round 112's own new tile.
+          Fixed to match the file's own convention rather than inventing a different fallback. */}
       {selectedPlayer && (
         <PlayerMatchDrawer
           player={selectedPlayer.player}
@@ -541,7 +599,10 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
           events={result.events.slice(0, playback.currentIndex + 1)}
           position={(selectedPlayer.side === "home" ? homeTeam : awayTeam).positions?.get(selectedPlayer.player.PlayerID)}
           onGround={(selectedPlayer.side === "home" ? homeTeam : awayTeam).onGround?.has(selectedPlayer.player.PlayerID)}
-          fitness={matchInProgress ? fitnessFor(matchInProgress, selectedPlayer.side, selectedPlayer.player.PlayerID) : undefined}
+          fitness={matchInProgress ? fitnessFor(matchInProgress, selectedPlayer.side, selectedPlayer.player.PlayerID) : 100}
+          fantasyMetrics={fantasyMetrics.get(selectedPlayer.player.PlayerID)}
+          seasonAvgFp={seasonAvgFpOf(selectedPlayer.player.PlayerID)}
+          seasonTotals={seasonTotals}
           roster={drawerRoster}
           onSelect={(p, s) => setSelectedPlayer({ player: p, side: s })}
           onClose={() => setSelectedPlayer(null)}
@@ -551,145 +612,221 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
   );
 }
 
+type RibbonScope = "mine" | "both" | "watchlist";
+
 /**
- * Sep 2026 — [[LiveMatch Cockpit Rebuild]]. Replaces the old `ScoreBlock`
- * (simple score display) and `LivePlayerStats` (a full mirrored table on
- * BOTH sides of the ground) with the cockpit's new pieces: `ScoreboardBand`,
- * `YourMoversBand`, `LeftTeamTable`, and `DangerMen`. `LivePlayerStats`'
- * own D/M/T/CLR/HO/G.B/[FIT]/SC column set and live-FP sort are the direct
- * precedent for `LeftTeamTable` below (narrower column set per Tyler's new
- * spec: Position/Name/D/M/T/G, FP with a delta, fitness as a bar) and for
- * `DangerMen` (same live-FP sort, condensed to a top-4 list rather than a
- * full mirrored table for the opposing side — see the design note's
- * judgment call #2 for why the second table is gone, not just narrower).
- *
- * No count-up/flash or sparkline precedent existed anywhere in this
- * codebase (grepped for recharts/d3/Chart.js/framer-motion/CountUp — none
- * installed, none used); `AnimatedNumber` and `Sparkline` below are small,
- * dependency-free replacements — the former a `requestAnimationFrame` tween
- * in the same idiom `GroundView.tsx` (formerly `MatchCanvas.tsx`) already
- * uses throughout for its own dot/ball animation, the latter plain inline
- * SVG bars in the same spirit
- * as `FullTimeResult.tsx`'s own hand-rolled `MarginChart` polyline.
+ * Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section A. Replaces `YourMoversBand`/the old
+ * `useFantasyHistory` wall-clock strip outright. Every number comes from `fantasyMetrics`
+ * (`engine/fantasyEngine.ts`'s `computeFantasyMetrics`, one pass over the real event log) and
+ * `curveGeometryFor` — no separately-sampled series. "Watchlist" has no data model anywhere in this
+ * codebase yet (no "add to watchlist" affordance exists) — the scope filter is real and switchable, but
+ * that option honestly renders an empty state rather than faking a list; disclosed in the vault note.
  */
-function AnimatedNumber({ value, className = "" }: { value: number; className?: string }) {
-  const [display, setDisplay] = useState(value);
-  const [flashing, setFlashing] = useState(false);
-  const prevRef = useRef(value);
+function MomentumRibbon({
+  homeTeam,
+  awayTeam,
+  yourSide,
+  events,
+  ticksPerQuarter,
+  fantasyMetrics,
+  seasonAvgFpOf,
+  hoveredPlayerId,
+  onHoverPlayer,
+  onSelectPlayer,
+}: {
+  homeTeam: MatchTeam;
+  awayTeam: MatchTeam;
+  yourSide: Side;
+  events: MatchEvent[];
+  ticksPerQuarter: number;
+  fantasyMetrics: Map<number, PlayerMatchFantasyMetrics>;
+  seasonAvgFpOf: (playerId: number) => number;
+  hoveredPlayerId: number | null;
+  onHoverPlayer: (id: number | null) => void;
+  onSelectPlayer: (player: Player, side: Side) => void;
+}) {
+  const [scope, setScope] = useState<RibbonScope>("mine");
+  const matchStarted = events.length > 0;
+  const theirSide: Side = yourSide === "home" ? "away" : "home";
+  const teamFor = (side: Side) => (side === "home" ? homeTeam : awayTeam);
 
-  useEffect(() => {
-    if (value === prevRef.current) return;
-    const from = prevRef.current;
-    const to = value;
-    prevRef.current = value;
-    setFlashing(true);
-    const DURATION_MS = 500;
-    const start = performance.now();
-    let raf = 0;
-    function step(now: number) {
-      const t = Math.min(1, (now - start) / DURATION_MS);
-      setDisplay(Math.round(from + (to - from) * t));
-      if (t < 1) raf = requestAnimationFrame(step);
-    }
-    raf = requestAnimationFrame(step);
-    const flashTimer = setTimeout(() => setFlashing(false), DURATION_MS);
-    return () => {
-      cancelAnimationFrame(raf);
-      clearTimeout(flashTimer);
-    };
-  }, [value]);
+  const candidateSides: Side[] = scope === "both" ? [yourSide, theirSide] : scope === "mine" ? [yourSide] : [];
+  const candidates = candidateSides.flatMap((side) => onGroundPlayers(teamFor(side)).map((player) => ({ player, side })));
 
-  return <span className={`tabular-nums transition-colors duration-300 ${flashing ? "text-accent" : ""} ${className}`}>{display}</span>;
-}
+  if (!matchStarted) {
+    // Pre-match: "PROJECTED OUTPUT" by season average — never a strip of zeroes.
+    const projected = candidates
+      .map(({ player, side }) => ({ player, side, seasonAvg: seasonAvgFpOf(player.PlayerID) }))
+      .sort((a, b) => b.seasonAvg - a.seasonAvg)
+      .slice(0, 5);
+    return (
+      <div className="shrink-0 overflow-hidden rounded-card border" style={{ background: FANTASY_COLOR.headerBg, borderColor: FANTASY_COLOR.hairline }}>
+        <div
+          className="flex items-center px-2 text-[9px] font-semibold uppercase tracking-[0.07em]"
+          style={{ height: 22, color: FANTASY_COLOR.inkLabel, background: FANTASY_COLOR.columnHeaderBg }}
+        >
+          Projected output
+        </div>
+        {projected.length === 0 ? (
+          <div className="flex items-center px-3 text-xs" style={{ height: 27 * 2, color: FANTASY_COLOR.inkTertiary }}>
+            No season average data yet.
+          </div>
+        ) : (
+          projected.map(({ player, side, seasonAvg }, i) => (
+            <button
+              key={player.PlayerID}
+              onClick={() => onSelectPlayer(player, side)}
+              className="flex w-full items-center gap-2 px-2 text-left"
+              style={{ height: 27, background: i % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg, borderTop: `1px solid ${FANTASY_COLOR.hairline}` }}
+            >
+              <span className="w-[22px] shrink-0 font-mono text-[11px]" style={{ color: FANTASY_COLOR.inkLabel }}>
+                {i + 1}
+              </span>
+              <span className="w-[140px] shrink-0 truncate text-[12px] font-semibold" style={{ fontFamily: "Barlow, sans-serif", color: FANTASY_COLOR.inkPrimary }}>
+                {player.lname} <span style={{ color: FANTASY_COLOR.inkLabel }}>{teamFor(side).positions?.get(player.PlayerID) ?? ""}</span>
+              </span>
+              <span className="ml-auto font-mono text-[13px] tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
+                {seasonAvg.toFixed(1)} avg
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    );
+  }
 
-/** 8-bar sparkline of recent scoring rate — see this section's own doc comment above for why this is hand-rolled SVG, not a library. */
-function Sparkline({ bars }: { bars: number[] }) {
-  const width = 64;
-  const height = 20;
-  const gap = 2;
-  const count = Math.max(1, bars.length);
-  const barWidth = (width - gap * (count - 1)) / count;
-  const max = Math.max(1, ...bars);
+  const windowTicks = ribbonWindowTicks(ticksPerQuarter);
+  const rows = candidates
+    .map(({ player, side }) => ({ player, side, m: fantasyMetrics.get(player.PlayerID) }))
+    .filter((r): r is { player: Player; side: Side; m: PlayerMatchFantasyMetrics } => !!r.m && r.m.delta5 > 0 && r.m.whatChanged !== "")
+    .sort((a, b) => b.m.delta5 - a.m.delta5 || b.m.fp - a.m.fp)
+    .slice(0, 5);
+
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-5 w-16 shrink-0" aria-hidden="true">
-      {bars.map((v, i) => {
-        const h = Math.max(1, (v / max) * height);
-        return <rect key={i} x={i * (barWidth + gap)} y={height - h} width={barWidth} height={h} rx={0.5} className="fill-primary" />;
-      })}
-    </svg>
-  );
-}
-
-/** A filled bar, not a bare number — Tyler's own ask for the new left team table. Bands match `StatusPill.tsx`'s existing `fitnessBand` (90/75/55) so this bar and that pill never disagree about what counts as fresh/flat/heavy legs. */
-function FitnessBar({ value }: { value: number }) {
-  const tone = value >= 75 ? "bg-good" : value >= 55 ? "bg-warn" : "bg-bad";
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-base-700" title={`Fitness ${Math.round(value)}`}>
-      <div className={`h-full ${tone}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+    <div className="shrink-0 overflow-hidden rounded-card border" style={{ background: FANTASY_COLOR.headerBg, borderColor: FANTASY_COLOR.hairline }}>
+      <div className="flex items-center justify-between px-2" style={{ height: 22, background: FANTASY_COLOR.columnHeaderBg }}>
+        <span className="text-[9px] font-semibold uppercase tracking-[0.07em]" style={{ color: FANTASY_COLOR.inkLabel }}>
+          Momentum · last {Math.round((windowTicks * 30) / ticksPerQuarter)} min
+        </span>
+        <div className="flex gap-1">
+          {([
+            ["mine", "My 22"],
+            ["both", "Both teams"],
+            ["watchlist", "Watchlist"],
+          ] as [RibbonScope, string][]).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => setScope(value)}
+              className="rounded px-1.5 text-[9px] font-medium uppercase tracking-wide"
+              style={{
+                color: scope === value ? FANTASY_COLOR.inkPrimary : FANTASY_COLOR.inkLabel,
+                background: scope === value ? "rgba(124,92,240,0.25)" : "transparent",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div
+        className="grid items-center px-2 text-[9px] font-semibold uppercase tracking-[0.07em]"
+        style={{ height: 22, gridTemplateColumns: "22px 118px 52px 40px 138px 1fr 62px", color: FANTASY_COLOR.inkLabel, background: FANTASY_COLOR.columnHeaderBg, gap: 6 }}
+      >
+        <span />
+        <span>Player</span>
+        <span className="text-right">Δ 5 min</span>
+        <span className="text-right">FP</span>
+        <span>Curve</span>
+        <span>What changed</span>
+        <span className="text-right">Proj</span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="flex items-center px-3 text-xs" style={{ height: 27, color: FANTASY_COLOR.inkTertiary }}>
+          Nothing's moved in the last {Math.round((windowTicks * 30) / ticksPerQuarter)} minutes.
+        </div>
+      ) : (
+        rows.map(({ player, side, m }, i) => {
+          const geometry = curveGeometryFor(events, player.PlayerID, ticksPerQuarter);
+          const isHovered = hoveredPlayerId === player.PlayerID;
+          return (
+            <button
+              key={player.PlayerID}
+              onClick={() => onSelectPlayer(player, side)}
+              onMouseEnter={() => onHoverPlayer(player.PlayerID)}
+              onMouseLeave={() => onHoverPlayer(null)}
+              className="grid w-full items-center px-2 text-left"
+              style={{
+                height: 27,
+                gridTemplateColumns: "22px 118px 52px 40px 138px 1fr 62px",
+                gap: 6,
+                background: isHovered ? "rgba(124,92,240,0.12)" : i % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg,
+                borderTop: `1px solid ${FANTASY_COLOR.hairline}`,
+              }}
+            >
+              <span className="font-mono text-[11px]" style={{ color: FANTASY_COLOR.inkLabel }}>
+                {i + 1}
+              </span>
+              <span className="truncate text-[12px] font-semibold" style={{ fontFamily: "Barlow, sans-serif", color: FANTASY_COLOR.inkPrimary }}>
+                {player.lname} <span style={{ color: FANTASY_COLOR.inkLabel }}>{teamFor(side).positions?.get(player.PlayerID) ?? ""}</span>
+              </span>
+              <span
+                className="text-right font-mono text-[13px] tabular-nums"
+                style={{ color: m.delta5 > 0 ? FANTASY_COLOR.gain : m.delta5 < 0 ? FANTASY_COLOR.loss : FANTASY_COLOR.inkTertiary }}
+              >
+                {m.delta5 > 0 ? "+" : ""}
+                {Math.round(m.delta5)}
+              </span>
+              <span className="text-right font-mono text-[12px] tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
+                {Math.round(m.fp)}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <FpCurveSvg geometry={geometry} />
+                <span
+                  className="font-mono text-[9.5px] tabular-nums"
+                  style={{ color: m.paceDelta > 0 ? FANTASY_COLOR.gain : m.paceDelta <= -15 ? FANTASY_COLOR.loss : FANTASY_COLOR.inkTertiary }}
+                >
+                  {m.paceDelta > 0 ? "+" : ""}
+                  {m.paceDelta}
+                </span>
+              </span>
+              <span className="truncate text-[11px]" style={{ color: FANTASY_COLOR.inkSecondary }}>
+                {m.whatChanged}
+              </span>
+              <span className="text-right font-mono text-[12px] tabular-nums" style={{ color: FANTASY_COLOR.inkTertiary }}>
+                {Math.round(m.proj)}
+              </span>
+            </button>
+          );
+        })
+      )}
     </div>
   );
 }
 
-const SNAPSHOT_INTERVAL_MS = 15_000;
-const ROLLING_WINDOW_SAMPLES = 20; // 20 x 15s = 5 real minutes
-
 /**
- * "Since the last look" for the Your Movers band and the left table's FP
- * delta — Sep 2026, [[LiveMatch Cockpit Rebuild]]'s design note, judgment
- * call #5: a rolling REAL-TIME (wall-clock) window, not a tick count. Ticks
- * have no fixed real-world duration (this engine has never modelled one —
- * `match.ts`'s own tick-budget doc comment discloses it as a fiction) and
- * playback speed spans a 32x range (0.5x-16x), so a tick-based window would
- * mean wildly different real "recency" depending on how fast the user is
- * watching. Sampling on a fixed real-world interval sidesteps that: "last N
- * samples" and "last N*15s of real time" are the same thing by
- * construction, and a ring buffer capped at `ROLLING_WINDOW_SAMPLES + 1`
- * naturally reads as "since kickoff" while a match is younger than 5 real
- * minutes (fewer samples exist yet) rather than showing an empty delta.
- * Resets on `matchSeed` change (`result?.seed`, not `result` itself) — the
- * exact same reset trigger `useMatchPlayback`'s own effect already uses —
- * so a "New match-up" doesn't drag the previous match's deltas along.
+ * The ribbon's FP curve — fixed 112x20 CSS px, viewBox "0 0 130 20". Deliberately hard `width`/`height`
+ * attributes (real CSS pixels, not a percentage or flex-basis) rather than a `w-full`/flex-stretched
+ * class — the brief's own warning: "an earlier attempt failed here... a cumulative line stretched wide
+ * is visually a straight line". Verified live at 1280/1440/1920px viewport widths (acceptance #3).
  */
-function useFantasyHistory(liveBoxScore: Record<number, BoxScoreLine>, matchSeed: number | null | undefined) {
-  const historyRef = useRef<Record<number, number>[]>([]);
-  const liveBoxScoreRef = useRef(liveBoxScore);
-  liveBoxScoreRef.current = liveBoxScore;
-  const [, forceRender] = useState(0);
-
-  useEffect(() => {
-    historyRef.current = [];
-  }, [matchSeed]);
-
-  useEffect(() => {
-    function sample() {
-      const fp: Record<number, number> = {};
-      for (const [idStr, line] of Object.entries(liveBoxScoreRef.current)) {
-        fp[Number(idStr)] = fantasyPointsFor(line);
-      }
-      historyRef.current = [...historyRef.current, fp].slice(-(ROLLING_WINDOW_SAMPLES + 1));
-      forceRender((n) => n + 1);
-    }
-    sample(); // an immediate first sample so a delta/sparkline exists from the first render, not just after the first interval
-    const id = setInterval(sample, SNAPSHOT_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  function deltaFor(playerId: number): number {
-    const h = historyRef.current;
-    if (h.length === 0) return 0;
-    const line = liveBoxScoreRef.current[playerId];
-    const current = line ? fantasyPointsFor(line) : 0;
-    return Math.round(current - (h[0][playerId] ?? 0));
-  }
-
-  function sparklineFor(playerId: number): number[] {
-    const h = historyRef.current;
-    const bars: number[] = [];
-    for (let i = 1; i < h.length; i++) bars.push(Math.max(0, (h[i][playerId] ?? 0) - (h[i - 1][playerId] ?? 0)));
-    return bars.slice(-8);
-  }
-
-  return { deltaFor, sparklineFor };
+function FpCurveSvg({ geometry }: { geometry: import("../engine/fantasyEngine").CurveGeometry }) {
+  const { points, recentPoints, quarterGridlinesX } = geometry;
+  const basePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ");
+  const recentPath = recentPoints.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ");
+  return (
+    <svg width={112} height={20} viewBox="0 0 130 20" style={{ display: "block", flexShrink: 0 }} aria-hidden="true">
+      {quarterGridlinesX.map((x, i) => (
+        <line key={i} x1={x} y1={0} x2={x} y2={20} stroke="#fff" strokeOpacity={i === 1 ? 0.14 : 0.07} strokeWidth={1} />
+      ))}
+      {basePath && <path d={basePath} fill="none" stroke={FANTASY_COLOR.accentLine} strokeWidth={1.4} />}
+      {recentPath && <path d={recentPath} fill="none" stroke={FANTASY_COLOR.accentSegment} strokeWidth={2} />}
+      {points
+        .filter((p) => p.isGoal)
+        .map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={1.9} fill={FANTASY_COLOR.goal} />
+        ))}
+    </svg>
+  );
 }
 
 /**
@@ -829,184 +966,281 @@ function ScoreboardBand({
   );
 }
 
-/**
- * Row 3 — "Your Movers · Last 5 Minutes." The 5 shown are ranked by recent
- * FP momentum (`deltaFor`, see `useFantasyHistory` above), not overall
- * score — `LeftTeamTable` below already covers "who's had the best match
- * overall"; this band answers "who's hot right now," which is a genuinely
- * different, complementary question. "Positional/matchup subtitle" shows
- * the player's own position + club, not a fabricated head-to-head opponent
- * — see the design note's judgment call #6: no matchup-tracking (who's
- * directly opposed to whom) exists anywhere in this engine.
- */
-function YourMoversBand({
-  team,
-  side,
-  liveBoxScore,
-  deltaFor,
-  sparklineFor,
-  onSelectPlayer,
-}: {
-  team: MatchTeam;
-  side: Side;
-  liveBoxScore: Record<number, BoxScoreLine>;
-  deltaFor: (playerId: number) => number;
-  sparklineFor: (playerId: number) => number[];
-  onSelectPlayer: (player: Player, side: Side) => void;
-}) {
-  const movers = onGroundPlayers(team)
-    .map((p) => ({ player: p, line: liveBoxScore[p.PlayerID], delta: deltaFor(p.PlayerID) }))
-    .sort((a, b) => b.delta - a.delta || (b.line ? fantasyPointsFor(b.line) : 0) - (a.line ? fantasyPointsFor(a.line) : 0))
-    .slice(0, 5);
+type ColumnSetName = "fantasy" | "disposal" | "contest" | "role";
 
-  return (
-    <div className="card shrink-0">
-      <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Your movers · last 5 minutes</div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-        {movers.map(({ player, line, delta }) => (
-          <button
-            key={player.PlayerID}
-            onClick={() => onSelectPlayer(player, side)}
-            className="flex flex-col gap-1 rounded-lg border border-base-700 bg-base-800 p-2 text-left hover:border-primary"
-            title={`Click for ${playerFullName(player)}'s match stats`}
-          >
-            <div className="flex items-center justify-between gap-1">
-              <span className="truncate text-xs font-semibold">{player.lname}</span>
-              {delta > 0 && <span className="shrink-0 rounded-full bg-good/20 px-1.5 py-0.5 text-[10px] font-semibold text-good">+{delta}</span>}
-            </div>
-            <div className="truncate text-[10px] text-slate-500">
-              {team.positions?.get(player.PlayerID) ?? "—"} · {team.name}
-            </div>
-            <div className="flex items-end justify-between gap-2">
-              <AnimatedNumber value={line ? Math.round(fantasyPointsFor(line)) : 0} className="text-[34px] font-bold leading-none" />
-              <Sparkline bars={sparklineFor(player.PlayerID)} />
-            </div>
-            <div className="grid grid-cols-4 gap-1 border-t border-base-700 pt-1 text-center text-[9px] tabular-nums text-slate-400">
-              <span>
-                {line?.disposals ?? 0}
-                <div className="text-slate-600">DISP</div>
-              </span>
-              <span>
-                {line?.marks ?? 0}
-                <div className="text-slate-600">MARKS</div>
-              </span>
-              <span>
-                {line?.contestedPoss ?? 0}
-                <div className="text-slate-600">CONT W</div>
-              </span>
-              <span>
-                {line?.goals ?? 0}
-                <div className="text-slate-600">GOALS</div>
-              </span>
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+interface BoardRow {
+  player: Player;
+  line: BoxScoreLine | undefined;
+  m: PlayerMatchFantasyMetrics | undefined;
+  fitness: number;
+  isBench: boolean;
+}
+
+interface BoardColumn {
+  key: string;
+  label: string;
+  title: string;
+  value: (r: BoardRow) => number;
+  format?: (v: number) => string;
+}
+
+const BOARD_COLUMN_SETS: Record<ColumnSetName, BoardColumn[]> = {
+  fantasy: [
+    { key: "fp", label: "FP", title: "Live fantasy points", value: (r) => r.m?.fp ?? 0, format: (v) => Math.round(v).toString() },
+    { key: "delta5", label: "Δ5", title: "Fantasy points in the last 5 minutes", value: (r) => r.m?.delta5 ?? 0, format: (v) => (v > 0 ? `+${Math.round(v)}` : Math.round(v).toString()) },
+    { key: "fpPerMin", label: "FP/MIN", title: "Fantasy points per minute on ground", value: (r) => r.m?.fpPerMin ?? 0, format: (v) => v.toFixed(2) },
+    { key: "proj", label: "PROJ", title: "Rotation-aware projected final fantasy points", value: (r) => r.m?.proj ?? 0, format: (v) => Math.round(v).toString() },
+    { key: "tog", label: "TOG", title: "Time on ground", value: (r) => r.m?.tog ?? 0, format: (v) => `${Math.round(v)}%` },
+  ],
+  disposal: [
+    { key: "kicks", label: "K", title: "Kicks", value: (r) => r.line?.kicks ?? 0 },
+    { key: "handballs", label: "HB", title: "Handballs", value: (r) => r.line?.handballs ?? 0 },
+    { key: "disposals", label: "D", title: "Disposals", value: (r) => r.line?.disposals ?? 0 },
+    { key: "marks", label: "M", title: "Marks", value: (r) => r.line?.marks ?? 0 },
+    { key: "contestedPoss", label: "Cont", title: "Contested possessions", value: (r) => r.line?.contestedPoss ?? 0 },
+    {
+      key: "efficiency",
+      label: "Eff%",
+      title: "Disposal efficiency — (disposals minus turnovers) / disposals",
+      value: (r) => (r.line && r.line.disposals > 0 ? ((r.line.disposals - r.line.turnovers) / r.line.disposals) * 100 : 0),
+      format: (v) => `${Math.round(v)}%`,
+    },
+  ],
+  contest: [
+    { key: "tackles", label: "T", title: "Tackles", value: (r) => r.line?.tackles ?? 0 },
+    { key: "clearances", label: "CLR", title: "Clearances", value: (r) => r.line?.clearances ?? 0 },
+    { key: "hitouts", label: "HO", title: "Hitouts", value: (r) => r.line?.hitouts ?? 0 },
+    { key: "groundBallWins", label: "HBG", title: "Hard ball gets", value: (r) => r.line?.groundBallWins ?? 0 },
+    { key: "spoils", label: "1%ers", title: "One-percenters (spoils)", value: (r) => r.line?.spoils ?? 0 },
+  ],
+  role: [
+    { key: "cba", label: "CBA%", title: "Centre bounce attendance", value: (r) => r.m?.cba ?? 0, format: (v) => `${Math.round(v)}%` },
+    { key: "kickIns", label: "KI", title: "Kick-ins taken", value: (r) => r.m?.kickIns ?? 0 },
+    { key: "tog", label: "TOG", title: "Time on ground", value: (r) => r.m?.tog ?? 0, format: (v) => `${Math.round(v)}%` },
+    { key: "longestStint", label: "STINT", title: "Longest unbroken stint on ground", value: (r) => r.m?.longestStintMinutes ?? 0, format: (v) => `${Math.round(v)}m` },
+    { key: "fitness", label: "FIT", title: "In-match fitness", value: (r) => r.fitness, format: (v) => `${Math.round(v)}%` },
+  ],
+};
+
+const COLUMN_SET_LABELS: { key: ColumnSetName; label: string }[] = [
+  { key: "fantasy", label: "Fantasy" },
+  { key: "disposal", label: "Disposal" },
+  { key: "contest", label: "Contest" },
+  { key: "role", label: "Role" },
+];
+
+/** Triggers a browser download — CSV export footer action, [[Match Day Fantasy Layer]] Section B. */
+function downloadCsv(filename: string, rows: string[][]) {
+  const csv = rows.map((r) => r.map((cell) => (/[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /**
- * Left column, 392px — the live team table, direct successor to
- * `LivePlayerStats` but with Tyler's narrower new column set (Position,
- * Name, D/M/T/G, FP with a coloured delta, fitness as a bar) rather than
- * the old wider D/M/T/CLR/HO/G.B/[FIT]/SC. Reuses the exact same live-safe
- * `fantasyPointsFor` sort and click-to-inspect row pattern.
+ * Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section B. Replaces `LeftTeamTable` outright: the
+ * rail is now THE only live board (the old "Your Movers" strip duplicated this same data — see the
+ * vault note). All 22 (18 on-ground + 4 bench) per side, bench always last regardless of sort, 4
+ * switchable column sets, click-to-sort with shift-click tiebreak, CSV export, cross-highlight with the
+ * ground view via `hoveredPlayerId`/`onHoverPlayer`.
  */
-function LeftTeamTable({
+function LiveBoard({
   team,
   side,
+  otherTeam,
+  otherSide,
   liveBoxScore,
-  fitnessFor,
-  deltaFor,
+  fantasyMetrics,
+  fitnessOf,
+  hoveredPlayerId,
+  selectedPlayerId,
+  onHoverPlayer,
   onSelectPlayer,
 }: {
   team: MatchTeam;
   side: Side;
+  otherTeam: MatchTeam;
+  otherSide: Side;
   liveBoxScore: Record<number, BoxScoreLine>;
-  fitnessFor?: (playerId: number) => number;
-  deltaFor: (playerId: number) => number;
+  fantasyMetrics: Map<number, PlayerMatchFantasyMetrics>;
+  fitnessOf: (side: Side, playerId: number) => number;
+  hoveredPlayerId: number | null;
+  selectedPlayerId: number | null;
+  onHoverPlayer: (id: number | null) => void;
   onSelectPlayer: (player: Player, side: Side) => void;
 }) {
-  const rows = onGroundPlayers(team)
-    .map((p) => {
-      const line = liveBoxScore[p.PlayerID];
-      return { player: p, line, sc: line ? fantasyPointsFor(line) : 0 };
-    })
-    .sort((a, b) => b.sc - a.sc);
+  const [columnSet, setColumnSet] = useState<ColumnSetName>("fantasy");
+  const [sort, setSort] = useState<{ column: string; direction: 1 | -1 }>({ column: "fp", direction: -1 });
+  const [tiebreak, setTiebreak] = useState<{ column: string; direction: 1 | -1 } | null>(null);
+
+  function rowsFor(t: MatchTeam, s: Side): BoardRow[] {
+    const onGround = onGroundPlayers(t).map((player) => ({
+      player,
+      line: liveBoxScore[player.PlayerID],
+      m: fantasyMetrics.get(player.PlayerID),
+      fitness: fitnessOf(s, player.PlayerID),
+      isBench: false,
+    }));
+    const bench = benchPlayers(t).map((player) => ({
+      player,
+      line: liveBoxScore[player.PlayerID],
+      m: fantasyMetrics.get(player.PlayerID),
+      fitness: fitnessOf(s, player.PlayerID),
+      isBench: true,
+    }));
+    return [...onGround, ...bench];
+  }
+
+  const columns = BOARD_COLUMN_SETS[columnSet];
+  const columnByKey = (key: string) => columns.find((c) => c.key === key);
+
+  function sortRows(rows: BoardRow[]): BoardRow[] {
+    const primary = columnByKey(sort.column) ?? columns[0];
+    const secondary = tiebreak ? columnByKey(tiebreak.column) : undefined;
+    return [...rows].sort((a, b) => {
+      if (a.isBench !== b.isBench) return a.isBench ? 1 : -1; // bench always last, regardless of sort
+      const pa = primary.value(a);
+      const pb = primary.value(b);
+      if (pa !== pb) return (pa - pb) * sort.direction;
+      if (secondary) {
+        const sa = secondary.value(a);
+        const sb = secondary.value(b);
+        if (sa !== sb) return (sa - sb) * tiebreak!.direction;
+      }
+      return 0;
+    });
+  }
+
+  function handleHeaderClick(key: string, shiftKey: boolean) {
+    if (shiftKey) {
+      setTiebreak((prev) => (prev && prev.column === key ? { column: key, direction: -prev.direction as 1 | -1 } : { column: key, direction: -1 }));
+      return;
+    }
+    setSort((prev) => (prev.column === key ? { column: key, direction: -prev.direction as 1 | -1 } : { column: key, direction: -1 }));
+  }
+
+  function exportCsv() {
+    const header = ["Team", "Pos", "Player", ...columns.map((c) => c.label)];
+    const body: string[][] = [];
+    for (const [t, s] of [
+      [team, side],
+      [otherTeam, otherSide],
+    ] as [MatchTeam, Side][]) {
+      for (const row of rowsFor(t, s)) {
+        body.push([
+          t.name,
+          t.positions?.get(row.player.PlayerID) ?? "",
+          playerFullName(row.player),
+          ...columns.map((c) => {
+            const v = c.value(row);
+            return c.format ? c.format(v) : Math.round(v).toString();
+          }),
+        ]);
+      }
+    }
+    downloadCsv(`match-fantasy-board-${columnSet}.csv`, [header, ...body]);
+  }
+
+  const rows = sortRows(rowsFor(team, side));
 
   return (
-    <div className="card flex min-h-0 flex-col !px-2 lg:h-full">
-      <div className="mb-2 truncate px-1 text-xs uppercase tracking-wide text-slate-400" title={team.name}>
-        {team.name} · live
+    <div className="card flex min-h-0 flex-col !px-2 lg:h-full" style={{ background: FANTASY_COLOR.pageBg }}>
+      <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2 px-1">
+        <div className="truncate text-xs uppercase tracking-wide" style={{ color: FANTASY_COLOR.inkLabel }} title={team.name}>
+          {team.name} · live
+        </div>
+        <div className="flex shrink-0 gap-0.5 rounded-md p-0.5" style={{ background: FANTASY_COLOR.columnHeaderBg }}>
+          {COLUMN_SET_LABELS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => {
+                setColumnSet(key);
+                setSort({ column: BOARD_COLUMN_SETS[key][0].key, direction: -1 });
+                setTiebreak(null);
+              }}
+              className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+              style={{ color: columnSet === key ? FANTASY_COLOR.inkPrimary : FANTASY_COLOR.inkLabel, background: columnSet === key ? "rgba(124,92,240,0.3)" : "transparent" }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <table className="w-full text-[11px] tabular-nums">
-          <thead className="sticky top-0 bg-base-800 text-slate-500">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        <table className="w-full text-[11px]" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+          <thead className="sticky top-0 z-10" style={{ background: FANTASY_COLOR.columnHeaderBg }}>
             <tr>
-              <th className="pb-1 text-left font-medium">Pos</th>
-              <th className="pb-1 text-left font-medium">Player</th>
-              <th className="pb-1 text-center font-medium" title="Disposals">
-                D
+              <th className="w-8 py-1 text-left text-[9px] font-medium uppercase tracking-wide" style={{ color: FANTASY_COLOR.inkLabel }}>
+                Pos
               </th>
-              <th className="pb-1 text-center font-medium" title="Marks">
-                M
+              <th className="py-1 text-left text-[9px] font-medium uppercase tracking-wide" style={{ color: FANTASY_COLOR.inkLabel, fontFamily: "Barlow, sans-serif" }}>
+                Player
               </th>
-              <th className="pb-1 text-center font-medium" title="Tackles">
-                T
-              </th>
-              <th className="pb-1 text-center font-medium" title="Goals">
-                G
-              </th>
-              <th className="pb-1 text-right font-medium" title="Live fantasy score, coloured by change in the last 5 minutes">
-                FP
-              </th>
-              {fitnessFor && (
-                <th className="pb-1 text-right font-medium" title="In-match fitness">
-                  FIT
+              {columns.map((c) => (
+                <th
+                  key={c.key}
+                  onClick={(e) => handleHeaderClick(c.key, e.shiftKey)}
+                  title={`${c.title} — click to sort, shift-click for tiebreak`}
+                  className="cursor-pointer select-none whitespace-nowrap py-1 pl-2 text-right text-[9px] font-medium uppercase tracking-[0.07em]"
+                  style={{ color: sort.column === c.key || tiebreak?.column === c.key ? FANTASY_COLOR.inkPrimary : FANTASY_COLOR.inkLabel }}
+                >
+                  {c.label}
+                  {sort.column === c.key && (sort.direction === -1 ? " ▾" : " ▴")}
+                  {tiebreak?.column === c.key && (tiebreak.direction === -1 ? " ▾" : " ▴")}
                 </th>
-              )}
+              ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ player, line, sc }, i) => {
-              const fitness = fitnessFor?.(player.PlayerID);
-              const delta = deltaFor(player.PlayerID);
+            {rows.map((row, i) => {
+              const isHovered = hoveredPlayerId === row.player.PlayerID;
+              const isSelected = selectedPlayerId === row.player.PlayerID;
               return (
                 <tr
-                  key={player.PlayerID}
-                  onClick={() => onSelectPlayer(player, side)}
-                  className={`cursor-pointer hover:bg-base-700 ${i === 0 && sc > 0 ? "text-accent" : "text-slate-300"}`}
-                  title={`Click for ${playerFullName(player)}'s match stats`}
+                  key={row.player.PlayerID}
+                  onClick={() => onSelectPlayer(row.player, side)}
+                  onMouseEnter={() => onHoverPlayer(row.player.PlayerID)}
+                  onMouseLeave={() => onHoverPlayer(null)}
+                  className="cursor-pointer tabular-nums"
+                  style={{
+                    background: isSelected ? "rgba(124,92,240,0.22)" : isHovered ? "rgba(124,92,240,0.12)" : row.isBench ? FANTASY_COLOR.columnHeaderBg : i % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg,
+                    borderTop: row.isBench && !rows[i - 1]?.isBench ? `1px solid ${FANTASY_COLOR.hairline}` : undefined,
+                  }}
                 >
-                  <td className="py-0.5 text-left text-slate-500">{team.positions?.get(player.PlayerID) ?? "—"}</td>
-                  <td className="max-w-[90px] truncate py-0.5" title={playerFullName(player)}>
-                    {player.lname}
+                  <td className="py-0.5 text-left" style={{ color: FANTASY_COLOR.inkLabel }}>
+                    {team.positions?.get(row.player.PlayerID) ?? "—"}
                   </td>
-                  <td className="text-center">{line?.disposals ?? 0}</td>
-                  <td className="text-center">{line?.marks ?? 0}</td>
-                  <td className="text-center">{line?.tackles ?? 0}</td>
-                  <td className="text-center">{line?.goals ?? 0}</td>
-                  <td className={`text-right font-semibold ${delta > 0 ? "text-good" : ""}`}>
-                    {Math.round(sc)}
-                    {delta > 0 && <span className="ml-1 text-[9px] font-normal text-good">+{delta}</span>}
+                  <td className="max-w-[90px] truncate py-0.5 font-semibold" title={playerFullName(row.player)} style={{ fontFamily: "Barlow, sans-serif", color: FANTASY_COLOR.inkPrimary }}>
+                    {row.player.lname}
                   </td>
-                  {fitnessFor && (
-                    <td className="w-12 py-0.5 pl-2">
-                      <FitnessBar value={fitness ?? 100} />
-                    </td>
-                  )}
+                  {columns.map((c) => {
+                    const v = c.value(row);
+                    return (
+                      <td key={c.key} className="py-0.5 pl-2 text-right" style={{ color: FANTASY_COLOR.inkTertiary }}>
+                        {c.format ? c.format(v) : Math.round(v)}
+                      </td>
+                    );
+                  })}
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+      <div className="mt-1.5 flex shrink-0 justify-end border-t px-1 pt-1.5" style={{ borderColor: FANTASY_COLOR.hairline }}>
+        <button onClick={exportCsv} className="rounded px-2 py-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: FANTASY_COLOR.inkTertiary, background: FANTASY_COLOR.columnHeaderBg }}>
+          CSV export
+        </button>
+      </div>
     </div>
   );
 }
 
-/** Right column — "Their Danger Men": the opposing side's top 4 by the same live-safe FP sort `LeftTeamTable` uses, condensed to a short list rather than a second full mirrored table (design note judgment call #2). Each row opens the same in-match stats drawer as everything else. */
+/** Right column — "Their Danger Men": the opposing side's top 4 by the same live-safe FP sort `LiveBoard` uses, condensed to a short list rather than a second full mirrored table (design note judgment call #2). Each row opens the same in-match stats drawer as everything else. */
 function DangerMen({
   team,
   side,

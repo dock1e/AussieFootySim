@@ -33,18 +33,46 @@ import type { Side, Zone } from "./zones.ts";
 // formula's actual term now rather than left as a permanent zero.
 // ---------------------------------------------------------------------------
 
+/**
+ * Sep 2026 round 112 — [[Match Day Fantasy Layer]]: pulled out of `fantasyPointsFor`'s own body so
+ * there is exactly ONE place these nine numbers are ever typed. `seasonSummary.ts`'s
+ * `realSeasonEntryToTotals` needed the identical formula against a `RealSeasonEntry` (a flat real-world
+ * season-average row, not a `BoxScoreLine` — it can't just call `fantasyPointsFor` directly) and had
+ * hand-retyped the same nine numbers a second time; it now reads this table instead. Keyed by
+ * `BoxScoreLine` field name so `fantasyPointsForStat` below can look a single stat up directly.
+ */
+export const FANTASY_POINT_WEIGHTS: Partial<Record<keyof BoxScoreLine, number>> = {
+  kicks: 3,
+  handballs: 2,
+  marks: 3,
+  tackles: 4,
+  hitouts: 1,
+  freeKicksFor: 1,
+  freeKicksAgainst: -3,
+  goals: 6,
+  behinds: 1,
+};
+
 export function fantasyPointsFor(line: BoxScoreLine): number {
-  return (
-    3 * line.kicks +
-    2 * line.handballs +
-    3 * line.marks +
-    4 * line.tackles +
-    1 * line.hitouts +
-    1 * line.freeKicksFor -
-    3 * line.freeKicksAgainst +
-    6 * line.goals +
-    1 * line.behinds
-  );
+  let total = 0;
+  for (const key in FANTASY_POINT_WEIGHTS) {
+    const stat = key as keyof BoxScoreLine;
+    total += (FANTASY_POINT_WEIGHTS[stat] ?? 0) * (line[stat] as number);
+  }
+  return total;
+}
+
+/**
+ * Sep 2026 round 112 — [[Match Day Fantasy Layer]]: the same table, applied to a single `StatDelta`
+ * instead of a whole `BoxScoreLine`. Because fantasy points are linear over the box score (every term
+ * above is `weight * count`, no cross terms), summing this over every one of a player's `StatDelta`s
+ * for a match is mathematically guaranteed to equal `fantasyPointsFor` on their final line — this is
+ * what makes the drawer's FP ledger total and the event-log-derived ribbon/board figures provably
+ * consistent with each other, not just usually consistent. Returns 0 for any stat with no fantasy
+ * weight (most of `BoxScoreLine` — tackleAttempts, spoils, etc. — score nothing).
+ */
+export function fantasyPointsForStat(stat: keyof BoxScoreLine, delta: number): number {
+  return (FANTASY_POINT_WEIGHTS[stat] ?? 0) * delta;
 }
 
 // ---------------------------------------------------------------------------

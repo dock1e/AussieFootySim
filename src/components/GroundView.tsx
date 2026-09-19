@@ -571,9 +571,19 @@ function drawGround(ctx: CanvasRenderingContext2D, venue: AFLStadium, homeColor:
   drawScaleBar(ctx);
 }
 
-function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition, color: string) {
+function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition, color: string, highlighted = false) {
   const radiusM = dot.involved ? INVOLVED_DOT_RADIUS_M : DOT_RADIUS_M;
   const radius = radiusM * PX_PER_METRE;
+  // Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section B cross-highlight: one extra ring, same
+  // idiom as the `involved` ring just below, drawn first so the dot itself still sits on top.
+  if (highlighted) {
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, radius + 6, 0, Math.PI * 2);
+    ctx.strokeStyle = "#9a80ff";
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.9;
+    ctx.stroke();
+  }
   ctx.beginPath();
   ctx.arc(dot.x, dot.y, radius, 0, Math.PI * 2);
   ctx.fillStyle = color;
@@ -740,6 +750,15 @@ export interface GroundViewProps {
   awayStyle?: GameStyle;
   /** Opens the in-match stats drawer for whichever ground token was clicked. Reuses the exact same hit-test radius/logic the hover tooltip already uses (`dotAt`). Optional, same "no dummy no-op needed" reasoning as every other prop here. */
   onSelectPlayer?: (player: Player, side: Side) => void;
+  /**
+   * Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section B's cross-highlight: "hovering a rail row
+   * highlights its ground node and vice versa." A small, additive pair, not a rework of this
+   * component's own rendering/geometry (which the brief explicitly leaves untouched) — `highlightedPlayerId`
+   * draws one extra ring on an already-rendered dot, and `onHoverPlayer` reuses the exact same `dotAt`
+   * hit-test `handleMouseMove` already runs every frame, just also reporting it upward.
+   */
+  highlightedPlayerId?: number | null;
+  onHoverPlayer?: (playerId: number | null) => void;
 }
 
 export function GroundView({
@@ -753,6 +772,8 @@ export function GroundView({
   homeStyle = DEFAULT_GAME_STYLE,
   awayStyle = DEFAULT_GAME_STYLE,
   onSelectPlayer,
+  highlightedPlayerId = null,
+  onHoverPlayer,
 }: GroundViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<DotPosition | null>(null);
@@ -777,6 +798,8 @@ export function GroundView({
   homeStyleRef.current = homeStyle;
   const awayStyleRef = useRef(awayStyle);
   awayStyleRef.current = awayStyle;
+  const highlightedPlayerIdRef = useRef(highlightedPlayerId);
+  highlightedPlayerIdRef.current = highlightedPlayerId;
 
   const renderedRef = useRef<Map<number, DotPosition>>(new Map());
   // Aug 2026 round 26 — see applyInvolvementCooldown's own doc comment. Keyed
@@ -883,12 +906,13 @@ export function GroundView({
         const homeColor = resolveClubColor(currentHome, HOME_COLOR_FALLBACK);
         const awayColor = resolveClubColor(currentAway, AWAY_COLOR_FALLBACK);
         drawGround(ctx, currentVenue, homeColor, awayColor);
+        const highlightedId = highlightedPlayerIdRef.current;
         for (const dot of drawn) {
-          if (!dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeColor : awayColor);
+          if (!dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeColor : awayColor, dot.playerId === highlightedId);
         }
         // Draw involved dots last so they render on top of the rest.
         for (const dot of drawn) {
-          if (dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeColor : awayColor);
+          if (dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeColor : awayColor, dot.playerId === highlightedId);
         }
         drawBall(ctx, ballRenderedRef.current, ballRotationRef.current);
       }
@@ -934,8 +958,12 @@ export function GroundView({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    setHovered(dotAt(e.clientX, e.clientY));
+    const dot = dotAt(e.clientX, e.clientY);
+    setHovered(dot);
     setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    // Sep 2026 round 112 — [[Match Day Fantasy Layer]] cross-highlight: reuses this same hit-test the
+    // hover tooltip already computes every frame, just also reporting it to the board upstairs.
+    onHoverPlayer?.(dot?.playerId ?? null);
   }
 
   function handleClick(e: ReactMouseEvent<HTMLCanvasElement>) {
@@ -1004,7 +1032,10 @@ export function GroundView({
         height={GROUND_HEIGHT}
         className={`min-h-0 max-w-full flex-1 rounded-card border border-base-600 ${onSelectPlayer ? "cursor-pointer" : ""}`}
         onMouseMove={handleMouseMove}
-        onMouseLeave={() => setHovered(null)}
+        onMouseLeave={() => {
+          setHovered(null);
+          onHoverPlayer?.(null);
+        }}
         onClick={handleClick}
       />
       <VenueChip venue={venue} />

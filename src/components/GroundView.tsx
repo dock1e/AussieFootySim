@@ -963,8 +963,19 @@ export function GroundView({
   const hoveredPosition = hovered ? hoveredTeam?.positions?.get(hovered.playerId) : undefined;
   const hoveredLine = hovered ? liveBoxScore?.[hovered.playerId] : undefined;
   const hoveredFantasy = hoveredLine ? Math.round(fantasyPointsFor(hoveredLine)) : undefined;
+  // Sep 2026 round 110 bugfix (Tyler, live testing: Wanganeen-Milera read as
+  // "49m from goal" while visually sitting closer to ~80m out, near the
+  // boundary): this only ever diffed the x-axis (depth) against the goal
+  // LINE's own x — a player's lateral/boundary offset (y) was dropped from
+  // the sum entirely, not just approximated, so anyone standing wide read as
+  // artificially close to goal. Now a genuine 2D distance to the goal-mouth
+  // point (goalX, 0) — same flat PX_PER_METRE conversion this readout
+  // already used for x, just no longer applied to only one of the two axes.
   const hoveredMetresFromGoal = hovered
-    ? Math.abs((hovered.side === "home" ? venue.lengthMeters / 2 : -venue.lengthMeters / 2) - (hovered.x - GROUND_WIDTH / 2) / PX_PER_METRE)
+    ? Math.hypot(
+        (hovered.side === "home" ? venue.lengthMeters / 2 : -venue.lengthMeters / 2) - (hovered.x - GROUND_WIDTH / 2) / PX_PER_METRE,
+        (hovered.y - GROUND_HEIGHT / 2) / PX_PER_METRE,
+      )
     : 0;
 
   return (

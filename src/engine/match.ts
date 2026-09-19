@@ -1446,7 +1446,7 @@ function log(
   // `ctx.trackedPositions` still feeds nothing gameplay/stats-relevant, see
   // this function's own doc comment.
   if (!skipPositionNudge) {
-    ctx.trackedPositions = nudgeInvolvedPositions(ctx.home, ctx.away, zone, playerIds, ctx.trackedPositions);
+    ctx.trackedPositions = nudgeInvolvedPositions(ctx.home, ctx.away, zone, playerIds, ctx.trackedPositions, ctx.stadium);
   }
   if (!ctx.recordEvents) return;
   ctx.events.push({
@@ -2437,12 +2437,63 @@ function resolveLongKickExecution(ctx: Ctx, carrier: Player, receiverPick: KickP
  * fumbled contested-mark/groundball/handball receptions), and the kick-in
  * taker. Same reasoning applies at every one — each picks a player by pure
  * positional/zone fit with no real-distance check, then immediately hands
- * them the ball as carrier at that zone. Every genuine `weightedPlayerChoice`
- * call site in this file is now paired with a `snapTrackedZone` call.
+ * them the ball as carrier at that zone.
+ *
+ * Sep 2026 round 110 — every one of those six `weightedPlayerChoice`-paired
+ * call sites now calls `snapZoneBlindPick` below instead of this function —
+ * see that function's own doc comment for why a genuinely zone-blind pick
+ * needs its LANE fixed too, not just its zone. This function's only
+ * remaining call site is Run and Carry's own zone advance, the one case
+ * that was never a `weightedPlayerChoice` pick — the SAME carrier keeps
+ * carrying, so their lane is still current, not stale.
  */
 function snapTrackedZone(ctx: Ctx, playerId: number, zone: Zone): void {
   const existing = ctx.trackedPositions.get(playerId);
   ctx.trackedPositions.set(playerId, { zoneFrac: zone, lane: existing?.lane ?? 0 });
+}
+
+/**
+ * Sep 2026 round 110 — Tyler, live testing: Steele was tackled just inside
+ * his own forward 50, then Pickett scooped up the loose ball while
+ * APPEARING to be out on the southern wing — the ball looked like it warped
+ * between two unrelated spots on the ground rather than a continuous
+ * contest. Root cause: `snapTrackedZone` above corrects a zone-blind
+ * `weightedPlayerChoice` pick's DEPTH (`zoneFrac`) to match the contest's
+ * real zone, but deliberately preserves whatever `lane` (left/right) that
+ * player's own tracked position last happened to hold — the right call when
+ * the SAME player is continuing a run (see that function's own doc
+ * comment), but wrong here: a `weightedPlayerChoice` pick is genuinely
+ * zone-blind (picked by positional/zone fit alone, no real-distance check —
+ * see this file's own gap #85 disclosure above), so the player it picks
+ * could have last been tracked anywhere across the width of the ground — a
+ * wing, the far boundary — with nothing about that stale lane connecting
+ * them to where this new contest is actually happening. The same stale-lane
+ * mechanism also explains a player rendering right on the boundary line
+ * when the contest that picked them isn't anywhere near it (Tyler's own
+ * Wanganeen-Milera report, same match).
+ *
+ * Reuses `positioning.ts`'s own `carrierPosition` — the exact "no better
+ * tracked position exists, use this player's natural home-anchor lane for
+ * their own position" template `resolveUnpressuredDisposal`'s own
+ * `disposerPos`/`carrierPos`/`shooterPos` (and every other real-position
+ * lookup in this file) already falls back to, rather than a bespoke
+ * calculation — so a zone-blind pick now renders at a sensible lane for
+ * THEIR OWN position (e.g. a half-back flanker's own natural side of the
+ * ground) instead of a random leftover value from wherever they were last
+ * doing something else entirely.
+ *
+ * Deliberately a separate function from `snapTrackedZone` above, not a
+ * widened version of it: that function's only remaining call site (Run and
+ * Carry's own zone advance) is the SAME carrier continuing to run with the
+ * ball, where preserving their current lane is correct, not a bug — the two
+ * cases need opposite lane behaviour, so two clearly-named functions is
+ * safer than one function whose correct behaviour secretly depends on which
+ * caller happens to be calling it. Every zone-blind `weightedPlayerChoice`
+ * call site that used to pair with `snapTrackedZone` (gap #85 / round 44) now
+ * pairs with this instead.
+ */
+function snapZoneBlindPick(ctx: Ctx, player: Player, zone: Zone, team: MatchTeam): void {
+  ctx.trackedPositions.set(player.PlayerID, carrierPosition(player, team.positions?.get(player.PlayerID), zone, team.positions));
 }
 
 /**
@@ -2585,10 +2636,9 @@ function resolveUnpressuredDisposal(
     const newSide = otherSide(state.possession);
     lineFor(ctx, carrier).freeKicksAgainst += 1;
     const freeKickTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), newZone);
-    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
-    // The taker is standing wherever the ball crossed the line (newZone),
-    // not wherever their own tracked position last happened to settle.
-    snapTrackedZone(ctx, freeKickTaker.PlayerID, newZone);
+    // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
+    // a genuine zone-blind pick, so lane needs the same fix, not just zone.
+    snapZoneBlindPick(ctx, freeKickTaker, newZone, teamOf(ctx, newSide));
     lineFor(ctx, freeKickTaker).freeKicksFor += 1;
     // Aug 2026 round 55 — [[Season Stats and Records]]: literally "sprayed a disposal out of
     // bounds," the design note's own third named turnover example.
@@ -3200,10 +3250,9 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     const newSide = otherSide(state.possession);
     lineFor(ctx, carrier).freeKicksAgainst += 1;
     const freeKickTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), newZone);
-    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
-    // The taker is standing wherever the ball crossed the line (newZone),
-    // not wherever their own tracked position last happened to settle.
-    snapTrackedZone(ctx, freeKickTaker.PlayerID, newZone);
+    // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
+    // a genuine zone-blind pick, so lane needs the same fix, not just zone.
+    snapZoneBlindPick(ctx, freeKickTaker, newZone, teamOf(ctx, newSide));
     lineFor(ctx, freeKickTaker).freeKicksFor += 1;
     // Aug 2026 round 55 — [[Season Stats and Records]]: literally "sprayed a disposal out of
     // bounds," the design note's own third named turnover example.
@@ -3413,8 +3462,9 @@ function resolveUncontestedGather(
     // stat at all — they didn't contest anything, they just reacted first to
     // a loose ball after the fact.
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, state.zone);
-    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
-    snapTrackedZone(ctx, recoverer.PlayerID, state.zone);
+    // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
+    // a genuine zone-blind pick, so lane needs the same fix, not just zone.
+    snapZoneBlindPick(ctx, recoverer, state.zone, defendingTeam);
     (lineFor(ctx, attackerRep)[fields.attempts] as number) += 1;
     // Aug 2026 round 55 — [[Season Stats and Records]]: a genuine turnover — the attacking side
     // fumbled uncontested and the recoverer is always drawn from defendingSide here (unlike the
@@ -3518,7 +3568,9 @@ function runContest(ctx: Ctx, state: State): State {
   // around — left stale, a defender genuinely near the attacker's old spot
   // (not this contest's actual zone) could "win" the spoil, rendering at the
   // wrong end of the ground the way Tyler reported for Petty.
-  snapTrackedZone(ctx, attackerRep.PlayerID, state.zone);
+  // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
+  // a genuine zone-blind pick, so lane needs the same fix, not just zone.
+  snapZoneBlindPick(ctx, attackerRep, state.zone, attackingTeam);
 
   // Real distance-driven eligibility check — Aug 2026 round 23, same
   // positioning.ts primitives as runGeneralPlay's own defender check (see
@@ -3852,8 +3904,9 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true, carrierStandingTheMark: true };
     }
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
-    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
-    snapTrackedZone(ctx, recoverer.PlayerID, zone);
+    // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
+    // a genuine zone-blind pick, so lane needs the same fix, not just zone.
+    snapZoneBlindPick(ctx, recoverer, zone, defendingTeam);
     // Aug 2026 round 55 — see resolveUncontestedGather's own identical-shaped comment for the full
     // rationale (recoverer always defendingSide here -> always a turnover; no matching
     // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
@@ -4090,8 +4143,9 @@ function runHandballContest(ctx: Ctx, state: State): State {
       return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
     }
     const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
-    // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
-    snapTrackedZone(ctx, recoverer.PlayerID, zone);
+    // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
+    // a genuine zone-blind pick, so lane needs the same fix, not just zone.
+    snapZoneBlindPick(ctx, recoverer, zone, defendingTeam);
     // Aug 2026 round 55 — see resolveUncontestedGather's own identical-shaped comment for the full
     // rationale (recoverer always defendingSide here -> always a turnover; no matching
     // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
@@ -4395,8 +4449,9 @@ function runShot(ctx: Ctx, state: State): State {
   // actually the likely kick-in taker, not any of the 22 equally.
   const newSide = otherSide(state.possession);
   const kickInTaker = weightedPlayerChoice(ctx.rng, newSide, teamOf(ctx, newSide), state.zone);
-  // Aug 2026 round 44 — see snapTrackedZone's own doc comment (gap #85).
-  snapTrackedZone(ctx, kickInTaker.PlayerID, state.zone);
+  // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
+  // a genuine zone-blind pick, so lane needs the same fix, not just zone.
+  snapZoneBlindPick(ctx, kickInTaker, state.zone, teamOf(ctx, newSide));
   return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: kickInTaker, carrierUncontested: true };
 }
 

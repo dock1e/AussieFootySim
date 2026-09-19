@@ -1046,9 +1046,31 @@ export function computeDotPositions(
   // — see `formationFor`'s own fallback for that case). PlayerIDs are
   // globally unique across both sides, so one map safely serves both
   // `formationFor` calls below.
+  //
+  // Sep 2026 round 110 — Tyler, live testing: "at the very start of the
+  // quarter the players take up slightly unusual positions on the ground and
+  // then in Tick 1 they all then move to more sensible positions." Root
+  // cause: `useMatchPlayback.ts` starts `currentIndex` at -1 ("nothing
+  // revealed yet"), so `event` is genuinely `null` for one render before the
+  // first tick ever advances — `tracked` fell through to `undefined`, and
+  // `formationFor` rendered every player via its OLDER, pre-round-28
+  // press-scalar fallback (see that function's own comment) instead of the
+  // tactic-differentiated positions every other tick already uses, so the
+  // very first frame looked visibly different from Tick 1's own. `nextEvent`
+  // is already `result.events[0]` at that exact moment (LiveMatch.tsx's own
+  // `result.events[playback.currentIndex + 1] ?? null`), i.e. the real event
+  // about to be revealed — previewing ITS tracked positions one frame early
+  // means the pre-playback frame already matches what Tick 1 shows, instead
+  // of a visibly different placeholder that then jumps. Deliberately only
+  // affects this player-position map: `isCentreBounce`/`isDisposalInFlight`
+  // and the ball's own `zoneToX(event.zone)` below are still gated on the
+  // real `event`, unchanged — this doesn't make the pre-playback frame claim
+  // to BE that event, just to preview where everyone already stands for it.
   const tracked = event?.trackedPositions
     ? new Map<number, AbstractPosition>(event.trackedPositions.map((t) => [t.playerId, { zoneFrac: t.zoneFrac, lane: t.lane }]))
-    : undefined;
+    : nextEvent?.trackedPositions
+      ? new Map<number, AbstractPosition>(nextEvent.trackedPositions.map((t) => [t.playerId, { zoneFrac: t.zoneFrac, lane: t.lane }]))
+      : undefined;
   const homeForm = formationFor(home, "home", event, homeStyle, tracked);
   const awayForm = formationFor(away, "away", event, awayStyle, tracked);
   const all = new Map<number, DotPosition>([...homeForm, ...awayForm]);

@@ -259,14 +259,44 @@ function lerp(a: number, b: number, t: number): number {
  * so none of them needed touching. Confirmed empirically, not just reasoned
  * on paper — see `scripts/verify_round106_scratch.ts`'s ground-covered
  * check.
+ *
+ * Round 110 — Tyler, after round 104/107's venue-accurate ground work,
+ * asked directly whether movement speed also needed adjusting. Diagnosis:
+ * this file's own top comment already disclosed that `stepToward`'s pacing
+ * stays on the flat abstract zoneFrac/lane scale, deliberately not
+ * converted the way `MIDFIELD_CONTEST_RANGE` was — but that abstract scale
+ * was itself calibrated against `positioning.ts`'s own disclosed ~40m/
+ * zoneFrac-unit REFERENCE venue (`MAX_KICK_DISTANCE`'s own doc comment),
+ * not any one real venue. Real venue length now genuinely varies 155.5m-
+ * 175.0m across the 20 real venues (`data/stadiums.ts`) — a real ~12% swing
+ * a flat abstract step can't see, so the SAME per-tick step currently
+ * covers up to ~9-12% more real ground on the biggest venues than the
+ * smallest, purely as an artifact of the old implied baseline, not a real
+ * gameplay difference. `REFERENCE_METRES_PER_ZONE_UNIT` below is that same
+ * ~40m/unit reference, reused rather than re-derived (this project's own
+ * convention for every distance constant since round 107 — see
+ * `MAX_KICK_DISTANCE`'s own doc comment). `maxStepFor` now scales its
+ * returned step by `REFERENCE_METRES_PER_ZONE_UNIT / (stadium.lengthMeters
+ * / 4)` — exact and linear along the length axis (`x = u*a` has no
+ * curvature there, see `realMetresFor`'s own doc comment), unlike the lane/
+ * width axis (curved via `yBound`), which stays on the flat abstract scale
+ * for the same disclosed reason this file's own top comment already gives
+ * for the tactic pull-weight/offset tables — a materially bigger, separate
+ * change for a smaller realism gain than pacing's own dominant, lengthwise
+ * direction of travel. A genuinely smaller, scoped fix, not the full
+ * conversion that comment deferred.
  */
 const BASE_STEP_PER_TICK = 0.032;
 const REFERENCE_SPEED_ACCEL = 55;
 const MIN_STEP_MULTIPLIER = 0.5;
+/** Round 110 — see `BASE_STEP_PER_TICK`'s own doc comment just above. */
+const REFERENCE_METRES_PER_ZONE_UNIT = 40;
 
-function maxStepFor(player: Player): number {
+function maxStepFor(player: Player, stadium: AFLStadium): number {
   const rating = (player.speed + player.acceleration) / 2;
-  return BASE_STEP_PER_TICK * Math.max(MIN_STEP_MULTIPLIER, rating / REFERENCE_SPEED_ACCEL);
+  const base = BASE_STEP_PER_TICK * Math.max(MIN_STEP_MULTIPLIER, rating / REFERENCE_SPEED_ACCEL);
+  const actualMetresPerZoneUnit = stadium.lengthMeters / 4;
+  return base * (REFERENCE_METRES_PER_ZONE_UNIT / actualMetresPerZoneUnit);
 }
 
 /** Moves `current` toward `target` by at most `maxStep` (Euclidean, same `distanceBetween` semantics `positioning.ts` already uses) — the real "persistent, paced, not teleported" mechanism this whole module exists to provide. Snaps exactly onto `target` once within `maxStep` of it, rather than perpetually approaching and never arriving. */
@@ -715,7 +745,7 @@ function stepSide(
     const opponentPos = opponentId !== undefined ? current.get(opponentId) : undefined;
     const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions, carrierIsOpponent ? carrierPos : undefined, ranks?.get(player.PlayerID), stadium);
     const from = current.get(player.PlayerID) ?? target;
-    out.set(player.PlayerID, stepToward(from, target, maxStepFor(player)));
+    out.set(player.PlayerID, stepToward(from, target, maxStepFor(player, stadium)));
   }
 }
 
@@ -805,6 +835,10 @@ export function nudgeInvolvedPositions(
   zone: Zone,
   playerIds: number[],
   current: Map<number, AbstractPosition>,
+  // Round 110 — see `maxStepFor`'s own doc comment (BASE_STEP_PER_TICK):
+  // this function's own `stepToward` call goes through the same per-venue
+  // pacing correction every other tracked-position update now does.
+  stadium: AFLStadium,
 ): Map<number, AbstractPosition> {
   const involved = playerIds.map((id) => current.get(id)).filter((p): p is AbstractPosition => p !== undefined);
   if (involved.length === 0) return current;
@@ -819,7 +853,7 @@ export function nudgeInvolvedPositions(
     if (!from || !player) continue;
     const anchor = playerIds.length > 1 ? groupPoint : from;
     const target: AbstractPosition = { zoneFrac: (anchor.zoneFrac + zone) / 2, lane: anchor.lane };
-    next.set(id, stepToward(from, target, maxStepFor(player)));
+    next.set(id, stepToward(from, target, maxStepFor(player, stadium)));
   }
   return next;
 }

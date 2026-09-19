@@ -298,6 +298,24 @@ export interface MatchEvent {
    * exactly as before).
    */
   isPressured?: boolean;
+  /**
+   * Sep 2026 round 111 — which real kind of stoppage this STOPPAGE/CLEARANCE
+   * event actually is: a genuine centre bounce (always `MIDFIELD` zone), or a
+   * boundary throw-in (any zone, including `MIDFIELD` — a throw-in can
+   * legitimately happen roughly level with the centre corridor without being
+   * anywhere near the actual centre circle). Before this field,
+   * `ground.ts`'s `isCentreBounce` rendering branch could only key off
+   * `event.zone === MIDFIELD`, which a midfield-zone throw-in also matches —
+   * incorrectly snapping its players to the literal centre-circle graphic
+   * (and, from this same round, the new followers'-ring formation) for a
+   * stoppage that isn't actually a centre bounce at all. `undefined` for
+   * every non-stoppage event, and for any older save predating this field —
+   * same optional-field, graceful-degradation convention `isSetShot`/
+   * `isPressured` above already established; `ground.ts` falls back to the
+   * old zone-only check when this is `undefined`, so no older save's
+   * rendering changes.
+   */
+  stoppageType?: "centreBounce" | "throwIn";
 }
 
 export interface TeamResult {
@@ -1438,6 +1456,7 @@ function log(
   skipPositionNudge = false,
   isSetShot?: boolean,
   isPressured?: boolean,
+  stoppageType?: "centreBounce" | "throwIn",
 ) {
   // Runs regardless of `recordEvents` (same discipline `simulateQuarter`'s
   // own `stepTickPositions` already uses) — tracked-position evolution
@@ -1461,6 +1480,7 @@ function log(
     trackedPositions: snapshotPositions(ctx.trackedPositions),
     isSetShot,
     isPressured,
+    stoppageType,
   });
 }
 
@@ -1895,6 +1915,18 @@ export interface State {
    */
   stoppageTapWentToHand?: boolean;
   /**
+   * Sep 2026 round 111 — carries `resolveRuckTap`'s own `stoppageType`
+   * parameter forward into the `CLEARANCE` tick that follows it, the same
+   * tick-boundary-crossing need `stoppageTapWentToHand` just above already
+   * has (see that field's own doc comment) — `runClearance`'s own `log()`
+   * call needs the real stoppage kind too, since `ground.ts`'s
+   * `isCentreBounce` branch checks a `CLEARANCE`-phase event exactly as
+   * often as a `STOPPAGE`-phase one (the clearance contest happens right
+   * where the tap just landed). `undefined` outside a `CLEARANCE`-phase
+   * state, same reset-by-omission convention as every other field here.
+   */
+  stoppageType?: "centreBounce" | "throwIn";
+  /**
    * Aug 2026 round 26 — carries a shot-chance kick's own space measurement
    * (round 24's `weightedKickTarget`, `receiverPick.distance`) forward into
    * the new `MARKING_CONTEST` tick that now follows it a full game-loop tick
@@ -2085,7 +2117,7 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
   // line reads correctly (a throw-in stays a throw-in even in midfield zones 1-3, where
   // useSecondaryRuck is false) — conflating the two would have mislabelled a midfield throw-in as a
   // centre bounce.
-  log(ctx, zone, displaySide, "STOPPAGE", describeStoppageRestart(ctx, stoppageType), [], [], true);
+  log(ctx, zone, displaySide, "STOPPAGE", describeStoppageRestart(ctx, stoppageType), [], [], true, undefined, undefined, stoppageType);
   const home = onGroundPlayers(ctx.home);
   const away = onGroundPlayers(ctx.away);
   const homePlan = ctx.homePlan;
@@ -2176,7 +2208,7 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
   // execution roll's own conditionMultiplierFor call); `stoppageTapWentToHand`
   // carries the execution roll's own result forward for the favoured-side
   // clearance bonus. See `runClearance`'s own doc comment.
-  return { phase: "CLEARANCE", zone, possession: ruckWinnerSide, carrier: null, stoppageTapWentToHand: tapWentToHand };
+  return { phase: "CLEARANCE", zone, possession: ruckWinnerSide, carrier: null, stoppageTapWentToHand: tapWentToHand, stoppageType };
 }
 
 /**
@@ -2288,6 +2320,10 @@ function runClearance(ctx: Ctx, state: State): State {
       { playerId: clearWinner.PlayerID, stat: "contestedPoss", delta: 1 },
       ...recordContest(ctx, "clearance", clearWinner, clearLoser),
     ],
+    false,
+    undefined,
+    undefined,
+    state.stoppageType,
   );
 
   return { phase: "GENERAL_PLAY", zone, possession: winningSide, carrier: clearWinner };

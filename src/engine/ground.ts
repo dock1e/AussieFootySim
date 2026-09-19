@@ -8,7 +8,7 @@ import { getStadium, DEFAULT_STADIUM_ID, type AFLStadium } from "../data/stadium
 import { yBound, PX_PER_METRE, CANVAS_PADDING_M } from "./groundGeometry.ts";
 import { ZONE_FOR_LINE as LINE_ZONE, ZONE_FOR_POSITION, ownZone, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
-import type { AbstractPosition } from "./positioning.ts";
+import { laneSignFor, type AbstractPosition } from "./positioning.ts";
 
 /**
  * Ground-shape geometry and dot placement for the Canvas match renderer —
@@ -637,11 +637,33 @@ function assignAnchors(players: Player[], positions: Map<number, Position> | und
     const mobility = POSITION_MOBILITY[pos] ?? GENERAL_POSITION_MOBILITY;
     const laneNudge = pos === "R" || pos === "RR" || pos === "ROV" ? FOLLOWERS_LANE_NUDGE : (SPINE_LANE_NUDGE[pos] ?? 0);
     const bias = gameStyleAnchorBias(pos, style);
-    const sorted = [...group].sort((a, b) => a.PlayerID - b.PlayerID);
-    sorted.forEach((p, i) => {
-      const lane = lanes[i] ?? lanes[lanes.length - 1] ?? 0;
-      out.set(p.PlayerID, { homeZone: zone + bias.zoneShift, lane: lane * bias.laneScale, mobility, laneNudge });
-    });
+    if (lanes.length === 2) {
+      // Round 111 — the two real dual-lane occupants (BP/HBF/W/HFF/FP, the
+      // only positions this table gives exactly 2 lanes) now get their
+      // left/right split from `positioning.ts`'s own stable, persistent
+      // `laneSignFor`, not a fresh PlayerID sort every call. See that
+      // function's own doc comment for the bug this fixes (a never-
+      // substituted player's rendered flank flipping purely because a
+      // teammate sharing their slot got interchanged) — this fallback path
+      // is rarely hit for a live-tracked match (round 28 made real tracked
+      // positions the norm), but carried the identical bug whenever it did
+      // fire, so it gets the identical fix rather than being left to drift.
+      for (const p of group) {
+        const sign = laneSignFor(p.PlayerID, pos, positions);
+        const lane = sign === -1 ? lanes[0] : lanes[1];
+        out.set(p.PlayerID, { homeZone: zone + bias.zoneShift, lane: lane * bias.laneScale, mobility, laneNudge });
+      }
+    } else {
+      // Every other position sharing a slot (R/RR/ROV's small individual
+      // nudges, or a genuine data anomaly putting >1 player at a
+      // single-lane position) — unrelated to the dual-lane bug above, still
+      // just a stable multi-way spread by PlayerID, unchanged from before.
+      const sorted = [...group].sort((a, b) => a.PlayerID - b.PlayerID);
+      sorted.forEach((p, i) => {
+        const lane = lanes[i] ?? lanes[lanes.length - 1] ?? 0;
+        out.set(p.PlayerID, { homeZone: zone + bias.zoneShift, lane: lane * bias.laneScale, mobility, laneNudge });
+      });
+    }
   }
 
   // No real position known for these players (INT, or a team built without
@@ -1024,6 +1046,32 @@ const SNAP_WINDUP_DOT_OFFSET_Y = 20;
 const PRESSURED_HANDBALL_DOT_OFFSET_X = 16;
 const PRESSURED_HANDBALL_DOT_OFFSET_Y = 10;
 
+// Round 111 — see the `isCentreBounce` branch's own doc comment inside
+// `computeDotPositions` for the full reasoning. Eight fixed ring slots (both
+// teams' Ruck/Ruck Rover/Rover/Centre), 45 degrees apart, so the two sides
+// fan out evenly around the circle without overlapping each other.
+// Deliberately includes "R" too, even though the two rucks ACTUALLY
+// contesting a given tap already get the tighter, more precise dead-centre
+// override just above this one (keyed off that specific event's own
+// `playerIds`) — this ring only ever ends up placing a Ruck when that
+// tighter override doesn't apply to them, which happens for exactly one real
+// case: the `CLEARANCE` event a tick after the tap, where only the
+// clearance WINNER (not necessarily a Ruck) is named, potentially leaving
+// the other Ruck with no override at all and stranded at their ordinary,
+// much-further-away general-play anchor.
+const CENTRE_BOUNCE_RING_RADIUS = 34;
+const CENTRE_BOUNCE_RING_POSITIONS: readonly Position[] = ["R", "RR", "ROV", "C"];
+const CENTRE_BOUNCE_RING_ANGLES: Record<string, number> = {
+  "home:R": 0,
+  "home:RR": 45,
+  "home:ROV": 90,
+  "home:C": 135,
+  "away:R": 180,
+  "away:RR": 225,
+  "away:ROV": 270,
+  "away:C": 315,
+};
+
 export function computeDotPositions(
   home: MatchTeam,
   away: MatchTeam,
@@ -1109,7 +1157,19 @@ export function computeDotPositions(
   // bug this branch exists to fix. The clearance contest is still
   // physically happening right where the tap just landed, so it belongs
   // dead centre exactly like the tap itself.
-  const isCentreBounce = (event?.phase === "STOPPAGE" || event?.phase === "CLEARANCE") && event.zone === MIDFIELD;
+  // Sep 2026 round 111 — narrowed with `event.stoppageType`: a boundary
+  // throw-in can legitimately land at `MIDFIELD` zone (roughly level with
+  // the centre corridor, but nowhere near the actual centre circle — zone is
+  // the along-ground axis, not the boundary/width one), which used to
+  // satisfy this check exactly as a genuine centre bounce would, incorrectly
+  // snapping its players to the centre-circle graphic. `event.stoppageType`
+  // (match.ts, new this round) disambiguates the two; `undefined` (any older
+  // save predating this field) falls back to the original zone-only check,
+  // so no older save's rendering changes.
+  const isCentreBounce =
+    (event?.phase === "STOPPAGE" || event?.phase === "CLEARANCE") &&
+    event.zone === MIDFIELD &&
+    (event.stoppageType === undefined || event.stoppageType === "centreBounce");
 
   // Aug 2026 round 26 (Tyler: "I want there to be a moment of suspense
   // where the viewer sees a ball kicked towards a contest... the target is
@@ -1407,6 +1467,45 @@ export function computeDotPositions(
       // file already handled correctly.
       all.set(id, { ...existing, x: x + tieBreak * 8, y: avgAnchorY + spread + tieBreak * 6, involved: true });
     });
+
+    // Round 111 (Tyler: "I want you to review the current starting positions
+    // for our centre bounce as the Ruck, Ruck Rover, Rover and Centre
+    // positions should all be setup around the center circle"). The override
+    // above only ever repositions the two players actually named in
+    // `event.playerIds` — the two contesting rucks. Real broadcast footage
+    // (and Tyler's own reference screenshots) shows all 8 followers (both
+    // teams' R/RR/ROV/C) clustered tight around the circle at a genuine
+    // centre bounce — every OTHER follower still rendered at their ordinary,
+    // much more spread-out general-play formation anchor (`POSITION_LANE`'s
+    // own "0.3 apart" round-31 de-blob spacing), which is correct for
+    // general play but reads as scattered at the one moment real footage
+    // shows them tight. This pulls the remaining followers into a small
+    // ring around the same centre point, at fixed angles so the two teams
+    // fan out rather than overlap — R/RR/ROV/C for both sides, skipping
+    // anyone the tighter override above already placed (normally the two
+    // actual tap contestants). Deliberately not a claim about real Laws-of-the-Game
+    // centre-square eligibility or exact broadcast blocking — Tyler's own
+    // scoping ("we dont need to make all the tactical nuances into our
+    // engine") — just a plausible, clearly-clustered visual in place of the
+    // current scattered one.
+    if (isCentreBounce) {
+      for (const [side, team] of [["home", home] as const, ["away", away] as const]) {
+        for (const [id, playerPos] of team.positions ?? []) {
+          if (!CENTRE_BOUNCE_RING_POSITIONS.includes(playerPos)) continue;
+          const existing = all.get(id);
+          if (!existing || existing.involved) continue; // already handled above (one of the two contesting rucks, or another named event participant)
+          const angleDeg = CENTRE_BOUNCE_RING_ANGLES[`${side}:${playerPos}`];
+          if (angleDeg === undefined) continue;
+          const angleRad = (angleDeg * Math.PI) / 180;
+          const tieBreak = hashPlayer(id, 5) - 0.5; // +-0.5, same small stable per-player jitter as every other branch here
+          all.set(id, {
+            ...existing,
+            x: ballX + Math.cos(angleRad) * CENTRE_BOUNCE_RING_RADIUS + tieBreak * 4,
+            y: CENTER_Y + Math.sin(angleRad) * CENTRE_BOUNCE_RING_RADIUS + tieBreak * 4,
+          });
+        }
+      }
+    }
   }
 
   // BUG FIXED Aug 2026, round 3 (Tyler, live testing: "Ned Long and Nick

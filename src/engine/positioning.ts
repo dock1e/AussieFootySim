@@ -174,30 +174,89 @@ const POSITION_LANE: Partial<Record<Position, number>> = {
 /**
  * Which real flank (-1 left / +1 right / 0 centre-anchored) a SPECIFIC
  * occupant of `position` is actually on — the sign half of `homeAnchor`'s
- * lane, `POSITION_LANE` above being the magnitude half. Same PlayerID-order
- * convention `ground.ts`'s own `assignAnchors` and `involvement.ts`'s own
- * `laneFor` already use (lower PlayerID of the two real occupants reads
- * left, higher reads right) — a third independent copy rather than an
- * import, for the identical circular-import reason this file's top comment
- * already gives for not importing `ground.ts`, and `involvement.ts`'s own
- * `DUAL_LANE_POSITIONS` doc comment already gives for its own copy:
- * `involvement.ts` imports FROM this file (for `proximityFor`), so this file
- * importing `laneFor` back from `involvement.ts` would itself be circular.
- * `teamPositions` undefined (no roster context available) reads as centre
- * (0) — a plain, disclosed "no evidence, no guess" default, never actually
- * hit by any current call site (every one of them has a real
- * `MatchTeam.positions` map in scope to pass through).
+ * lane, `POSITION_LANE` above being the magnitude half. `teamPositions`
+ * undefined (no roster context available) reads as centre (0) — a plain,
+ * disclosed "no evidence, no guess" default, never actually hit by any
+ * current call site (every one of them has a real `MatchTeam.positions` map
+ * in scope to pass through).
+ *
+ * EXPORTED as of round 111 — `ground.ts`'s own `assignAnchors` and
+ * `involvement.ts`'s own `laneFor` used to keep independent copies of this
+ * exact logic (a deliberate, disclosed triplication at the time, to dodge a
+ * circular import — `ground.ts` and `match.ts` each need this module, so
+ * this module importing either of THEM back would be circular; but nothing
+ * stops the reverse: both of them already safely import `type`s from this
+ * file, so a plain value import of this one function is fine). Round 111
+ * collapsed all three into this single implementation instead of patching
+ * the same bug three times — see the BUG FIXED note below for what that bug
+ * was and why a shared implementation is now strictly safer than three
+ * independently-maintained copies of the fix.
+ *
+ * BUG FIXED round 111 (Tyler, live testing: "I noticed at the start of this
+ * game that Lipinski and Garcia from the northern wing moved to the southern
+ * wing"). The old version recomputed the sign FRESH on every single call, by
+ * sorting whoever currently occupies `position` in `teamPositions` by
+ * PlayerID and using array index — so a player who never moved and was never
+ * substituted could still see their OWN sign flip the instant a TEAMMATE
+ * sharing their dual-lane slot got interchanged, purely because the sorted
+ * pair's membership (and therefore its sort order) changed. Confirmed via a
+ * real simulated Collingwood v St Kilda match (`verify_round111_scratch.ts`):
+ * Lipinski, paired with Daicos at Collingwood's "W", held a stable sign for
+ * 100+ ticks, then flipped the moment Daicos was interchanged out for a
+ * bench player — Lipinski himself never left the ground or changed position.
+ *
+ * Fix: assign each player's sign ONCE — the first time they're ever
+ * evaluated at a dual-lane position — and remember it for the rest of the
+ * match, keyed off `teamPositions`'s own object identity via a `WeakMap`.
+ * `lineupToMatchTeam` builds one `Map` per team and `performInterchangeSwap`
+ * mutates it in place for the rest of that match (confirmed empirically:
+ * `team.positions` is the same object reference from kickoff to full-time),
+ * so this needs no new parameter threaded through every `homeAnchor`/
+ * `proximityFor`/`carrierPosition`/`laneFor`/`assignAnchors` call site, and a
+ * fresh match (a fresh `Map`) always starts with a fresh, empty cache — nothing
+ * to reset between matches, nothing that leaks across a season sim's many
+ * matches (an unreferenced team's cache entry is simply garbage-collected
+ * along with it). A first-time lookup prefers inheriting the OPPOSITE sign of
+ * whichever other real occupant of the same slot is already cached (the
+ * common case: a bench player taking over a vacated dual-lane slot
+ * mid-match, guaranteeing the incoming player never collides onto the same
+ * flank as their new slot-mate) — only falling back to the original ID-sort
+ * tie-break when NEITHER current occupant has been seen yet (true kickoff),
+ * which reproduces the pre-fix kickoff assignment exactly, so no existing
+ * kickoff formation changes. Once cached, a player's sign is never
+ * recomputed for the rest of this `teamPositions` object's lifetime —
+ * including after they themselves are substituted out, which is harmless
+ * since a benched player's position is never queried again.
  */
 const DUAL_LANE_POSITIONS: ReadonlySet<Position> = new Set(["BP", "HBF", "W", "HFF", "FP"]);
 
-function laneSignFor(playerId: number, position: Position | null | undefined, teamPositions: Map<number, Position> | undefined): -1 | 0 | 1 {
+const laneSignCache = new WeakMap<Map<number, Position>, Map<number, -1 | 1>>();
+
+export function laneSignFor(playerId: number, position: Position | null | undefined, teamPositions: Map<number, Position> | undefined): -1 | 0 | 1 {
   if (!position || !DUAL_LANE_POSITIONS.has(position) || !teamPositions) return 0;
-  const sameSlot = [...teamPositions.entries()]
-    .filter(([, pos]) => pos === position)
-    .map(([id]) => id)
-    .sort((a, b) => a - b);
-  const idx = sameSlot.indexOf(playerId);
-  return idx <= 0 ? -1 : 1;
+
+  let cache = laneSignCache.get(teamPositions);
+  if (!cache) {
+    cache = new Map();
+    laneSignCache.set(teamPositions, cache);
+  }
+  const cached = cache.get(playerId);
+  if (cached !== undefined) return cached;
+
+  const sameSlot = [...teamPositions.entries()].filter(([, pos]) => pos === position).map(([id]) => id);
+  const otherCachedId = sameSlot.find((id) => id !== playerId && cache!.has(id));
+  let sign: -1 | 1;
+  if (otherCachedId !== undefined) {
+    sign = cache.get(otherCachedId) === -1 ? 1 : -1; // opposite of the already-settled occupant — never collide onto the same flank
+  } else {
+    // Neither current occupant of this slot has been assigned a sign yet —
+    // true kickoff for this slot. Same ID-sort tie-break as before this fix,
+    // applied once and then cached, never recomputed again.
+    const sorted = [...sameSlot].sort((a, b) => a - b);
+    sign = sorted.indexOf(playerId) <= 0 ? -1 : 1;
+  }
+  cache.set(playerId, sign);
+  return sign;
 }
 
 /**

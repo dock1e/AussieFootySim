@@ -132,7 +132,7 @@ export function MatchPreparation({ homeTeam, awayTeam, onBack, onKickOff }: Matc
           <div className="font-display text-xl italic">Match Preparation</div>
           <div className="text-xs text-slate-400">
             {homeTeam.name} <span className="text-slate-600">vs</span> {awayTeam.name} &middot; set tactics, a
-            tagger, and a game style, or just kick off with the defaults.
+            tagger, and a game style, or just start with the defaults.
           </div>
         </div>
         <div className="flex gap-2">
@@ -140,7 +140,7 @@ export function MatchPreparation({ homeTeam, awayTeam, onBack, onKickOff }: Matc
             Back
           </button>
           <button onClick={kickOff} className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-dark">
-            Kick Off
+            First Bounce
           </button>
         </div>
       </div>

@@ -372,7 +372,7 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
 
         <div className="card text-sm text-slate-400">
           Pick two clubs and continue to Match Preparation to set tactics, a tagger, and a game
-          style (or just kick off with the defaults). {myClub} fields whatever's set on the
+          style (or just start with the defaults). {myClub} fields whatever's set on the
           Selection tab once it's a complete lineup; every other club fields the same real,
           suitability-aware auto-fill an AI club gets in season simulation. The match runs against
           a fresh random seed every time.
@@ -1147,7 +1147,7 @@ function PlayByPlay({ events }: { events: MatchResult["events"] }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-1.5 shrink-0 text-xs uppercase tracking-wide text-slate-400">Play by play</div>
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-1 overflow-y-auto text-sm">
-        {recent.length === 0 && <div className="text-slate-500">Kick-off coming up…</div>}
+        {recent.length === 0 && <div className="text-slate-500">First bounce coming up…</div>}
         {recent.map(({ ev, i }) => (
           <div key={i} className="flex gap-2 text-slate-300">
             <span className="w-10 shrink-0 tabular-nums text-slate-500">Q{ev.quarter}</span>

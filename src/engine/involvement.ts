@@ -16,6 +16,7 @@ import {
   handballRangeWeight,
   nearestCandidate,
   MAX_HANDBALL_DISTANCE,
+  laneSignFor,
   type AbstractPosition,
 } from "./positioning.ts";
 import type { AFLStadium } from "../data/stadiums.ts";
@@ -180,35 +181,27 @@ export function weightedPlayerChoice(rng: Rng, side: Side, team: MatchTeam, zone
 export type Lane = -1 | 0 | 1;
 
 /**
- * The five real positions with two on-field slots this match — mirrors
- * `ground.ts`'s own `POSITION_LANES` at gameplay-appropriate (not
- * pixel-perfect) granularity, kept as an independent, small definition here
- * rather than imported: `ground.ts` already imports `match.ts` (for the
- * `MatchEvent` type), and `match.ts` imports this file, so the reverse import
- * would be circular.
- */
-const DUAL_LANE_POSITIONS: ReadonlySet<Position> = new Set(["BP", "HBF", "W", "HFF", "FP"]);
-
-/**
  * Which side of the ground `playerId` is actually on, purely from real
  * assigned position data. Every centre-anchored position (FB/CHB/C/CHF/FF/R/
- * RR/ROV) is always lane 0. A dual-lane position splits its two real
- * occupants left(-1)/right(+1) by PlayerID order — the same convention
- * `ground.ts`'s own `assignAnchors` already uses to decide which literal dot
- * renders on which flank, arrived at independently here rather than shared,
- * for the circular-import reason above; both sides making the same
- * PlayerID-order call means the two can't visibly disagree even though
- * they're not the same function. No real position at all (fallback/`INT`)
- * reads as lane 0 — a neutral middle ground rather than a guess.
+ * RR/ROV) is always lane 0; a dual-lane position splits its two real
+ * occupants left(-1)/right(+1).
+ *
+ * Round 111 — this used to be an independent copy of `positioning.ts`'s own
+ * `laneSignFor` (a deliberate, disclosed triplication at the time, to dodge
+ * a circular import — `match.ts` imports this file, and `ground.ts` imports
+ * `match.ts`, so this file importing back from either would be circular).
+ * That reasoning never actually blocked importing `positioning.ts`
+ * specifically: this file already does, for `proximityFor`, with no cycle,
+ * so the "independent copy" was more caution than necessity. Now a thin
+ * delegate to the shared, round-111-fixed implementation — see that
+ * function's own doc comment for the real bug this fixed (a never-moved,
+ * never-substituted player's own lane sign flipping purely because a
+ * teammate sharing their dual-lane slot got interchanged) and why a single
+ * shared implementation is strictly safer than three copies that could
+ * silently drift apart.
  */
 export function laneFor(playerId: number, position: Position | null | undefined, teamPositions: Map<number, Position> | undefined): Lane {
-  if (!position || !DUAL_LANE_POSITIONS.has(position) || !teamPositions) return 0;
-  const sameSlot = [...teamPositions.entries()]
-    .filter(([, pos]) => pos === position)
-    .map(([id]) => id)
-    .sort((a, b) => a - b);
-  const idx = sameSlot.indexOf(playerId);
-  return idx <= 0 ? -1 : 1;
+  return laneSignFor(playerId, position, teamPositions);
 }
 
 const SAME_LANE_FACTOR = 1;

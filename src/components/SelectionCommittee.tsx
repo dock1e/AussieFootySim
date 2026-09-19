@@ -114,7 +114,7 @@ export function SelectionCommittee() {
         <div>
           <div className="font-display text-xl italic">{myClub} &mdash; Selection Committee</div>
           <div className="text-xs text-slate-400">
-            {filledCount}/{POSITIONS.length} slots filled {complete && <span className="text-accent-light">&middot; ready for kick-off</span>}
+            {filledCount}/{POSITIONS.length} slots filled {complete && <span className="text-accent-light">&middot; ready for first bounce</span>}
           </div>
         </div>
         <div className="ml-auto flex gap-2">

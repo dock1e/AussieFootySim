@@ -1,14 +1,7 @@
-# AussieFootySim — app
+# AussieFootySim
 
-The coded implementation of the design in the vault one level up (`../AussieFootySim.md`,
-`../Engine.md`, `../User Interface.md`, `../Configuration.md`, `../Player Database/`).
-See `../ROADMAP.md` for what's built vs. what's next.
-
-## Stack
-
-React + Vite + TypeScript + Tailwind + Zustand + Vitest — the exact combination decided
-in `../Configuration.md` ("Tech stack decision record") and `../Engine.md` ("Tech stack"),
-re-checked there against 2026 alternatives.
+A browser-based AFL club-management and match simulation game — pick your squad, set your
+tactics, and simulate a full season.
 
 ## Getting started
 
@@ -71,12 +64,14 @@ npm install
 This downloads everything the app depends on — it can take a minute or two, and a lot of
 text will scroll past. That's normal.
 
-### Step 5: Generate the player data
+### Step 5: Generate the game data
 
 ```bash
 npm run build:data
+npm run build:prospects
 ```
-This builds the 751-player roster the game uses from the underlying data file.
+The first builds the 751-player roster; the second builds the draft prospect pool the Draft
+screen needs. **Both are required** — the app won't start without them.
 
 ### Step 6: Start the app
 
@@ -109,15 +104,17 @@ npm run dev
   open a fresh one, and try again.
 - **"Cannot find module ..." or "no such file or directory"**: you're not in the right
   folder — redo Step 3 and confirm `dir`/`ls` shows `package.json` before running anything else.
+- **"Failed to resolve import ... generated/players.json" (or `.../realProspects.json`)**:
+  you skipped Step 5 — go back and run both `npm run build:data` and `npm run build:prospects`.
 - **The page won't load, or goes blank**: make sure the terminal from Step 6 is still open
   and running — closing it stops the app. Re-run `npm run dev` if needed.
 - **Nothing above helps**: open an "Issue" on the GitHub page
   (https://github.com/dock1e/AussieFootySim/issues) describing what you see — screenshots help.
 
-Re-run `npm run build:data` any time the underlying `players_master.csv` data changes — the
-generated JSON is gitignored on purpose (it's a build artifact, not a source file). If you
-want a production-style build instead of the dev server, `npm run build` type-checks and
-builds an optimized version into `dist/`.
+Re-run `npm run build:data` / `npm run build:prospects` any time their underlying source
+files change — both generated JSON files are gitignored on purpose (build artifacts, not
+source files). If you want a production-style build instead of the dev server, `npm run
+build` type-checks and builds an optimized version into `dist/`.
 
 ## Playing on Android
 
@@ -148,19 +145,18 @@ pkg update && pkg upgrade -y
 pkg install git nodejs python -y
 git clone https://github.com/dock1e/AussieFootySim.git
 cd AussieFootySim
-git pull
 ```
 
 ### Step 3: Build and run
 
 ```bash
 npm install
-npm run build
 npm run build:data
 npm run build:prospects
 npm run dev
 ```
-`npm install` takes a few minutes the first time — that's normal. When `npm run dev`
+`npm install` takes a few minutes the first time — that's normal. **All three steps above
+are required** — the app won't start without the two generated data files. When `npm run dev`
 finishes, it prints an address like:
 ```
 ➜  Local:   http://localhost:5173/
@@ -175,28 +171,19 @@ hidden), tap **CTRL** then **C**. Closing the Termux app also stops it.
 
 ```bash
 cd AussieFootySim
+git pull
 npm run dev
 ```
+`git pull` grabs any updates. If it downloads new changes, re-run `npm install` and the two
+`build:` commands from Step 3 as well, in case they changed too.
 
 ### Troubleshooting
 
 - **Nothing happens for a while right after opening Termux the first time**: normal — give it
   a few seconds to finish its own first-time setup.
+- **"Failed to resolve import ... generated/players.json" (or `.../realProspects.json`)**:
+  go back and run both `npm run build:data` and `npm run build:prospects`.
 - **An error mentions a missing module for a different platform (e.g. rollup/esbuild)**: run
   `rm -rf node_modules && npm install` and try again.
 - **Still stuck**: open an Issue at https://github.com/dock1e/AussieFootySim/issues
   describing what you see.
-
-## A note on how this was built
-
-Early on, this app was scaffolded and coded inside a sandboxed Cowork session whose network
-access is allowlisted and didn't include the npm registry — so for a while, the React/
-Tailwind/Vite/Zustand layer was written and carefully proofread by hand but genuinely
-untested against the real toolchain, while `src/engine/`, `src/types/`, and the data-pipeline
-scripts (which have zero npm dependencies by design — see Engine.md's "plain TypeScript
-module, zero DOM/browser dependencies" requirement) were the only parts actually run, via
-Node's built-in `--experimental-strip-types` flag.
-
-That's since been fully closed out: `npm install`, `npm run build` (type-check + production
-build), and `npm run dev` all run clean, and every round of work now gets `tsc`-verified plus
-a real browser check before it ships — see `../ROADMAP.md` for the full build history.

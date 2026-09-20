@@ -119,6 +119,74 @@ generated JSON is gitignored on purpose (it's a build artifact, not a source fil
 want a production-style build instead of the dev server, `npm run build` type-checks and
 builds an optimized version into `dist/`.
 
+## Playing on Android
+
+You can run AussieFootySim on an Android phone or tablet using Termux, a terminal app — no
+computer needed. (Android only; there's no equivalent on iPhone/iPad.) Takes about 15 minutes
+the first time.
+
+### Step 1: Install Termux
+
+The Google Play Store version of Termux is outdated and broken — install it from **F-Droid**
+instead:
+
+1. Install F-Droid (an alternative app store) from https://f-droid.org/ — download the APK
+   and open it, then allow the install when Android warns about apps from outside the Play
+   Store.
+2. Open F-Droid, search for **Termux**, and install it. (Direct link:
+   https://f-droid.org/en/packages/com.termux/)
+3. Open Termux. You'll see a plain black screen with a blinking cursor — that's the terminal,
+   ready for typing.
+
+### Step 2: Set up and download the code
+
+Type each line below into Termux and press Enter, one at a time. If anything asks you to
+confirm (a `Y/n` prompt, or which version of a file to keep), type **Y** and press Enter.
+
+```bash
+pkg update && pkg upgrade -y
+pkg install git nodejs python -y
+git clone https://github.com/dock1e/AussieFootySim.git
+cd AussieFootySim
+git pull
+```
+
+### Step 3: Build and run
+
+```bash
+npm install
+npm run build
+npm run build:data
+npm run build:prospects
+npm run dev
+```
+`npm install` takes a few minutes the first time — that's normal. When `npm run dev`
+finishes, it prints an address like:
+```
+➜  Local:   http://localhost:5173/
+```
+Open that address in your phone's browser (Chrome, Firefox, etc.) and the game loads, the
+same as on desktop.
+
+To stop it: switch to Termux, open the extra-keys row above the keyboard (swipe up if it's
+hidden), tap **CTRL** then **C**. Closing the Termux app also stops it.
+
+### Playing again later
+
+```bash
+cd AussieFootySim
+npm run dev
+```
+
+### Troubleshooting
+
+- **Nothing happens for a while right after opening Termux the first time**: normal — give it
+  a few seconds to finish its own first-time setup.
+- **An error mentions a missing module for a different platform (e.g. rollup/esbuild)**: run
+  `rm -rf node_modules && npm install` and try again.
+- **Still stuck**: open an Issue at https://github.com/dock1e/AussieFootySim/issues
+  describing what you see.
+
 ## A note on how this was built
 
 Early on, this app was scaffolded and coded inside a sandboxed Cowork session whose network

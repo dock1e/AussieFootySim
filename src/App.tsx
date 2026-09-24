@@ -12,12 +12,30 @@ import { Draft } from "./components/Draft";
 import { PositionSwitch } from "./components/PositionSwitch";
 import { Records } from "./components/Records";
 import { PlayerProfileModal } from "./components/PlayerProfileModal";
+import { ThemeSystemScreen } from "./components/ThemeSystemScreen";
+import { ClubStripe } from "./components/theme/primitives";
+import { clubTokensFor } from "./theme/clubTokens";
+import { clubThemeStyle, pageBackgroundStyle } from "./theme/useClubTheme";
 import { useGameStore } from "./store/useGameStore";
 import { useSeasonStore } from "./store/useSeasonStore";
 import { useSaveStore } from "./store/useSaveStore";
 import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
+import { clubByName } from "./types/club";
 
-type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "combine" | "contracts" | "trade" | "draft" | "positionSwitch" | "records";
+type Screen =
+  | "dashboard"
+  | "squad"
+  | "selection"
+  | "season"
+  | "match"
+  | "listNeeds"
+  | "combine"
+  | "contracts"
+  | "trade"
+  | "draft"
+  | "positionSwitch"
+  | "records"
+  | "themeSystem";
 
 /**
  * Nav consolidation — Aug 2026 round 52, [[UI Consolidation Review]]. Tyler:
@@ -43,6 +61,14 @@ type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNe
  * Season page" link is how you still reach this standalone screen for the
  * deeper multi-round read the embedded card doesn't try to replace.
  */
+/**
+ * Round 114 — Club Theme System: `themeSystem` is the brief's screen 8, "a
+ * dev/QA screen… keep it in dev builds." `import.meta.env.DEV` is Vite's own
+ * build-mode flag (true for `npm run dev`, false for `npm run build`'s
+ * production bundle), so this group — and the only route to the screen —
+ * simply doesn't exist in what ships to GitHub Pages, with no separate
+ * feature-flag plumbing needed.
+ */
 const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "dashboard", label: "Dashboard", screens: ["dashboard"] },
   { key: "matchDay", label: "Match Day", screens: ["match"] },
@@ -50,6 +76,7 @@ const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
   { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts"] },
   { key: "records", label: "Statistics", screens: ["records"] },
+  ...(import.meta.env.DEV ? [{ key: "themeSystem", label: "Theme System", screens: ["themeSystem"] as Screen[] }] : []),
 ];
 
 const SCREEN_LABELS: Record<Screen, string> = {
@@ -69,6 +96,7 @@ const SCREEN_LABELS: Record<Screen, string> = {
   draft: "Draft",
   positionSwitch: "Position Switch",
   records: "Statistics",
+  themeSystem: "Theme System",
 };
 
 export default function App() {
@@ -104,6 +132,14 @@ export default function App() {
   const [matchCockpitActive, setMatchCockpitActive] = useState(false);
   const isCockpitScreen = screen === "draft" || (screen === "match" && matchCockpitActive);
   const myClub = useGameStore((s) => s.myClub);
+  // Round 114 — Club Theme System: the 5 CSS custom properties every themed
+  // component/screen reads via `var(--…)`, set once here from the coached
+  // club's `abbreviation` (confirmed identical to the brief's token-table
+  // ids) and applied to the whole app via the root `<div>`'s style below.
+  // Screens not yet migrated to the token system (everything except the
+  // Theme System QA screen, this round) simply don't reference these vars
+  // yet, so this is additive and changes nothing about how they render.
+  const clubTokens = clubTokensFor(clubByName(myClub)?.abbreviation);
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
   // Re-reading getPlayersByClub whenever the live pool is swapped wholesale
@@ -135,9 +171,21 @@ export default function App() {
   }
 
   return (
+    // Round 114 — Club Theme System: `clubThemeStyle` sets the 5 CSS custom
+    // properties + tint vars app-wide from here down; `pageBackgroundStyle`'s
+    // subtle low-tint background (~8% at the default 14% card tint) is close
+    // enough to the existing fixed `#0a0e14`-ish Tailwind background that it
+    // doesn't visually clash with the screens below that haven't been
+    // migrated to the token system yet — see clubTokens.ts's own doc comment
+    // for why the two colour systems coexist this round.
     <div
-      className={`mx-auto min-h-screen max-w-6xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-screen lg:max-w-none lg:flex-col lg:overflow-hidden lg:py-4" : ""}`}
+      style={{ ...clubThemeStyle(clubTokens), ...pageBackgroundStyle() }}
+      className={isCockpitScreen ? "lg:flex lg:h-screen lg:flex-col lg:overflow-hidden" : ""}
     >
+      <ClubStripe />
+      <div
+        className={`mx-auto max-w-6xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-full lg:max-w-none lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-hidden lg:py-4" : ""}`}
+      >
       <header className={`mb-6 ${isCockpitScreen ? "lg:mb-3 lg:shrink-0" : ""}`}>
         {/* Logo + SaveMenu get their own row, deliberately separate from nav
             below — see the regression this fixed: with both in one
@@ -217,8 +265,10 @@ export default function App() {
         {screen === "draft" && <Draft />}
         {screen === "positionSwitch" && <PositionSwitch />}
         {screen === "records" && <Records />}
+        {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />
+      </div>
     </div>
   );
 }

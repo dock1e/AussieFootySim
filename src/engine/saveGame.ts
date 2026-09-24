@@ -264,6 +264,18 @@ export interface SaveGameData {
    * recorded yet," not a fabricated backfill).
    */
   clubHistory: Record<number, ClubHistoryEntry[]>;
+  /**
+   * Round 115, [[Club Theme System]] Dashboard rebuild — the coach's own "pin to watchlist" list,
+   * up to 5 PlayerIDs, in pin order. Pinned players get priority in the new Dashboard's Record Watch
+   * feed and get their own rows on Statistics (per the cowork brief's cross-screen-links section) —
+   * this round only wires the pin itself and its Dashboard display; the Statistics-tab row and
+   * Record-Watch-ranking boost are follow-up work for that screen's own migration round. Added
+   * without bumping `SAVE_SCHEMA_VERSION`, same convention as every field above: a pre-round-115 save
+   * just has no pins yet, which `deserializeSave` below defaults to `[]`. Multi-year state, NOT reset
+   * by `runOffSeasonOnSave`, same reasoning as `talentScout`/`lineCoaches`/`clubHistory` — a pin is a
+   * standing coach preference, not something that expires every season.
+   */
+  watchlist: number[];
 }
 
 /** See `SaveGameData.talentScout`'s own doc comment. */
@@ -294,6 +306,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     lineCoaches: {},
     developmentCoach: null,
     clubHistory: {},
+    watchlist: [],
   };
 }
 
@@ -437,6 +450,8 @@ export interface SerializedSaveGame {
   developmentCoach: number | null;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `developmentCoach`. See `SaveGameData.clubHistory`'s own doc comment. */
   clubHistory: Record<number, ClubHistoryEntry[]>;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `clubHistory`. See `SaveGameData.watchlist`'s own doc comment. */
+  watchlist: number[];
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -471,6 +486,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     lineCoaches: save.lineCoaches,
     developmentCoach: save.developmentCoach,
     clubHistory: save.clubHistory,
+    watchlist: save.watchlist,
   };
 }
 
@@ -519,5 +535,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     lineCoaches: s.lineCoaches ?? {},
     developmentCoach: s.developmentCoach ?? null,
     clubHistory: s.clubHistory ?? {},
+    watchlist: s.watchlist ?? [],
   };
 }

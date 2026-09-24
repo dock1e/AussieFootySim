@@ -73,6 +73,8 @@ interface SaveStoreState {
   developmentCoach: number | null;
   /** Round 94 — [[Season Grading, Post-Season Awards, and Player History]]'s sim-side club/trade/draft history log. Same "doesn't belong to any single sub-store, persists across seasons" reasoning as `draftPickInventory`/`talentScout`/`lineCoaches`/`developmentCoach` above — see `SaveGameData.clubHistory`'s own doc comment. */
   clubHistory: Record<number, ClubHistoryEntry[]>;
+  /** Round 115 — [[Club Theme System]] Dashboard rebuild. Same "doesn't belong to any single sub-store, persists across seasons" reasoning as `talentScout`/`lineCoaches`/`developmentCoach`/`clubHistory` above — see `SaveGameData.watchlist`'s own doc comment. Up to 5 PlayerIDs, in pin order. */
+  watchlist: number[];
 
   /** Loads the current save from IndexedDB if one exists and hydrates every other store from it; otherwise leaves everything at its already-correct fresh-game defaults. Call once, on app boot, before rendering the main UI. */
   initialize: () => Promise<void>;
@@ -181,6 +183,11 @@ interface SaveStoreState {
 
   /** Assigns (or clears, with `null`) the club's Development coach. */
   assignDevelopmentCoach: (coachId: number | null) => void;
+
+  // --- Club Theme System Dashboard rebuild: Watchlist (round 115) ---------
+
+  /** Pins `playerId` if not already pinned and there's room (max 5); unpins it if already pinned. No-op past the cap — silently ignored, matching this codebase's clamp-don't-throw convention. */
+  togglePin: (playerId: number) => void;
 }
 
 /**
@@ -319,6 +326,7 @@ function snapshotSave(
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>,
   developmentCoach: number | null,
   clubHistory: Record<number, ClubHistoryEntry[]>,
+  watchlist: number[],
 ): SaveGameData {
   return {
     schemaVersion: SAVE_SCHEMA_VERSION,
@@ -340,6 +348,7 @@ function snapshotSave(
     lineCoaches,
     developmentCoach,
     clubHistory,
+    watchlist,
   };
 }
 
@@ -384,6 +393,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   lineCoaches: {},
   developmentCoach: null,
   clubHistory: {},
+  watchlist: [],
 
   initialize: async () => {
     let loaded: SaveGameData | null = null;
@@ -405,9 +415,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       // enough (nothing has changed since the load, so what's on disk still
       // matches this state) and avoids needing to persist a real timestamp
       // inside SaveGameData just for a UI label.
-      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches, developmentCoach: loaded.developmentCoach, clubHistory: loaded.clubHistory });
+      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches, developmentCoach: loaded.developmentCoach, clubHistory: loaded.clubHistory, watchlist: loaded.watchlist });
     } else {
-      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {}, developmentCoach: null, clubHistory: {} });
+      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {}, developmentCoach: null, clubHistory: {}, watchlist: [] });
     }
 
     if (!subscribed) {
@@ -424,7 +434,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   saveNow: async () => {
-    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory);
+    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist);
     await writeSaveToDB(serializeSave(save));
     set({ hasSave: true, lastSavedAt: Date.now() });
   },
@@ -433,13 +443,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     resetPoolToGenerated();
     const save = newSaveGame(myClub, ALL_PLAYERS);
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory, watchlist: save.watchlist });
     await clearSaveInDB();
     await get().saveNow();
   },
 
   runOffSeason: async () => {
-    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory);
+    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist);
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
     useSeasonStore.getState().clearSeason();
@@ -447,16 +457,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
     useDraftStore.getState().clearWindow();
-    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches, developmentCoach: next.developmentCoach, clubHistory: next.clubHistory });
+    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches, developmentCoach: next.developmentCoach, clubHistory: next.clubHistory, watchlist: next.watchlist });
     await get().saveNow();
   },
 
-  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory)), null, 2),
+  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist)), null, 2),
 
   importJSON: async (text) => {
     const save = deserializeSave(JSON.parse(text));
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory, watchlist: save.watchlist });
     await get().saveNow();
   },
 
@@ -826,6 +836,18 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
   assignDevelopmentCoach: (coachId) => {
     set({ developmentCoach: coachId });
+    void get().saveNow();
+  },
+
+  togglePin: (playerId) => {
+    const current = get().watchlist;
+    const next = current.includes(playerId)
+      ? current.filter((id) => id !== playerId)
+      : current.length >= 5
+        ? current // at cap — silently ignored, matching this codebase's clamp-don't-throw convention
+        : [...current, playerId];
+    if (next === current) return;
+    set({ watchlist: next });
     void get().saveNow();
   },
 }));

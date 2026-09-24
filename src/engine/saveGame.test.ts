@@ -207,6 +207,9 @@ describe("serializeSave / deserializeSave", () => {
       // history log entry (not {}), same "prove JSON round-tripping" ethos as `talentScout`/
       // `lineCoaches`/`developmentCoach` above — plain data, no Map/Set involved.
       clubHistory: { 1: [{ year: 2025, club: "Adelaide", eventType: "drafted", detail: "Drafted by Adelaide with National Draft pick #5." }] },
+      // Round 115, [[Club Theme System]] Dashboard rebuild. A real, non-empty pin list (not []),
+      // same "prove JSON round-tripping" ethos as `clubHistory`/`developmentCoach` above.
+      watchlist: [1, 2],
     };
   }
 

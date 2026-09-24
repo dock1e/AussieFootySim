@@ -2,6 +2,7 @@ import type { BoxScoreLine, MatchEvent } from "./match.ts";
 import type { AFLStadium } from "../data/stadiums.ts";
 import { fantasyPointsFor, fantasyPointsForStat, FANTASY_POINT_WEIGHTS } from "./ratings.ts";
 import { realMetresFor, type AbstractPosition } from "./positioning.ts";
+import { MEANING_TOKENS } from "../theme/clubTokens.ts";
 
 /**
  * Sep 2026 round 112 — [[Match Day Fantasy Layer]]. The brief's "one module, one source of truth":
@@ -11,25 +12,53 @@ import { realMetresFor, type AbstractPosition } from "./positioning.ts";
  * this file's own comments cover the mechanics, that note covers the "why this and not something else".
  */
 
-/** The ribbon/board/drawer's exact palette, [[Match Day Fantasy Layer]] — do not drift from these literal values. Lives here (not in `LiveMatch.tsx`) so `PlayerMatchDrawer.tsx`'s nerd layer can share it without one component importing from another. */
+/**
+ * The ribbon/board/drawer's shared palette. Lives here (not in `LiveMatch.tsx`) so `PlayerMatchDrawer.tsx`'s
+ * nerd layer and `GroundView.tsx`'s hover tooltip can share it without one component importing from
+ * another — all three are downstream of one Match Day screen, per the [[Club Theme System]] brief.
+ *
+ * Round 116 — [[Club Theme System]] Match Day rebuild: this was a fixed, club-agnostic purple accent
+ * (`#7c5cf0`) — every one of round 112/113's own screenshots showed the SAME violet regardless of which
+ * club Tyler was coaching, which is exactly what the brief's rule 2 ("changing clubs means swapping
+ * tokens") and rule 4 ("--acc means yours") forbid. Re-derived from the round-114 CSS custom properties
+ * instead: surfaces use the brief's own Card tint recipe (section 2.3), the accent-bearing fields resolve
+ * to `var(--acc)`/`var(--accT)`/`var(--acc2)` so this screen re-themes with every other one, and
+ * `gain`/`loss`/`goal` are pulled from `MEANING_TOKENS` (rule 5: rises/falls/warnings never depend on club
+ * colour) rather than restating slightly-off literals of their own (the old `#4fbf87`/`#d9695f` were close
+ * to but NOT the brief's exact `#4fd69a`/`#ffa37a` — real drift this round corrects, not a stylistic
+ * choice). `pageBg`/`headerBg`/`columnHeaderBg` share one Card-tint value (the brief has no separate
+ * "header strip" surface — Match Day's ribbon/board/danger-men panels are each one Card); `rowBg`/
+ * `altRowBg` are transparent (the brief has no zebra-striping — only a row divider and the selected/
+ * hover states below carry a background), left named/distinct so `LiveMatch.tsx`/`PlayerMatchDrawer.tsx`
+ * don't need call-site changes.
+ */
 export const FANTASY_COLOR = {
-  pageBg: "#0a0e17",
-  headerBg: "#0d121d",
-  rowBg: "#101725",
-  altRowBg: "#0f1622",
-  columnHeaderBg: "#0b1018",
+  pageBg: "color-mix(in oklch, var(--deep) var(--tc), #10151f)",
+  headerBg: "color-mix(in oklch, var(--deep) var(--tc), #10151f)",
+  rowBg: "transparent",
+  altRowBg: "transparent",
+  columnHeaderBg: "color-mix(in oklch, var(--deep) var(--tc), #10151f)",
   inkPrimary: "#eef2f8",
   inkSecondary: "#c3ccdd",
-  inkTertiary: "#8b96ad",
-  inkLabel: "#6f7c93",
-  accentLine: "#7c5cf0",
-  accentLit: "#9a80ff",
-  accentSegment: "#b9a6ff",
-  gain: "#4fbf87",
-  loss: "#d9695f",
-  goal: "#f0c04a",
-  hairline: "rgba(255,255,255,.06)",
+  inkTertiary: "#aab3c3",
+  inkLabel: "#9aa4b5",
+  /** Ghost/base curve stroke — brief's own literal ribbon-curve value (`Club Theme System.dc.html`'s polyline style). */
+  accentLine: "color-mix(in oklch, var(--acc2) 70%, #10151f)",
+  /** A fill (progress/benchmark bars) — rule 7: "--acc for fills". */
+  accentLit: "var(--acc)",
+  /** A stroke/highlight on a dark surface (the ribbon's recent-curve segment) — rule 7: "--accT for text or strokes on dark". */
+  accentSegment: "var(--accT)",
+  gain: MEANING_TOKENS.rise,
+  loss: MEANING_TOKENS.fall,
+  goal: MEANING_TOKENS.warn,
+  hairline: "rgba(255,255,255,.05)",
 } as const;
+
+/** Selected-row treatment, brief section 2.3: "color-mix(in oklch, var(--acc) 18%, transparent) + box-shadow: inset 3px 0 0 var(--acc)". */
+export const SELECTED_ROW_BG = "color-mix(in oklch, var(--acc) 18%, transparent)";
+export const SELECTED_ROW_SHADOW = "inset 3px 0 0 var(--acc)";
+/** Hover is the same recipe at roughly half strength — not itself brief-specified (hover has no named surface), but built from the same one token rather than a second unrelated colour. */
+export const HOVER_ROW_BG = "color-mix(in oklch, var(--acc) 10%, transparent)";
 
 // ---------------------------------------------------------------------------
 // Tick <-> minute conversion. This engine has never modelled a tick's real-world duration (see

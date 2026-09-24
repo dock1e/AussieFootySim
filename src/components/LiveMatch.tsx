@@ -34,6 +34,9 @@ import {
   curveGeometryFor,
   ribbonWindowTicks,
   FANTASY_COLOR,
+  SELECTED_ROW_BG,
+  SELECTED_ROW_SHADOW,
+  HOVER_ROW_BG,
   type PlayerMatchFantasyMetrics,
 } from "../engine/fantasyEngine";
 import { groundForMatch } from "../data/clubGrounds";
@@ -48,6 +51,7 @@ import { FullTimeResult } from "./FullTimeResult";
 import { MatchPreparation } from "./MatchPreparation";
 import { QuarterTimeDecisionRoom } from "./QuarterTimeDecisionRoom";
 import { ClubBadgeByName } from "./ClubBadge";
+import { ScopedClub } from "./theme/ScopedClub";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8, 16];
@@ -454,6 +458,7 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
       <ScoreboardBand
         homeTeam={homeTeam}
         awayTeam={awayTeam}
+        yourSide={yourSide}
         playback={playback}
         ticksPerQuarter={result.ticksPerQuarter}
         quarterPoints={quarterlyPoints(revealedResult, homeIds, awayIds)}
@@ -543,6 +548,7 @@ export function LiveMatch({ onCockpitActiveChange }: { onCockpitActiveChange?: (
                 onHoverPlayer={setHoveredPlayerId}
                 fantasyMetrics={fantasyMetrics}
                 ticksPerQuarter={result.ticksPerQuarter}
+                yourSide={yourSide}
               />
             </div>
             {/* Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: was 150px; the two
@@ -730,8 +736,11 @@ function MomentumRibbon({
             onClick={() => setScope(value)}
             className="rounded px-1.5 text-[9px] font-medium uppercase tracking-wide"
             style={{
-              color: scope === value ? FANTASY_COLOR.inkPrimary : FANTASY_COLOR.inkLabel,
-              background: scope === value ? "rgba(124,92,240,0.25)" : "transparent",
+              // Round 116 — [[Club Theme System]] Match Day rebuild: was a fixed purple regardless of
+              // club; the brief's own Segmented control (section 2.6) fills the active option with
+              // `--acc`/`--on`, same as every other segmented control this project now themes.
+              color: scope === value ? "var(--on)" : FANTASY_COLOR.inkLabel,
+              background: scope === value ? "var(--acc)" : "transparent",
             }}
           >
             {label}
@@ -773,7 +782,10 @@ function MomentumRibbon({
                 height: RIBBON_ROW_HEIGHT,
                 gridTemplateColumns: RIBBON_GRID_COLUMNS,
                 gap: 6,
-                background: isHovered ? "rgba(124,92,240,0.12)" : rank % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg,
+                // Round 116 — [[Club Theme System]]: was a fixed purple; both row surfaces are now
+                // transparent (the brief has no zebra-striping for this ribbon), so hover is the
+                // only background state, built from the shared HOVER_ROW_BG token.
+                background: isHovered ? HOVER_ROW_BG : FANTASY_COLOR.rowBg,
                 borderTop: `1px solid ${FANTASY_COLOR.hairline}`,
                 transition: "top 180ms ease, opacity 180ms ease",
               }}
@@ -873,9 +885,44 @@ function FpCurveSvg({ geometry }: { geometry: import("../engine/fantasyEngine").
  * confirmed fresh from `match.ts`'s `DEFAULT_TICKS_PER_QUARTER` — Tyler's
  * own "672" example was illustrative of the UI shape, not a literal figure).
  */
+/**
+ * Round 116 — [[Club Theme System]] Match Day rebuild: the brief's 48×48 monogram square (section
+ * 4.2's scoreboard markup) replaces `ClubBadgeByName`'s pill everywhere on this band. "Yours" reads
+ * `var(--deep)`/`var(--acc)`/`var(--accT)` directly off the app-wide theme (rule 4: "--acc means
+ * yours"); the opponent gets the brief's light `#f2f4f8` chip with a `var(--deep)` ring, scoped to
+ * their own tokens via `ScopedClub` (rule 6) so their `--deep` doesn't leak onto the rest of the page.
+ */
+function TeamMonogram({ name, isYours }: { name: string; isYours: boolean }) {
+  const club = clubByName(name);
+  const abbr = club?.abbreviation ?? name.slice(0, 3).toUpperCase();
+  if (isYours) {
+    return (
+      <div
+        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg text-sm font-bold tracking-wide"
+        style={{ background: "var(--deep)", border: "1px solid color-mix(in oklch, var(--acc) 55%, transparent)", color: "var(--accT)" }}
+        title={name}
+      >
+        {abbr}
+      </div>
+    );
+  }
+  return (
+    <ScopedClub abbreviation={club?.abbreviation}>
+      <div
+        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg text-sm font-bold tracking-wide"
+        style={{ background: "#f2f4f8", border: "2px solid var(--deep)", color: "#12161c" }}
+        title={name}
+      >
+        {abbr}
+      </div>
+    </ScopedClub>
+  );
+}
+
 function ScoreboardBand({
   homeTeam,
   awayTeam,
+  yourSide,
   playback,
   ticksPerQuarter,
   quarterPoints,
@@ -887,6 +934,7 @@ function ScoreboardBand({
 }: {
   homeTeam: MatchTeam;
   awayTeam: MatchTeam;
+  yourSide: Side;
   playback: MatchPlayback;
   ticksPerQuarter: number;
   quarterPoints: QuarterPoints[];
@@ -917,9 +965,17 @@ function ScoreboardBand({
   const displayQuarterPoints = quarterPoints.map((q) => (quarter && q.quarter <= quarter ? q : { ...q, homePoints: 0, awayPoints: 0, margin: 0 }));
 
   return (
-    <div className="card flex flex-wrap items-center gap-3 lg:h-[78px] lg:shrink-0 lg:flex-nowrap lg:py-0">
+    <div
+      className="card flex flex-wrap items-center gap-3 lg:h-[78px] lg:shrink-0 lg:flex-nowrap lg:py-0"
+      // Round 116 — [[Club Theme System]]: brief's scoreboard hero-tint recipe (section 4.2), same
+      // Card-tint math the Dashboard's hero cards already use.
+      style={{
+        background: "color-mix(in oklch, var(--deep) calc(var(--tc) * 2.2), #10151f)",
+        border: "1px solid color-mix(in oklch, var(--acc) 22%, rgba(255,255,255,.07))",
+      }}
+    >
       <div className="flex items-center gap-2 text-left">
-        <ClubBadgeByName name={homeTeam.name} size="lg" />
+        <TeamMonogram name={homeTeam.name} isYours={yourSide === "home"} />
         <div>
           <div className="max-w-[120px] truncate text-xs text-slate-400">{homeTeam.name}</div>
           <div className="font-display text-[40px] font-bold leading-none tabular-nums">{playback.liveScore.homePoints}</div>
@@ -936,7 +992,8 @@ function ScoreboardBand({
           {quarter && <span className="font-normal normal-case text-slate-500">· {ticksRemaining} ticks left</span>}
         </div>
         <div className="h-1.5 w-full max-w-[220px] overflow-hidden rounded-full bg-base-700">
-          <div className="h-full bg-primary" style={{ width: `${totalTicks ? (currentTick / totalTicks) * 100 : 0}%` }} />
+          {/* Round 116 — [[Club Theme System]]: fills use var(--acc) (rule 7), not the old fixed `bg-primary`. */}
+          <div className="h-full" style={{ background: "var(--acc)", width: `${totalTicks ? (currentTick / totalTicks) * 100 : 0}%` }} />
         </div>
         <div className="font-mono text-[10px] text-slate-500">
           TICK {currentTick}/{totalTicks}
@@ -951,7 +1008,7 @@ function ScoreboardBand({
             {playback.liveScore.awayGoals}.{playback.liveScore.awayBehinds}
           </div>
         </div>
-        <ClubBadgeByName name={awayTeam.name} size="lg" />
+        <TeamMonogram name={awayTeam.name} isYours={yourSide === "away"} />
       </div>
 
       <div className="hidden items-center gap-3 border-l border-base-700 pl-3 lg:flex">
@@ -1210,7 +1267,9 @@ function LiveBoard({
                 setTiebreak(null);
               }}
               className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
-              style={{ color: columnSet === key ? FANTASY_COLOR.inkPrimary : FANTASY_COLOR.inkLabel, background: columnSet === key ? "rgba(124,92,240,0.3)" : "transparent" }}
+              // Round 116 — [[Club Theme System]]: Segmented-control recipe (section 2.6) —
+              // active = var(--acc) fill / var(--on) text, same as MomentumRibbon's scope filter.
+              style={{ color: columnSet === key ? "var(--on)" : FANTASY_COLOR.inkLabel, background: columnSet === key ? "var(--acc)" : "transparent" }}
             >
               {label}
             </button>
@@ -1254,7 +1313,11 @@ function LiveBoard({
                   onMouseLeave={() => onHoverPlayer(null)}
                   className="cursor-pointer tabular-nums"
                   style={{
-                    background: isSelected ? "rgba(124,92,240,0.22)" : isHovered ? "rgba(124,92,240,0.12)" : row.isBench ? FANTASY_COLOR.columnHeaderBg : i % 2 ? FANTASY_COLOR.altRowBg : FANTASY_COLOR.rowBg,
+                    // Round 116 — [[Club Theme System]]: selected/hover recipe (section 2.3) —
+                    // color-mix(in oklch, var(--acc) 18%, transparent) + inset 3px --acc shadow for
+                    // selected, half-strength for hover, both from the shared fantasyEngine tokens.
+                    background: isSelected ? SELECTED_ROW_BG : isHovered ? HOVER_ROW_BG : row.isBench ? FANTASY_COLOR.columnHeaderBg : FANTASY_COLOR.rowBg,
+                    boxShadow: isSelected ? SELECTED_ROW_SHADOW : undefined,
                     borderTop: row.isBench && !rows[i - 1]?.isBench ? `1px solid ${FANTASY_COLOR.hairline}` : undefined,
                   }}
                 >
@@ -1309,9 +1372,10 @@ function DangerMen({
 
   return (
     <div className="card">
-      <div className="mb-2 flex items-center gap-1.5 text-xs uppercase tracking-wide text-slate-400">
-        <ClubBadgeByName name={team.name} size="sm" />
-        Their danger men
+      {/* Round 116 — [[Club Theme System]]: brief's literal DangerMen header (section 4.2) is plain
+          text, no badge — "{{ opp.id }} · THEIR DANGER MEN" — so the old ClubBadgeByName drops here. */}
+      <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
+        {team.name} · Their danger men
       </div>
       <div className="space-y-1.5">
         {rows.map(({ player, sc }) => (
@@ -1376,9 +1440,12 @@ function TeamStatBars({
                 <span className="capitalize text-slate-500">{key}</span>
                 <span>{other[key]}</span>
               </div>
+              {/* Round 116 — [[Club Theme System]] rule 4 ("--acc means yours") + rule 6 ("other
+                  clubs appear only as chips"): the opponent's segment of a shared stat bar is a
+                  plain neutral tone, not a second arbitrary club colour like the old `bg-info`. */}
               <div className="flex h-1.5 overflow-hidden rounded-full bg-base-700">
-                <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
-                <div className="h-full bg-info" style={{ width: `${100 - pct}%` }} />
+                <div className="h-full" style={{ background: "var(--acc)", width: `${pct}%` }} />
+                <div className="h-full" style={{ background: "rgba(255,255,255,.18)", width: `${100 - pct}%` }} />
               </div>
             </div>
           );

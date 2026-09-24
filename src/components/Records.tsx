@@ -10,6 +10,7 @@ import { gameHighsFor } from "../data/afltablesGameHighs";
 import { ALL_LEAGUE_STATS } from "../engine/seasonSummary";
 import { ARCHETYPES, type Archetype } from "../types/archetype";
 import { CLUBS } from "../types/club";
+import { MEANING_TOKENS } from "../theme/clubTokens";
 
 /**
  * The Statistics tab (renamed from "Records" this round) — Aug 2026. Originally built for two
@@ -105,6 +106,25 @@ import { CLUBS } from "../types/club";
  * top 5 there. And: "increase the number of write ups... from 16 to ~40" — `engine/records.ts`'s
  * `SEASON_WRITEUP_TEMPLATES` pool is now 40 (and picked up a genuine grammar-bug fix for the rank-1
  * case along the way — see that file's own doc comment).
+ *
+ * **Round 120** — [[Club Theme System]] re-theme. Every interactive "selected/active" surface (group
+ * pills, All-Time category pills, the All-Time/This-Season mode toggle, the This-Season table's active
+ * sort column, the "AFS"/"AussieFootySim record" tags) moves from the app's flat global `accent`
+ * Tailwind token to `var(--acc)`/`var(--accT)`/`var(--on)`, so it reads as this club's colour rather
+ * than a fixed orange — same "accent means yours" rule 2 every other re-themed screen already follows.
+ * The gold/silver/bronze All-Time tiering (`tierRowClasses`/`tierRankClasses`) moves from literal
+ * Tailwind `amber-400`/`slate-300`/`orange-700` to `MEANING_TOKENS.gold`/`.silver`/`.bronze` — brief
+ * rule 5 ("meaning never depends on club colour"), and those exact 3 tokens already exist in
+ * `theme/clubTokens.ts` for precisely this. The "Active" real-player badge moves from a literal
+ * `emerald` to `MEANING_TOKENS.rise` for the same reason. No mechanic, filter, sort, or data-source
+ * logic changes — this file's real work (the real+sim merge, the This-Season sortable multi-column
+ * table, Single-Game Highs, the 5-group taxonomy) is untouched. One disclosed gap, not built this
+ * round: the brief's own `isStats` markup expects a "pinned players get their own rows, ranked among
+ * all players" section at the top of this screen (cross-referenced from the Dashboard brief's own
+ * watchlist note) — no such per-pinned-player-rank lookup exists anywhere in this codebase yet
+ * (`engine/dashboardInsights.ts`'s Record Watch feed ranks by significance across the WHOLE league, not
+ * a specific pinned player's own rank in the CURRENTLY SELECTED stat/category/mode), and building it is
+ * real new engine work, not a re-theme — flagged as a follow-up rather than faked with a placeholder.
  */
 
 type StatGroup = "General" | "Disposal Leaders" | "Scoring Leaders" | "Stoppage Kings" | "Defensive Leaders";
@@ -239,19 +259,34 @@ function simContributionCaption(row: RecordRow): string | null {
 /**
  * Round 62 — gold #1 / silver #2-3 / bronze #4-5, replacing the old uniform accent highlight.
  * All-Time Career mode only (see this file's own doc comment for why This Season's new sortable
- * table drops the fixed-rank highlight concept entirely).
+ * table drops the fixed-rank highlight concept entirely). Round 120 — the 3 tier colours now resolve
+ * through `MEANING_TOKENS.gold`/`.silver`/`.bronze` (returned as inline styles, since Tailwind can't
+ * resolve a CSS custom property inside an arbitrary-value class) instead of literal amber/slate/orange,
+ * per the brief's "meaning never depends on club colour" rule — a gold #1 stays gold whichever club's
+ * tokens are active.
  */
+function tierRowStyle(rank: number): { borderColor?: string; backgroundColor?: string } {
+  if (rank === 1) return { borderColor: `color-mix(in oklch, ${MEANING_TOKENS.gold} 50%, transparent)`, backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.gold} 10%, transparent)` };
+  if (rank <= 3) return { borderColor: `color-mix(in oklch, ${MEANING_TOKENS.silver} 40%, transparent)`, backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.silver} 10%, transparent)` };
+  if (rank <= 5) return { borderColor: `color-mix(in oklch, ${MEANING_TOKENS.bronze} 50%, transparent)`, backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.bronze} 10%, transparent)` };
+  return {};
+}
+
 function tierRowClasses(rank: number): string {
-  if (rank === 1) return "border border-amber-400/50 bg-amber-400/10 hover:bg-amber-400/15";
-  if (rank <= 3) return "border border-slate-300/40 bg-slate-300/10 hover:bg-slate-300/15";
-  if (rank <= 5) return "border border-orange-700/50 bg-orange-700/10 hover:bg-orange-700/15";
+  if (rank <= 5) return "border";
   return "odd:bg-base-800/50 hover:bg-base-800";
 }
 
+function tierRankStyle(rank: number): { color?: string } {
+  if (rank === 1) return { color: MEANING_TOKENS.gold };
+  if (rank <= 3) return { color: MEANING_TOKENS.silver };
+  if (rank <= 5) return { color: MEANING_TOKENS.bronze };
+  return {};
+}
+
 function tierRankClasses(rank: number): string {
-  if (rank === 1) return "text-base font-bold text-amber-300";
-  if (rank <= 3) return "font-semibold text-slate-300";
-  if (rank <= 5) return "font-semibold text-orange-400";
+  if (rank === 1) return "text-base font-bold";
+  if (rank <= 5) return "font-semibold";
   return "text-slate-500";
 }
 
@@ -357,9 +392,8 @@ export function Records() {
               const first = CATEGORIES.find((c) => CATEGORY_GROUP[c] === g);
               if (first) selectCategory(first);
             }}
-            className={`rounded-full px-3 py-1 text-xs font-medium ${
-              group === g ? "bg-accent text-white" : "bg-base-800 text-slate-400 hover:bg-base-700"
-            }`}
+            style={group === g ? { background: "var(--acc)", color: "var(--on)" } : undefined}
+            className={`rounded-full px-3 py-1 text-xs font-medium ${group === g ? "" : "bg-base-800 text-slate-400 hover:bg-base-700"}`}
           >
             {g}
           </button>
@@ -372,9 +406,8 @@ export function Records() {
             <button
               key={c}
               onClick={() => selectCategory(c)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                category === c ? "border-accent bg-accent/10 text-accent-light" : "border-base-600 text-slate-400 hover:bg-base-800"
-              }`}
+              style={category === c ? { borderColor: "var(--accT)", background: "color-mix(in oklch, var(--acc) 10%, transparent)", color: "var(--accT)" } : undefined}
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${category === c ? "" : "border-base-600 text-slate-400 hover:bg-base-800"}`}
             >
               {CATEGORY_LABEL[c]}
               {!hasRealWorldData(c) && <span className="ml-1 text-slate-600">· sim only</span>}
@@ -404,9 +437,8 @@ export function Records() {
             <button
               key={m}
               onClick={() => selectMode(m)}
-              className={`rounded-full px-3 py-1 text-xs font-medium ${
-                mode === m ? "bg-accent text-white" : "bg-base-800 text-slate-400 hover:bg-base-700"
-              }`}
+              style={mode === m ? { background: "var(--acc)", color: "var(--on)" } : undefined}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${mode === m ? "" : "bg-base-800 text-slate-400 hover:bg-base-700"}`}
             >
               {m === "allTime" ? "All-Time Career" : "This Season"}
             </button>
@@ -462,9 +494,13 @@ export function Records() {
               const isTop5 = row.rank <= 5;
               const isGoat = row.rank === 1;
               return (
-                <div key={row.rank} className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${tierRowClasses(row.rank)}`}>
+                <div
+                  key={row.rank}
+                  style={tierRowStyle(row.rank)}
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${tierRowClasses(row.rank)}`}
+                >
                     <span className="flex min-w-0 items-center gap-2">
-                      <span className={`w-8 tabular-nums ${tierRankClasses(row.rank)}`}>{row.rank}</span>
+                      <span style={tierRankStyle(row.rank)} className={`w-8 tabular-nums ${tierRankClasses(row.rank)}`}>{row.rank}</span>
                       {row.club && <ClubBadgeByName name={row.club} size="sm" />}
                       <span className={`truncate ${isGoat ? "font-semibold" : ""}`}>
                         {row.player ? (
@@ -476,11 +512,25 @@ export function Records() {
                         )}
                       </span>
                       {row.source === "real" && row.real?.stillActive && (
-                        <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Active</span>
+                        <span
+                          style={{ backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.rise} 20%, transparent)`, color: MEANING_TOKENS.rise }}
+                          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        >
+                          Active
+                        </span>
                       )}
-                      {row.source === "sim" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AFS</span>}
+                      {row.source === "sim" && (
+                        <span style={{ color: "var(--accT)" }} className="shrink-0 text-[10px] font-semibold uppercase tracking-wide">
+                          AFS
+                        </span>
+                      )}
                       {isGoat && hasReal && row.source === "sim" && (
-                        <span className="shrink-0 rounded-full bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-light">AussieFootySim record</span>
+                        <span
+                          style={{ backgroundColor: "color-mix(in oklch, var(--acc) 20%, transparent)", color: "var(--accT)" }}
+                          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        >
+                          AussieFootySim record
+                        </span>
                       )}
                     </span>
                     <span className="flex shrink-0 items-baseline gap-1.5">
@@ -535,9 +585,8 @@ export function Records() {
                       key={c}
                       title={`Sort by ${CATEGORY_LABEL[c]}, descending`}
                       onClick={() => selectCategory(c)}
-                      className={`cursor-pointer whitespace-nowrap px-2 py-2 text-right font-medium hover:text-accent-light ${
-                        category === c ? "bg-accent/15 text-accent-light" : ""
-                      }`}
+                      style={category === c ? { background: "color-mix(in oklch, var(--acc) 15%, transparent)", color: "var(--accT)" } : undefined}
+                      className="cursor-pointer whitespace-nowrap px-2 py-2 text-right font-medium"
                     >
                       {CATEGORY_SHORT[c]}
                       {category === c && <span className="ml-0.5">▾</span>}
@@ -562,7 +611,8 @@ export function Records() {
                     {groupCategories.map((c) => (
                       <td
                         key={c}
-                        className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums ${category === c ? "font-semibold text-accent-light" : "text-slate-300"}`}
+                        style={category === c ? { color: "var(--accT)" } : undefined}
+                        className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums ${category === c ? "font-semibold" : "text-slate-300"}`}
                       >
                         {(row.values[c] ?? 0).toLocaleString()}
                       </td>

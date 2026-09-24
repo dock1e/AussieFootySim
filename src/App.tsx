@@ -11,6 +11,7 @@ import { TradePeriod } from "./components/TradePeriod";
 import { Draft } from "./components/Draft";
 import { PositionSwitch } from "./components/PositionSwitch";
 import { Records } from "./components/Records";
+import { CareerProfile } from "./components/CareerProfile";
 import { PlayerProfileModal } from "./components/PlayerProfileModal";
 import { ThemeSystemScreen } from "./components/ThemeSystemScreen";
 import { ClubStripe } from "./components/theme/primitives";
@@ -34,6 +35,7 @@ type Screen =
   | "draft"
   | "positionSwitch"
   | "records"
+  | "career"
   | "themeSystem";
 
 /**
@@ -73,7 +75,7 @@ const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "matchDay", label: "Match Day", screens: ["match"] },
   { key: "coaching", label: "Coaching", screens: ["selection", "positionSwitch"] },
   { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
-  { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts"] },
+  { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts", "career"] },
   { key: "records", label: "Statistics", screens: ["records"] },
   ...(import.meta.env.DEV ? [{ key: "themeSystem", label: "Theme System", screens: ["themeSystem"] as Screen[] }] : []),
 ];
@@ -95,6 +97,7 @@ const SCREEN_LABELS: Record<Screen, string> = {
   draft: "Draft",
   positionSwitch: "Position Switch",
   records: "Statistics",
+  career: "Career",
   themeSystem: "Theme System",
 };
 
@@ -254,6 +257,7 @@ export default function App() {
         {screen === "draft" && <Draft />}
         {screen === "positionSwitch" && <PositionSwitch />}
         {screen === "records" && <Records />}
+        {screen === "career" && <CareerProfile />}
         {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />

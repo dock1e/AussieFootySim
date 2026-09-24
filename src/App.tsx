@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Dashboard } from "./components/Dashboard";
-import { SquadList } from "./components/SquadList";
+import { List } from "./components/List";
 import { LiveMatch } from "./components/LiveMatch";
 import { SeasonHub } from "./components/SeasonHub";
 import { SelectionCommittee } from "./components/SelectionCommittee";
@@ -17,9 +17,8 @@ import { ClubStripe } from "./components/theme/primitives";
 import { clubTokensFor } from "./theme/clubTokens";
 import { clubThemeStyle, pageBackgroundStyle } from "./theme/useClubTheme";
 import { useGameStore } from "./store/useGameStore";
-import { useSeasonStore } from "./store/useSeasonStore";
 import { useSaveStore } from "./store/useSaveStore";
-import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
+import { ALL_PLAYERS } from "./data/loadPlayers";
 import { clubByName } from "./types/club";
 
 type Screen =
@@ -142,17 +141,7 @@ export default function App() {
   const clubTokens = clubTokensFor(clubByName(myClub)?.abbreviation);
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
-  // Re-reading getPlayersByClub whenever the live pool is swapped wholesale
-  // (a load, a new game, an off-season step) — see useSaveStore.ts's
-  // `poolVersion` doc comment. Not memoized: this is the one call site that
-  // has to stay correct with zero risk of a stale dependency array, and
-  // getPlayersByClub is a cheap filter over <1000 players.
   const poolVersion = useSaveStore((s) => s.poolVersion);
-  const squad = getPlayersByClub(myClub);
-  // Live, round-by-round condition from the active season (see season.ts's
-  // doc comment) — undefined with no season in progress, in which case
-  // SquadList quietly falls back to each player's static condition snapshot.
-  const liveCondition = useSeasonStore((s) => s.season?.condition);
 
   useEffect(() => {
     void initialize();
@@ -246,7 +235,7 @@ export default function App() {
             onGoToSeason={() => setScreen("season")}
           />
         )}
-        {screen === "squad" && <SquadList players={squad} liveCondition={liveCondition} />}
+        {screen === "squad" && <List />}
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
         {screen === "match" && <LiveMatch onCockpitActiveChange={setMatchCockpitActive} />}

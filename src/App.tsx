@@ -86,7 +86,7 @@ export default function App() {
   }
   // Round 99 — the Draft screen's new "three-column cockpit" layout (Draft.tsx's own doc comment)
   // needs a full-height, non-scrolling shell (Tyler: "no page scroll... no dead space to the right")
-  // that the shared `max-w-6xl`-capped, `min-h-screen`-scrollable shell below can't provide. Gated
+  // that the shared width-capped, `min-h-screen`-scrollable shell below can't provide. Gated
   // specifically on `screen === "draft"` (not on draft-window state) so every other screen's shell is
   // completely untouched, and only active at `lg:` and above — below that this screen falls back to
   // the exact same scrollable, capped-width shell every other screen already uses.
@@ -101,8 +101,18 @@ export default function App() {
   // LiveMatch itself (`onCockpitActiveChange`) only while it's actually rendering the cockpit JSX, off
   // for every other one of its states and on unmount — so this stays a precise, per-state gate rather
   // than the Draft screen's coarser whole-screen one.
+  //
+  // Round 114 — Tyler: "when I open the 'Draft' tab the visual UI is wider than other tabs. The width
+  // should be aligned across our UI for consistency." The cockpit shell used to drop the width cap
+  // (`lg:max-w-none`) for Draft too. Now every ordinary screen AND the Draft cockpit share one cap,
+  // `max-w-7xl` (1280px — UI Redesign3's own standard content wrap is 1240px; `max-w-6xl` was too
+  // narrow for Draft's three columns without its board scrolling sideways). Draft keeps its
+  // full-height, non-scrolling cockpit behaviour, just at the shared width. The live-match cockpit
+  // alone still goes full-width: its centre column is the ground itself, which would shrink to ~450px
+  // between the 460px LiveBoard and 316px side widgets under the cap.
   const [matchCockpitActive, setMatchCockpitActive] = useState(false);
   const isCockpitScreen = screen === "draft" || (screen === "match" && matchCockpitActive);
+  const isFullWidthCockpit = screen === "match" && matchCockpitActive;
   const myClub = useGameStore((s) => s.myClub);
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
@@ -136,7 +146,7 @@ export default function App() {
 
   return (
     <div
-      className={`mx-auto min-h-screen max-w-6xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-screen lg:max-w-none lg:flex-col lg:overflow-hidden lg:py-4" : ""}`}
+      className={`mx-auto min-h-screen max-w-7xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-screen lg:flex-col lg:overflow-hidden lg:py-4" : ""} ${isFullWidthCockpit ? "lg:max-w-none" : ""}`}
     >
       <header className={`mb-6 ${isCockpitScreen ? "lg:mb-3 lg:shrink-0" : ""}`}>
         {/* Logo + SaveMenu get their own row, deliberately separate from nav

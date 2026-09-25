@@ -685,6 +685,39 @@ export function seasonGroupTable(categories: RecordCategory[], sortBy: RecordCat
   return candidates.slice(0, topN).map((c, i) => ({ rank: i + 1, ...c }));
 }
 
+/**
+ * UI Redesign3 Statistics screen — one row per player who has played at least one game this season,
+ * carrying EVERY category's season total at once (not just one stat group's worth, and not capped at
+ * a top-N). The redesigned leaders table needs the full population, not a pre-sorted slice: its
+ * position-percentile benchmark shading, "rank among all players" watchlist strip, Total/Average
+ * switch and client-side sort all work over every player. Same data source as `seasonGroupTable`
+ * above (`seasonPlayerTotals`, plus `seasonFinalsAppearances` for the one non-totals category).
+ */
+export interface SeasonStatsEntry {
+  name: string;
+  club: string;
+  player: Player;
+  gamesPlayed: number;
+  totals: Record<RecordCategory, number>;
+}
+
+export function seasonStatsTable(season: Season): SeasonStatsEntry[] {
+  const totals = seasonPlayerTotals(season);
+  const finalsCounts = seasonFinalsAppearances(season);
+  const out: SeasonStatsEntry[] = [];
+  for (const t of totals.values()) {
+    if (t.gamesPlayed <= 0) continue;
+    const player = getPlayerById(t.playerId);
+    if (!player) continue;
+    const values = {} as Record<RecordCategory, number>;
+    for (const cat of ALL_RECORD_CATEGORIES) {
+      values[cat] = cat === "finalsAppearances" ? (finalsCounts.get(t.playerId) ?? 0) : simStatValue(t, cat);
+    }
+    out.push({ name: playerFullName(player), club: player.Team, player, gamesPlayed: t.gamesPlayed, totals: values });
+  }
+  return out;
+}
+
 /** "1st"/"2nd"/"3rd"/"4th"... — used only by the season write-up pool below, to phrase a row's standing without repeating the bare rank number that's already shown right next to the write-up. */
 function ordinal(n: number): string {
   const rem100 = n % 100;

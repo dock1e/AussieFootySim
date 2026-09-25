@@ -20,6 +20,8 @@ import { isLineupComplete, lineupPlayerIds } from "../engine/selection";
 import { freeAgentsFor } from "../engine/contracts";
 import { Card, HeroCard, Watermark, KpiTile, StatusChip, PinStar, DivergingBar, TrendValue, Segmented } from "./theme/primitives";
 import { recordWatchFeedFor, developmentBoardFor, type RecordWatchEntry, type DevelopmentEntry } from "../engine/dashboardInsights";
+import { useMatchStoryStore, type MatchStory, type MatchStoryTag } from "../store/useMatchStoryStore";
+import { usePlayerProfileStore } from "../store/usePlayerProfileStore";
 import {
   lastPlayedMatchFor,
   upcomingFixtureFor,
@@ -132,6 +134,8 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
       .slice(0, 3);
   }, [players, myLineup]);
 
+  // Match Day v2 (critique D6): the last Match Day game's "From this game" items, sent here on Continue.
+  const lastGameStories = useMatchStoryStore((s) => s.latest);
   // Round 115 — Record Watch + Development board, see engine/dashboardInsights.ts.
   const recordWatch = useMemo(() => recordWatchFeedFor(myClub, seasonArchives, season, year), [myClub, seasonArchives, season, year]);
   const developmentBoard = useMemo(() => developmentBoardFor(players, myClub, season, devSort), [players, myClub, season, devSort]);
@@ -240,7 +244,19 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
             )}
           </div>
         </Card>
-      ) : (
+      ) : null}
+      {(!season || myClubId === undefined) && lastGameStories && (
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+            <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>RECORD WATCH · FROM YOUR LAST GAME</div>
+            <div style={{ font: "500 10px 'IBM Plex Mono',monospace", letterSpacing: "1px", color: "#8f9ab0" }}>{lastGameStories.matchLabel.toUpperCase()}</div>
+          </div>
+          {lastGameStories.stories.map((st, i) => (
+            <MatchStoryRow key={i} story={st} />
+          ))}
+        </Card>
+      )}
+      {!season || myClubId === undefined ? null : (
         <>
           <div className="grid gap-4 lg:grid-cols-2">
             <div>
@@ -360,8 +376,11 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
                 <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>RECORD WATCH · WHOLE LIST</div>
                 <div style={{ font: "500 10px 'IBM Plex Mono',monospace", letterSpacing: "1px", color: "#8f9ab0" }}>RANKED BY SIGNIFICANCE</div>
               </div>
+              {lastGameStories?.stories.map((st, i) => (
+                <MatchStoryRow key={`story-${i}`} story={st} caption={lastGameStories.matchLabel} />
+              ))}
               {recordWatch.length === 0 ? (
-                <div className="text-sm text-slate-500">No one on your list is close to an all-time top-25 yet.</div>
+                !lastGameStories && <div className="text-sm text-slate-500">No one on your list is close to an all-time top-25 yet.</div>
               ) : (
                 recordWatch.map((entry) => <RecordWatchRow key={`${entry.player.PlayerID}-${entry.category}`} entry={entry} />)
               )}
@@ -519,6 +538,33 @@ function NextUpCard({ club, upcoming, onGoToSeason }: { club: ReturnType<typeof 
         </button>
       )}
     </Card>
+  );
+}
+
+const STORY_TAG_COLOR: Record<MatchStoryTag, string> = {
+  MILESTONE: "var(--accT)",
+  "CAREER BEST": "var(--accT)",
+  DEVELOPMENT: "#4fd69a",
+  WATCHLIST: "#b3bccb",
+  INJURY: "#f0c04a",
+};
+
+/** A "From this game" item from the last Match Day game — same row shape as `RecordWatchRow`; opens the player's career profile. */
+function MatchStoryRow({ story, caption }: { story: MatchStory; caption?: string }) {
+  return (
+    <button
+      onClick={() => usePlayerProfileStore.getState().openPlayer(story.playerId)}
+      style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "11px 0", borderTop: "1px solid rgba(255,255,255,.06)", width: "100%", background: "none", borderLeft: 0, borderRight: 0, borderBottom: 0, cursor: "pointer", textAlign: "left" }}
+    >
+      <span style={{ flex: "none", minWidth: 92, font: "600 10px 'IBM Plex Mono',monospace", letterSpacing: "1px", color: STORY_TAG_COLOR[story.tag], paddingTop: 3 }}>{story.tag}</span>
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{ display: "block", font: "600 14px/1.35 Barlow,sans-serif", color: "#eef2f8" }}>{story.text}</span>
+        <span style={{ display: "block", font: "400 13px/1.4 Barlow,sans-serif", color: "#9aa4b5", marginTop: 2 }}>
+          {story.sub}
+          {caption ? ` · ${caption}` : ""}
+        </span>
+      </span>
+    </button>
   );
 }
 

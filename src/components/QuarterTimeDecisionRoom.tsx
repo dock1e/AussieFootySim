@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { playerFullName, type Player } from "../types/player";
 import type { Position } from "../types/archetype";
 import type { MatchTeam } from "../engine/team";
@@ -7,50 +7,59 @@ import type { MatchEvent, MatchResult, BoxScoreLine } from "../engine/match";
 import { CONTEST_STAT_FIELDS } from "../engine/match";
 import type { Side } from "../engine/zones";
 import { MATCH_DAY_COACH_ROLES, gradeForOvr, type MatchDayCoachRole } from "../types/coach";
-import {
-  focusesFor,
-  recommendedFocusFor,
-  LINE_FEEDBACK_LOW_THRESHOLD,
-  LINE_FEEDBACK_HIGH_THRESHOLD,
-  type LineCoachFocus,
-} from "../engine/lineCoaching";
-import {
-  lineQuarterWinRates,
-  playerLinesByQuarter,
-  quarterlyPoints,
-  forwardEntryOriginThirds,
-  type LineQuarterWinRate,
-  type SubStatQuarterLine,
-  type ForwardEntryOriginThirds,
-} from "../engine/summary";
+import { focusesFor, recommendedFocusFor, LINE_FEEDBACK_LOW_THRESHOLD, LINE_FEEDBACK_HIGH_THRESHOLD, type LineCoachFocus } from "../engine/lineCoaching";
+import { lineQuarterWinRates, playerLinesByQuarter, forwardEntryOriginThirds, type SubStatQuarterLine } from "../engine/summary";
 import { gameStyleModelledImpact, type GameStyle } from "../engine/tactics";
 import type { ContestType } from "../engine/contestTypes";
+import { fantasyPointsFor } from "../engine/ratings";
 import { COACHS_CALL_OPTIONS } from "./CoachsCall";
 import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
-import { GROUND_ROW_POSITIONS } from "./SelectionGround";
 import { groupByPosition } from "./MatchPreparation";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
+import { directOpponents } from "./matchday/LiveWidgets";
+import {
+  BARLOW,
+  BreakBar,
+  CARD_BG,
+  CARD_BORDER,
+  COND,
+  FALL,
+  MONO,
+  PANEL_BG,
+  RISE,
+  StatStrip,
+  Stripe,
+  WARN,
+  breakLabel,
+  capitalise,
+  fitColor,
+  plural,
+  sectionLabelStyle,
+  type StatStripItem,
+} from "./matchday/shared";
 
 /**
- * Quarter-Time Decision Room — Sep 2026, [[Quarter-Time Decision Room]]. Replaces the old scrolling
- * quarter-time takeover (`DetailedStatsTable` + `QuarterTimeInterchange` + `LineCoachPanel` +
- * `CoachsCall`, stacked) with a fixed-height, no-scroll 3-column cockpit of its own, rendered by
- * `LiveMatch.tsx` in the exact same `pendingCoachsCall`-gated slot. Full design record, including
- * the "what's real vs. disclosed derived proxy" section every number on this screen traces back to:
- * see the design note above.
+ * Break screen — Match Day v2 (`match-day-v2/02-implementation-spec.md` §2, visual source of truth
+ * `Match Day v2.dc.html` "Half time"). Rendered by `LiveMatch.tsx` under the shared scoreboard (which
+ * carries the break status) whenever a quarter-time / half-time / three-quarter-time break is pending.
  *
- * Behaviour change from the old takeover, disclosed in the design note: choosing a Coach's Call
- * option and staging an interchange no longer apply immediately — both are held in local state here
- * and only committed (via the same `onChoose`/`onInterchange` callbacks the old takeover already
- * used) when the coach hits "Resume Q{n}"/"Confirm & Resume". Line-coach focus changes are the one
- * exception, kept live exactly as round 84 shipped and disclosed them.
+ * ONE state model (spec §2): `{ swaps, lines, call }`. The diagnosis fix buttons, the line-instruction
+ * chips, the interchange taps and the staged-changes list all read and write this same object, so
+ * undoing from any of them updates all of them. Nothing touches the engine until Resume, which applies
+ * the swaps (`onInterchange`), then the line focuses (`onFocusChange`), then the coach's call
+ * (`onChoose`, which also simulates the next quarter and resumes playback) — in that order, so every
+ * staged change is live for the quarter it was staged for.
  */
-
-type HighlightTarget = { kind: "focus"; role: MatchDayCoachRole; focus: LineCoachFocus } | { kind: "style"; style: GameStyle } | { kind: "interchange"; playerId: number } | null;
 
 interface StagedSwap {
   outgoingId: number;
   incomingId: number;
+}
+
+interface BreakState {
+  swaps: StagedSwap[];
+  lines: Record<MatchDayCoachRole, LineCoachFocus>;
+  call: GameStyle;
 }
 
 export interface QuarterTimeDecisionRoomProps {
@@ -63,39 +72,70 @@ export interface QuarterTimeDecisionRoomProps {
   fitnessFor: (side: Side, playerId: number) => number;
   focusFor: (role: MatchDayCoachRole) => LineCoachFocus;
   onFocusChange: (role: MatchDayCoachRole, focus: LineCoachFocus) => void;
-  /** One-sentence feedback per role for THIS side — the exact same real, already-resolved signal `LineCoachPanel.tsx`'s own `feedbackFor` prop renders as a quote (`engine/match.ts`'s `lineFeedbackFor`). Reused here unchanged so the "their quote" Tyler asked for is real, not invented. */
+  /** One-sentence feedback per role for THIS side (`engine/match.ts`'s `lineFeedbackFor`). */
   feedbackFor: (role: MatchDayCoachRole) => string;
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>;
   currentStyle: GameStyle;
-  /** Same contract as the old takeover's `CoachsCall.onChoose` — sets the style AND advances/resumes. Now only ever called once, at Confirm. */
+  /** Sets the style AND advances/resumes — called once, last, at Resume. */
   onChoose: (style: GameStyle) => void;
-  /** Same contract as the old takeover's `QuarterTimeInterchange.onInterchange`. Now called once per staged swap, in order, at Confirm — never on a bare cell click. */
+  /** Called once per staged swap at Resume. */
   onInterchange: (outgoingId: number, incomingId: number) => void;
 }
 
-// --- Real-data problem/recommendation engine -----------------------------------------------------
+// --- Labels ----------------------------------------------------------------------------------------
 
-const FATIGUE_BAD_CUTOFF = 45; // same "bad" cutoff QuarterTimeInterchange.tsx's own fitnessColour already uses
-
-const PROBLEM_HEADLINE: Partial<Record<string, string>> = {
-  "Defensive Line:markContested": "Leaking contested marks in defence",
-  "Defensive Line:groundBall": "Losing the hard-ball scraps in defence",
-  "Defensive Line:tackle": "Missing tackles down back",
-  "Forward Line:markLead": "Not winning it on the lead",
-  "Forward Line:markContested": "Losing contested marks forward",
-  "Forward Line:tackle": "No forward-half pressure",
-  "Midfield:clearance": "Getting smashed at the clearances",
-  "Midfield:groundBall": "Losing the hard-ball gets",
-  "Ruck and Stoppage:ruck": "Beaten in the ruck",
-  "Ruck and Stoppage:markContested": "Getting out-marked around the ground",
+const ROLE_NAME: Record<MatchDayCoachRole, string> = {
+  "Defensive Line": "Defensive line",
+  "Forward Line": "Forward line",
+  Midfield: "Midfield",
+  "Ruck and Stoppage": "Ruck & stoppage",
 };
 
-/** The one Coach's Call style most associated with each line's own problem — Ruck and Stoppage deliberately has none (no GameStyle lever targets it directly). */
-const STYLE_LEVER_FOR_ROLE: Partial<Record<MatchDayCoachRole, GameStyle>> = {
-  "Defensive Line": "Defensive Flood",
-  Midfield: "Attack the Middle",
-  "Forward Line": "Forward Press",
+const ROLE_KIND: Record<MatchDayCoachRole, string> = {
+  "Defensive Line": "DEF",
+  "Forward Line": "FWD",
+  Midfield: "MID",
+  "Ruck and Stoppage": "RUCK",
 };
+
+/** How each contest reads in a sentence ("contested marks", "hitouts"…). */
+const CONTEST_NOUN: Record<ContestType, { plural: string; chip: string }> = {
+  markLead: { plural: "marks on the lead", chip: "LEAD MARK" },
+  markContested: { plural: "contested marks", chip: "CONTESTED MARK" },
+  groundBall: { plural: "ground-ball contests", chip: "GROUND BALL" },
+  tackle: { plural: "tackle contests", chip: "TACKLE" },
+  ruck: { plural: "hitouts", chip: "HITOUT" },
+  clearance: { plural: "clearances", chip: "CLEARANCE" },
+};
+
+/** Sentence case for a focus chip ("Focus on Leading" → "Focus on leading"), same look as the reference. */
+function focusLabel(focus: LineCoachFocus): string {
+  return focus === "Default" ? "Default" : focus[0] + focus.slice(1).toLowerCase();
+}
+
+const FATIGUE_BAD_CUTOFF = 45;
+
+// --- Diagnosis cards -------------------------------------------------------------------------------
+
+type Tone = "bad" | "warn" | "good";
+
+interface Fix {
+  label: string;
+  appliedLabel: string;
+  isApplied: (s: BreakState) => boolean;
+  toggle: (s: BreakState) => BreakState;
+}
+
+interface HurtCard {
+  id: string;
+  title: string;
+  chip: string;
+  tone: Tone;
+  body: string;
+  fixes: Fix[];
+  severity: number;
+  keep?: boolean;
+}
 
 function worstSubStat(subRates: Partial<Record<ContestType, SubStatQuarterLine>>): ContestType | null {
   let worst: ContestType | null = null;
@@ -122,8 +162,7 @@ function bestSubStat(subRates: Partial<Record<ContestType, SubStatQuarterLine>>)
 }
 
 function topQuarterPerformer(team: MatchTeam, quarter: number, events: MatchEvent[], stat: keyof BoxScoreLine): { player: Player; value: number } | null {
-  const ids = team.players.map((p) => p.PlayerID);
-  const byPlayer = playerLinesByQuarter(events, ids);
+  const byPlayer = playerLinesByQuarter(events, team.players.map((p) => p.PlayerID));
   let best: { player: Player; value: number } | null = null;
   for (const p of team.players) {
     const q = byPlayer[p.PlayerID]?.find((l) => l.quarter === quarter);
@@ -133,193 +172,30 @@ function topQuarterPerformer(team: MatchTeam, quarter: number, events: MatchEven
   return best;
 }
 
-interface LeverChip {
-  label: string;
-  highlight: HighlightTarget;
-}
-interface ProblemCard {
-  id: string;
-  headline: string;
-  costLabel: string;
-  costTone: "bad" | "warn";
-  evidence: [string, string];
-  levers: LeverChip[];
-  severity: number;
-}
-interface DontTouchCard {
-  headline: string;
-  costLabel: string;
-  evidence: [string, string];
-}
-
-function lineFocusLevers(role: MatchDayCoachRole): LeverChip[] {
-  const levers: LeverChip[] = focusesFor(role)
-    .filter((f) => f !== "Default")
-    .map((focus) => {
-      const highlight: HighlightTarget = { kind: "focus", role, focus };
-      return { label: focus, highlight };
-    });
-  const style = STYLE_LEVER_FOR_ROLE[role];
-  if (style) {
-    const opt = COACHS_CALL_OPTIONS.find((o) => o.style === style)!;
-    const highlight: HighlightTarget = { kind: "style", style };
-    levers.push({ label: opt.label, highlight });
-  }
-  return levers;
-}
-
-/** Tyler's own spec names "which third of the ground their inside 50s came from" as an evidence source — real, computed via `forwardEntryOriginThirds` (walks real possession-spell start zones, no fabricated attribution). Phrased as a plain count/percentage breakdown, never a causal claim beyond what the split itself shows. */
-function forwardEntryThirdsEvidence(thirds: ForwardEntryOriginThirds): string {
-  if (thirds.total === 0) return "No clean read on where their entries started this quarter.";
-  const pct = (n: number) => Math.round((n / thirds.total) * 100);
-  const biggest =
-    thirds.forward >= thirds.midfield && thirds.forward >= thirds.defensive
-      ? `their forward third (${pct(thirds.forward)}%)`
-      : thirds.midfield >= thirds.defensive
-        ? `midfield (${pct(thirds.midfield)}%)`
-        : `deep in their defensive third (${pct(thirds.defensive)}%)`;
-  return `${thirds.total} inside-50s this quarter, most starting from ${biggest}`;
-}
-
-function lineProblemsFor(myWinRates: LineQuarterWinRate[], theirWinRates: LineQuarterWinRate[], theirTeam: MatchTeam, quarter: number, events: MatchEvent[], theirSide: Side): ProblemCard[] {
-  const out: ProblemCard[] = [];
-  for (const entry of myWinRates) {
-    if (entry.blended >= LINE_FEEDBACK_LOW_THRESHOLD) continue;
-    const stat = worstSubStat(entry.subRates);
-    if (!stat) continue;
-    const mine = entry.subRates[stat]!;
-    const theirs = theirWinRates.find((r) => r.role === entry.role)?.subRates[stat];
-    // Defensive Line's second evidence line is ground-thirds (Tyler's own spec names this specifically
-    // for "their inside 50s"); every other line uses the opponent's top performer at that sub-stat.
-    let secondLine: string;
-    if (entry.role === "Defensive Line") {
-      secondLine = forwardEntryThirdsEvidence(forwardEntryOriginThirds(events, quarter, theirSide));
-    } else {
-      const top = topQuarterPerformer(theirTeam, quarter, events, CONTEST_STAT_FIELDS[stat].wins);
-      secondLine = top ? `${playerFullName(top.player)} led with ${top.value} for ${theirTeam.name} this quarter` : `${theirTeam.name} dominated this contest all quarter`;
-    }
-    out.push({
-      id: `${entry.role}:${stat}`,
-      headline: PROBLEM_HEADLINE[`${entry.role}:${stat}`] ?? `${entry.role} is struggling at the contest`,
-      costLabel: `${mine.wins}-${theirs?.wins ?? 0}`,
-      costTone: mine.rate < 0.3 ? "bad" : "warn",
-      evidence: [`${Math.round(mine.rate * 100)}% win rate at ${stat} this quarter`, secondLine],
-      levers: lineFocusLevers(entry.role),
-      severity: 0.5 - mine.rate,
-    });
-  }
-  return out;
-}
-
-function fatigueProblem(myTeam: MatchTeam, side: Side, quarter: number, events: MatchEvent[], fitnessFor: (side: Side, playerId: number) => number): ProblemCard | null {
-  const onGroundIds = myTeam.onGround ? [...myTeam.onGround] : myTeam.players.map((p) => p.PlayerID);
-  let worst: { player: Player; fitness: number; position?: Position } | null = null;
-  for (const id of onGroundIds) {
-    const player = myTeam.players.find((p) => p.PlayerID === id);
-    if (!player) continue;
-    const fitness = fitnessFor(side, id);
-    if (fitness < FATIGUE_BAD_CUTOFF && (!worst || fitness < worst.fitness)) {
-      worst = { player, fitness, position: myTeam.positions?.get(id) };
-    }
-  }
-  if (!worst) return null;
-  const q = playerLinesByQuarter(events, [worst.player.PlayerID])[worst.player.PlayerID]?.find((l) => l.quarter === quarter);
-  const disposals = q?.line.disposals ?? 0;
-  const tackles = q?.line.tackles ?? 0;
+function focusFix(role: MatchDayCoachRole, focus: LineCoachFocus, prefix: string): Fix {
+  const text = `${prefix}${focusLabel(focus).toLowerCase()}`;
   return {
-    id: `fatigue:${worst.player.PlayerID}`,
-    headline: `${worst.player.lname}'s legs are gone`,
-    costLabel: `${Math.round(worst.fitness)}% fitness`,
-    costTone: worst.fitness < 30 ? "bad" : "warn",
-    evidence: [
-      `Still logged ${disposals} disposals and ${tackles} tackles this quarter despite it`,
-      `Playing ${worst.position ?? "on ground"} — a fresh leg on the interchange bench could relieve them`,
-    ],
-    levers: [{ label: `Interchange ${worst.player.lname}`, highlight: { kind: "interchange", playerId: worst.player.PlayerID } }],
-    severity: (FATIGUE_BAD_CUTOFF - worst.fitness) / FATIGUE_BAD_CUTOFF,
+    label: text,
+    appliedLabel: `✓ ${text}`,
+    isApplied: (s) => s.lines[role] === focus,
+    toggle: (s) => ({ ...s, lines: { ...s.lines, [role]: s.lines[role] === focus ? "Default" : focus } }),
   };
 }
 
-function forwardEfficiencyProblem(myTeam: MatchTeam, quarter: number, events: MatchEvent[]): ProblemCard | null {
-  const ids = myTeam.players.map((p) => p.PlayerID);
-  const byPlayer = playerLinesByQuarter(events, ids);
-  let shots = 0;
-  let goals = 0;
-  let leader: { player: Player; shots: number; goals: number } | null = null;
-  for (const p of myTeam.players) {
-    const q = byPlayer[p.PlayerID]?.find((l) => l.quarter === quarter);
-    if (!q) continue;
-    shots += q.line.shotsAtGoal;
-    goals += q.line.goals;
-    if (q.line.shotsAtGoal >= 2 && (!leader || q.line.shotsAtGoal > leader.shots)) leader = { player: p, shots: q.line.shotsAtGoal, goals: q.line.goals };
-  }
-  if (shots < 3) return null;
-  const conversion = goals / shots;
-  if (conversion >= 0.4) return null;
+function swapFix(out: Player, inn: Player, innFitness: number): Fix {
+  const matches = (w: StagedSwap) => w.outgoingId === out.PlayerID && w.incomingId === inn.PlayerID;
   return {
-    id: "forward-efficiency",
-    headline: "Wasting our chances in front of goal",
-    costLabel: `${goals}/${shots} shots`,
-    costTone: conversion < 0.25 ? "bad" : "warn",
-    evidence: [
-      `${Math.round(conversion * 100)}% conversion this quarter`,
-      leader ? `${playerFullName(leader.player)}: ${leader.goals} from ${leader.shots} shots` : "No single forward dominating the chances",
-    ],
-    levers: [
-      { label: "Focus on Leading", highlight: { kind: "focus", role: "Forward Line", focus: "Focus on Leading" } },
-      { label: "Focus on Contested Marking", highlight: { kind: "focus", role: "Forward Line", focus: "Focus on Contested Marking" } },
-    ],
-    severity: (0.4 - conversion) * 2,
+    label: `Swap ${out.lname} for ${inn.lname} (${Math.round(innFitness)}%)`,
+    appliedLabel: `✓ ${inn.lname} on for ${out.lname}`,
+    isApplied: (s) => s.swaps.some(matches),
+    toggle: (s) =>
+      s.swaps.some(matches)
+        ? { ...s, swaps: s.swaps.filter((w) => !matches(w)) }
+        : { ...s, swaps: [...s.swaps.filter((w) => w.outgoingId !== out.PlayerID && w.incomingId !== inn.PlayerID), { outgoingId: out.PlayerID, incomingId: inn.PlayerID }] },
   };
 }
 
-function dontTouchCard(myWinRates: LineQuarterWinRate[], myTeam: MatchTeam, quarter: number, events: MatchEvent[]): DontTouchCard | null {
-  const best = [...myWinRates].filter((r) => r.blended > LINE_FEEDBACK_HIGH_THRESHOLD).sort((a, b) => b.blended - a.blended)[0];
-  if (!best) return null;
-  const stat = bestSubStat(best.subRates);
-  const top = stat ? topQuarterPerformer(myTeam, quarter, events, CONTEST_STAT_FIELDS[stat].wins) : null;
-  return {
-    headline: `${best.role} is doing its job`,
-    costLabel: `${Math.round(best.blended * 100)}% win rate`,
-    evidence: [`Comfortably on top at the contest this quarter`, top ? `${playerFullName(top.player)} leading the way with ${top.value}` : `Even contribution right across the line`],
-  };
-}
-
-// --- Small presentational bits --------------------------------------------------------------------
-
-function fitnessColour(value: number): string {
-  return value >= 70 ? "bg-good" : value >= 45 ? "bg-warn" : "bg-bad";
-}
-
-function MiniBar({ value, colourClass }: { value: number; colourClass: string }) {
-  const pct = Math.max(0, Math.min(100, value));
-  return (
-    <div className="h-1 w-full overflow-hidden rounded-full bg-base-700">
-      <div className={`h-full ${colourClass}`} style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
-/** A single tiny modelled-impact bar — zero-centred, ±40 range (comfortably covers the real -25..+35 table the design note computes), red<->green by sign of `goodWhenPositive ? value : -value`. */
-function ImpactBar({ label, value, goodWhenPositive }: { label: string; value: number; goodWhenPositive: boolean }) {
-  const clamped = Math.max(-40, Math.min(40, value));
-  const pct = (Math.abs(clamped) / 40) * 50;
-  const isGood = (goodWhenPositive && value > 0) || (!goodWhenPositive && value < 0);
-  const colour = value === 0 ? "bg-slate-500" : isGood ? "bg-good" : "bg-bad";
-  return (
-    <div className="flex items-center gap-1.5 text-[9px]">
-      <span className="w-14 shrink-0 text-slate-500">{label}</span>
-      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-base-700">
-        <div className="absolute left-1/2 top-0 h-full w-px bg-base-600" />
-        <div className={`absolute top-0 h-full ${colour}`} style={value >= 0 ? { left: "50%", width: `${pct}%` } : { right: "50%", width: `${pct}%` }} />
-      </div>
-      <span className="w-9 shrink-0 text-right tabular-nums text-slate-400">
-        {value > 0 ? "+" : ""}
-        {Math.round(value * 10) / 10}%
-      </span>
-    </div>
-  );
-}
+// --- Component -------------------------------------------------------------------------------------
 
 export function QuarterTimeDecisionRoom({
   side,
@@ -336,431 +212,588 @@ export function QuarterTimeDecisionRoom({
   onChoose,
   onInterchange,
 }: QuarterTimeDecisionRoomProps) {
-  const [selectedStyle, setSelectedStyle] = useState<GameStyle>(currentStyle);
-  const [armedBenchId, setArmedBenchId] = useState<number | null>(null);
-  const [stagedSwaps, setStagedSwaps] = useState<StagedSwap[]>([]);
-  const [highlighted, setHighlighted] = useState<HighlightTarget>(null);
-  /** Sep 2026 round 103 — [[Full-Time Review and Unified Player Drawer]]'s "in the interchange grid" click surface. Always `myTeam`/`side` here — this screen never shows the opponent's own interchange grid. */
-  const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
-
+  const q = quarterJustFinished;
   const theirSide: Side = side === "home" ? "away" : "home";
   const myTeam = side === "home" ? homeTeam : awayTeam;
   const theirTeam = side === "home" ? awayTeam : homeTeam;
-  const homeIds = new Set(homeTeam.players.map((p) => p.PlayerID));
-  const awayIds = new Set(awayTeam.players.map((p) => p.PlayerID));
+  const events = result.events;
 
-  const myWinRates = lineQuarterWinRates(result.events, quarterJustFinished, myTeam);
-  const theirWinRates = lineQuarterWinRates(result.events, quarterJustFinished, theirTeam);
+  const initialLines = useMemo(() => Object.fromEntries(MATCH_DAY_COACH_ROLES.map((r) => [r, focusFor(r)])) as Record<MatchDayCoachRole, LineCoachFocus>, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const initial: BreakState = { swaps: [], lines: initialLines, call: currentStyle };
+  const [state, setState] = useState<BreakState>(initial);
+  const [armedBenchId, setArmedBenchId] = useState<number | null>(null);
+  const [drawerPlayer, setDrawerPlayer] = useState<Player | null>(null);
 
-  const problems = [
-    ...lineProblemsFor(myWinRates, theirWinRates, theirTeam, quarterJustFinished, result.events, theirSide),
-    fatigueProblem(myTeam, side, quarterJustFinished, result.events, fitnessFor),
-    forwardEfficiencyProblem(myTeam, quarterJustFinished, result.events),
-  ]
-    .filter((p): p is ProblemCard => p !== null)
-    .sort((a, b) => b.severity - a.severity)
-    .slice(0, 3);
-  const dontTouch = dontTouchCard(myWinRates, myTeam, quarterJustFinished, result.events);
+  const myFitness = (id: number) => fitnessFor(side, id);
+  const playerById = new Map(myTeam.players.map((p) => [p.PlayerID, p]));
 
-  const cumulative = quarterlyPoints(result, homeIds, awayIds).find((q) => q.quarter === quarterJustFinished);
-  const myPoints = cumulative ? (side === "home" ? cumulative.homePoints : cumulative.awayPoints) : 0;
-  const theirPoints = cumulative ? (side === "home" ? cumulative.awayPoints : cumulative.homePoints) : 0;
-  const margin = myPoints - theirPoints;
-  const marginLabel = margin === 0 ? "Level" : margin > 0 ? `Up ${margin}` : `Down ${Math.abs(margin)}`;
-  const worstProblem = problems[0];
-  const contextChip = worstProblem ? `${marginLabel} · ${worstProblem.headline.toLowerCase()} (${worstProblem.costLabel})` : `${marginLabel} at the last break`;
+  // --- Q{n} IN NUMBERS (critique C4) — this quarter only ----------------------------------------------
+  const quarterNumbers = useMemo((): StatStripItem[] => {
+    const sumQuarter = (team: MatchTeam) => {
+      const lines = playerLinesByQuarter(events, team.players.map((p) => p.PlayerID));
+      const t = { clearances: 0, contestedPoss: 0, marksInside50: 0, tackles: 0, goals: 0, behinds: 0 };
+      for (const p of team.players) {
+        const l = lines[p.PlayerID]?.find((x) => x.quarter === q)?.line;
+        if (!l) continue;
+        t.clearances += l.clearances;
+        t.contestedPoss += l.contestedPoss;
+        t.marksInside50 += l.marksInside50;
+        t.tackles += l.tackles;
+        t.goals += l.goals;
+        t.behinds += l.behinds;
+      }
+      return t;
+    };
+    const mine = sumQuarter(myTeam);
+    const theirs = sumQuarter(theirTeam);
+    return [
+      { label: "Inside 50s", home: forwardEntryOriginThirds(events, q, side).total, away: forwardEntryOriginThirds(events, q, theirSide).total },
+      { label: "Clearances", home: mine.clearances, away: theirs.clearances },
+      { label: "Contested poss", home: mine.contestedPoss, away: theirs.contestedPoss },
+      { label: "Marks i50", home: mine.marksInside50, away: theirs.marksInside50 },
+      { label: "Tackles", home: mine.tackles, away: theirs.tackles },
+      { label: "Scoring shots", home: mine.goals + mine.behinds, away: theirs.goals + theirs.behinds },
+    ];
+  }, [events, q, myTeam, theirTeam, side, theirSide]);
 
-  function commitAndResume() {
-    for (const swap of stagedSwaps) onInterchange(swap.outgoingId, swap.incomingId);
-    onChoose(selectedStyle);
+  // --- What's hurting us ----------------------------------------------------------------------------
+  const myWinRates = useMemo(() => lineQuarterWinRates(events, q, myTeam), [events, q, myTeam]);
+  const theirWinRates = useMemo(() => lineQuarterWinRates(events, q, theirTeam), [events, q, theirTeam]);
+
+  const bench = benchPlayers(myTeam);
+  function bestReplacementFor(out: Player): Player | undefined {
+    const pos = myTeam.positions?.get(out.PlayerID);
+    if (!pos) return undefined;
+    return bench
+      .filter((b) => myTeam.interchangeEligibility?.get(b.PlayerID)?.has(pos) ?? true)
+      .sort((a, b) => myFitness(b.PlayerID) - myFitness(a.PlayerID))[0];
   }
 
-  function resetStaging() {
-    setStagedSwaps([]);
+  const cards: HurtCard[] = useMemo(() => {
+    const out: HurtCard[] = [];
+    const quarterLines = playerLinesByQuarter(events, myTeam.players.map((p) => p.PlayerID));
+    const opponents = directOpponents(theirTeam, myTeam);
+
+    // Fatigue: the tiredest on-ground player below the cutoff.
+    let tired: { player: Player; fitness: number } | null = null;
+    for (const id of myTeam.onGround ?? []) {
+      const player = playerById.get(id);
+      if (!player) continue;
+      const f = myFitness(id);
+      if (f < FATIGUE_BAD_CUTOFF && (!tired || f < tired.fitness)) tired = { player, fitness: f };
+    }
+    if (tired) {
+      const line = quarterLines[tired.player.PlayerID]?.find((l) => l.quarter === q)?.line;
+      const minding = [...opponents.entries()].find(([, ours]) => ours.PlayerID === tired!.player.PlayerID);
+      const mindingPlayer = minding ? theirTeam.players.find((p) => p.PlayerID === minding[0]) : undefined;
+      const mindingFp = mindingPlayer ? Math.round(fantasyPointsFor(result.boxScore[mindingPlayer.PlayerID])) : 0;
+      const replacement = bestReplacementFor(tired.player);
+      out.push({
+        id: `fatigue:${tired.player.PlayerID}`,
+        title: `${tired.player.lname}'s legs are gone`,
+        chip: `${Math.round(tired.fitness)}% FITNESS`,
+        tone: tired.fitness < 30 ? "bad" : "warn",
+        body:
+          `${plural(line?.disposals ?? 0, "disposal")} and ${plural(line?.tackles ?? 0, "tackle")} this quarter.` +
+          (mindingPlayer ? ` He is minding ${playerFullName(mindingPlayer)}, who has ${mindingFp} FP.` : ` He is at ${myTeam.positions?.get(tired.player.PlayerID) ?? "his post"} on ${Math.round(tired.fitness)}% fitness.`),
+        fixes: replacement ? [swapFix(tired.player, replacement, myFitness(replacement.PlayerID))] : [],
+        severity: (FATIGUE_BAD_CUTOFF - tired.fitness) / FATIGUE_BAD_CUTOFF + 0.3,
+      });
+    }
+
+    // Line contests below the low-feedback threshold.
+    for (const entry of myWinRates) {
+      if (entry.blended >= LINE_FEEDBACK_LOW_THRESHOLD) continue;
+      const stat = worstSubStat(entry.subRates);
+      if (!stat) continue;
+      const mine = entry.subRates[stat]!;
+      const noun = CONTEST_NOUN[stat];
+      let second = "";
+      if (entry.role === "Defensive Line") {
+        const thirds = forwardEntryOriginThirds(events, q, theirSide);
+        if (thirds.total > 0) second = ` ${theirTeam.name} went inside 50 ${thirds.total} times this quarter.`;
+      } else {
+        const top = topQuarterPerformer(theirTeam, q, events, CONTEST_STAT_FIELDS[stat].wins);
+        if (top) second = ` ${playerFullName(top.player)} won ${top.value} of them for ${theirTeam.name}.`;
+      }
+      const subRatesAsNumbers = Object.fromEntries(Object.entries(entry.subRates).map(([k, v]) => [k, v!.rate])) as Partial<Record<ContestType, number>>;
+      const rec = recommendedFocusFor(entry.role, subRatesAsNumbers);
+      const options = focusesFor(entry.role).filter((f) => f !== "Default");
+      const picks = [rec, ...options].filter((f, i, arr): f is LineCoachFocus => !!f && f !== "Default" && arr.indexOf(f) === i).slice(0, 2);
+      out.push({
+        id: `${entry.role}:${stat}`,
+        title: `${ROLE_NAME[entry.role]} losing the ${noun.plural}`,
+        chip: `${mine.wins} / ${mine.attempts} WON`,
+        tone: mine.rate < 0.3 ? "bad" : "warn",
+        body: `We won ${mine.wins} of ${mine.attempts} ${noun.plural} this quarter (${Math.round(mine.rate * 100)}%).${second}`,
+        fixes: picks.map((f) => focusFix(entry.role, f, `${ROLE_NAME[entry.role]}: `)),
+        severity: 0.5 - mine.rate,
+      });
+    }
+
+    // Wasted chances in front of goal.
+    let shots = 0;
+    let goals = 0;
+    let multiShotForwards = 0;
+    for (const p of myTeam.players) {
+      const l = quarterLines[p.PlayerID]?.find((x) => x.quarter === q)?.line;
+      if (!l) continue;
+      shots += l.shotsAtGoal;
+      goals += l.goals;
+      if (l.shotsAtGoal >= 2) multiShotForwards++;
+    }
+    if (shots >= 3 && goals / shots < 0.4) {
+      out.push({
+        id: "conversion",
+        title: "Wasting chances in front of goal",
+        chip: `${goals} / ${shots} SHOTS`,
+        tone: goals / shots < 0.25 ? "bad" : "warn",
+        body: `${Math.round((goals / shots) * 100)}% conversion this quarter` + (multiShotForwards === 0 ? ", and no forward has had more than one shot." : `, with ${plural(multiShotForwards, "player")} taking two or more shots.`),
+        fixes: [focusFix("Forward Line", "Focus on Leading", "Forward line: "), focusFix("Forward Line", "Focus on Contested Marking", "Forward line: ")],
+        severity: (0.4 - goals / shots) * 2,
+      });
+    }
+
+    out.sort((a, b) => b.severity - a.severity);
+    const problems = out.slice(0, 2);
+
+    // The healthiest line, flagged so the coach doesn't fix what isn't broken.
+    const best = [...myWinRates].filter((r) => r.blended > LINE_FEEDBACK_HIGH_THRESHOLD).sort((a, b) => b.blended - a.blended)[0];
+    if (best) {
+      const stat = bestSubStat(best.subRates);
+      const top = stat ? topQuarterPerformer(myTeam, q, events, CONTEST_STAT_FIELDS[stat].wins) : null;
+      const line = stat ? best.subRates[stat]! : null;
+      problems.push({
+        id: `keep:${best.role}`,
+        title: `${ROLE_NAME[best.role]} is doing its job`,
+        chip: stat ? `${Math.round(best.subRates[stat]!.rate * 100)}% ${CONTEST_NOUN[stat].chip} WIN` : `${Math.round(best.blended * 100)}% WIN RATE`,
+        tone: "good",
+        body:
+          (line && stat ? `We won ${line.wins} of ${line.attempts} ${CONTEST_NOUN[stat].plural} this quarter.` : `On top at the contest this quarter.`) +
+          (top ? ` ${playerFullName(top.player)} led the way with ${top.value}.` : ""),
+        fixes: [],
+        severity: -1,
+        keep: true,
+      });
+    } else if (out.length > 2) {
+      problems.push(out[2]);
+    }
+    return problems;
+  }, [events, q, myTeam, theirTeam, myWinRates, theirWinRates, side, result]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Staged list (derived from the one state) --------------------------------------------------
+  const staged: { kind: string; text: string; undo: () => void }[] = [];
+  for (const w of state.swaps) {
+    const out = playerById.get(w.outgoingId);
+    const inn = playerById.get(w.incomingId);
+    staged.push({
+      kind: "SWAP",
+      text: `${inn?.lname ?? "?"} on for ${out?.lname ?? "?"} (${myTeam.positions?.get(w.outgoingId) ?? ""})`,
+      undo: () => setState((s) => ({ ...s, swaps: s.swaps.filter((x) => x !== w) })),
+    });
+  }
+  for (const role of MATCH_DAY_COACH_ROLES) {
+    if (state.lines[role] !== initialLines[role]) {
+      staged.push({ kind: ROLE_KIND[role], text: focusLabel(state.lines[role]), undo: () => setState((s) => ({ ...s, lines: { ...s.lines, [role]: initialLines[role] } })) });
+    }
+  }
+  if (state.call !== currentStyle) {
+    const opt = COACHS_CALL_OPTIONS.find((o) => o.style === state.call);
+    staged.push({ kind: "TEAM", text: opt?.label ?? state.call, undo: () => setState((s) => ({ ...s, call: currentStyle })) });
+  }
+  const n = staged.length;
+  const nextQ = q + 1;
+
+  function resume() {
+    for (const w of state.swaps) onInterchange(w.outgoingId, w.incomingId);
+    for (const role of MATCH_DAY_COACH_ROLES) if (state.lines[role] !== initialLines[role]) onFocusChange(role, state.lines[role]);
+    onChoose(state.call);
+  }
+
+  function reset() {
+    setState(initial);
     setArmedBenchId(null);
-    setSelectedStyle(currentStyle);
   }
 
-  const stagedOutgoingIds = new Set(stagedSwaps.map((swap) => swap.outgoingId));
-  const stagedIncomingIds = new Set(stagedSwaps.map((s) => s.incomingId));
+  // --- Styles ---------------------------------------------------------------------------------------
+  const toneColor = (t: Tone) => (t === "bad" ? FALL : t === "warn" ? WARN : RISE);
+  const chipBtn = (on: boolean, rec: boolean): CSSProperties => ({
+    borderRadius: 999,
+    padding: "6px 11px",
+    cursor: "pointer",
+    font: `600 12px ${BARLOW}`,
+    whiteSpace: "nowrap",
+    border: `1px solid ${on ? "var(--acc)" : rec ? "rgba(79,214,154,.55)" : "rgba(255,255,255,.14)"}`,
+    background: on ? "var(--acc)" : "transparent",
+    color: on ? "var(--on)" : rec ? RISE : "#c3ccdd",
+  });
+  const card: CSSProperties = { background: CARD_BG, border: CARD_BORDER, borderRadius: 14 };
 
   return (
-    <div className="flex flex-col gap-2 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
-      {/* --- Top bar --------------------------------------------------------------------------- */}
-      <div className="card flex flex-wrap items-center gap-3 !py-2.5">
-        <span className="rounded-lg bg-primary px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-white">
-          Quarter Time · Q{quarterJustFinished} → Q{quarterJustFinished + 1}
-        </span>
-        <span className="text-sm font-semibold text-slate-200">
-          {myTeam.name} <span className="tabular-nums text-primary-light">{myPoints}</span>
-          <span className="mx-1.5 text-slate-600">–</span>
-          <span className="tabular-nums text-slate-400">{theirPoints}</span> {theirTeam.name}
-        </span>
-        <span className="rounded-lg bg-bad/15 px-2.5 py-1 text-xs font-semibold text-bad" title="This break's real context — a real stat differential, never a fabricated point cost">
-          {contextChip}
-        </span>
-        <div className="ml-auto flex items-center gap-3">
-          <div className="flex items-center gap-1" title={`${quarterJustFinished} of 4 quarters complete`}>
-            {[1, 2, 3, 4].map((q) => (
-              <span key={q} className={`h-1.5 w-6 rounded-full ${q <= quarterJustFinished ? "bg-primary" : "bg-base-700"}`} />
-            ))}
-          </div>
-          <button onClick={commitAndResume} className="rounded-lg bg-primary px-4 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
-            Resume Q{quarterJustFinished + 1}
-          </button>
-        </div>
-      </div>
-
-      <div className="grid gap-2 lg:min-h-0 lg:flex-1 lg:grid-cols-[404px_minmax(0,1fr)_396px]">
-        {/* --- LEFT: What's Hurting Us ------------------------------------------------------- */}
-        <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">What's Hurting Us</div>
-          {problems.length === 0 && <div className="card flex-1 text-xs italic text-slate-500">Nothing standout yet — every line's around 50/50 this quarter.</div>}
-          {problems.map((p) => (
-            <div key={p.id} className="card min-h-0 space-y-1.5 !py-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-slate-200">{p.headline}</span>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${p.costTone === "bad" ? "bg-bad/20 text-bad" : "bg-warn/20 text-warn"}`}>{p.costLabel}</span>
-              </div>
-              <div className="space-y-0.5 text-[10.5px] text-slate-400">
-                <div>{p.evidence[0]}</div>
-                <div>{p.evidence[1]}</div>
-              </div>
-              {p.levers.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {p.levers.map((lever) => (
-                    <button
-                      key={lever.label}
-                      onClick={() => setHighlighted(lever.highlight)}
-                      className="rounded-full bg-base-700 px-2 py-0.5 text-[10px] font-medium text-slate-300 hover:bg-primary hover:text-white"
-                    >
-                      {lever.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-          {dontTouch && (
-            <div className="card min-h-0 space-y-1.5 border-good/40 bg-good/5 !py-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-good">✓ {dontTouch.headline}</span>
-                <span className="shrink-0 rounded-full bg-good/20 px-2 py-0.5 text-[10px] font-bold tabular-nums text-good">{dontTouch.costLabel}</span>
-              </div>
-              <div className="space-y-0.5 text-[10.5px] text-slate-400">
-                <div>{dontTouch.evidence[0]}</div>
-                <div>{dontTouch.evidence[1]}</div>
-              </div>
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-good/80">Don't touch this</div>
-            </div>
-          )}
-        </div>
-
-        {/* --- MIDDLE: Line coaches + Coach's Call --------------------------------------------- */}
-        <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
-          <div className="grid grid-cols-2 gap-2 lg:min-h-0 lg:flex-1">
-            {MATCH_DAY_COACH_ROLES.map((role) => {
-              const winRate = myWinRates.find((r) => r.role === role);
-              const subRatesAsNumbers: Partial<Record<ContestType, number>> = {};
-              for (const [stat, line] of Object.entries(winRate?.subRates ?? {}) as [ContestType, SubStatQuarterLine][]) {
-                subRatesAsNumbers[stat] = line.rate;
-              }
-              const recommended = recommendedFocusFor(role, subRatesAsNumbers);
-              const current = focusFor(role);
-              const assignedCoachId = lineCoaches[role];
-              const assignedCoach = assignedCoachId !== undefined ? ASSISTANT_COACH_POOL.find((c) => c.id === assignedCoachId) : undefined;
-              return (
-                <div key={role} className="card flex min-h-0 flex-col gap-1 !p-2">
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-300">{role}</span>
-                    <span className="truncate text-[9.5px] text-slate-500">{assignedCoach ? `${assignedCoach.name} — ${gradeForOvr(assignedCoach.ratings[role].ovr)}` : "Baseline"}</span>
-                  </div>
-                  <p className="line-clamp-2 text-[11px] italic text-slate-300">&ldquo;{feedbackFor(role)}&rdquo;</p>
-                  <div className="flex flex-wrap gap-1">
-                    {focusesFor(role).map((focus) => {
-                      const isCurrent = focus === current;
-                      const isRecommended = focus === recommended && !isCurrent;
-                      const isHighlighted = highlighted?.kind === "focus" && highlighted.role === role && highlighted.focus === focus;
-                      return (
-                        <button
-                          key={focus}
-                          onClick={() => onFocusChange(role, focus)}
-                          className={`rounded-full px-2 py-0.5 text-[9.5px] font-semibold transition-colors ${
-                            isCurrent
-                              ? "bg-primary text-white"
-                              : isRecommended
-                                ? "border border-good text-good"
-                                : "bg-base-700 text-slate-300 hover:bg-base-600"
-                          } ${isHighlighted ? "ring-2 ring-white" : ""}`}
-                        >
-                          {isRecommended && "★ "}
-                          {focus}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Coach's Call</div>
-          <div className="grid grid-cols-5 gap-1.5">
-            {COACHS_CALL_OPTIONS.map((opt) => {
-              const impact = gameStyleModelledImpact(opt.style);
-              const isSelected = opt.style === selectedStyle;
-              const isHighlighted = highlighted?.kind === "style" && highlighted.style === opt.style;
-              return (
-                <button
-                  key={opt.style}
-                  onClick={() => setSelectedStyle(opt.style)}
-                  className={`flex flex-col gap-1 rounded-lg border p-1.5 text-left transition-colors ${
-                    isSelected ? "border-primary bg-primary/10" : "border-base-600 bg-base-900 hover:bg-base-800"
-                  } ${isHighlighted ? "ring-2 ring-white" : ""}`}
-                >
-                  <span className="truncate text-[10.5px] font-semibold text-slate-200">
-                    {opt.label}
-                    {opt.style === currentStyle && <span className="ml-1 font-normal text-slate-500">(current)</span>}
-                  </span>
-                  <ImpactBar label="Our score" value={impact.ourScoring} goodWhenPositive={true} />
-                  <ImpactBar label="Their score" value={impact.theirScoring} goodWhenPositive={false} />
-                  <ImpactBar label="Fitness cost" value={impact.fitnessCost} goodWhenPositive={false} />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* --- RIGHT: Interchange + staging ----------------------------------------------------- */}
-        <InterchangePanel
-          team={myTeam}
-          fitnessFor={(playerId) => fitnessFor(side, playerId)}
-          armedBenchId={armedBenchId}
-          stagedSwaps={stagedSwaps}
-          stagedOutgoingIds={stagedOutgoingIds}
-          stagedIncomingIds={stagedIncomingIds}
-          highlighted={highlighted}
-          onArmBench={(id) => setArmedBenchId((cur) => (cur === id ? null : id))}
-          onStage={(outgoingId, incomingId) => {
-            setStagedSwaps((cur) => [...cur, { outgoingId, incomingId }]);
-            setArmedBenchId(null);
-          }}
-          onReset={resetStaging}
-          onConfirm={commitAndResume}
-          onViewPlayer={setSelectedPlayer}
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-stretch gap-3">
+        <StatStrip title={`Q${q} IN NUMBERS`} homeName={myTeam.name} awayName={theirTeam.name} items={quarterNumbers} />
+        <BreakBar
+          label={`${breakLabel(q)} · Q${nextQ} STARTS WHEN YOU RESUME`}
+          summary={n ? staged.map((x) => x.text).join(" · ") : "No changes staged"}
+          resumeLabel={`Resume Q${nextQ}${n ? ` · ${plural(n, "change")}` : ""}`}
+          onReset={reset}
+          onResume={resume}
         />
       </div>
 
-      {selectedPlayer && (
+      {/* Decision row (critique C5): hurting · coach's call · staged, in decision order. */}
+      <div className="flex flex-wrap items-start gap-3">
+        <section data-screen-label="What's hurting us" style={{ flex: "1.3 1 380px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ ...sectionLabelStyle(), padding: "0 2px" }}>WHAT'S HURTING US · RANKED</div>
+          {cards.length === 0 && <div style={{ ...card, padding: "12px 14px", font: `500 13px ${BARLOW}`, color: "#aab3c3" }}>Nothing standing out this quarter. Every line is close to even at the contest.</div>}
+          {cards.map((h) => {
+            const col = toneColor(h.tone);
+            return (
+              <div key={h.id} style={{ ...card, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: col, flex: "none" }} />
+                    <span style={{ font: `700 17px/1.2 ${COND}`, color: "#fff" }}>{capitalise(h.title)}</span>
+                  </div>
+                  <span style={{ flex: "none", font: `600 10px ${MONO}`, letterSpacing: ".8px", color: col, padding: "3px 7px", borderRadius: 4, border: `1px solid ${col}`, whiteSpace: "nowrap" }}>{h.chip}</span>
+                </div>
+                <div style={{ font: `500 13px/1.45 ${BARLOW}`, color: "#c3ccdd" }}>{h.body}</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {h.fixes.map((f) => {
+                    const on = f.isApplied(state);
+                    return (
+                      <button key={f.label} onClick={() => setState((s) => f.toggle(s))} style={chipBtn(on, !on && h.fixes.length === 1)}>
+                        {on ? f.appliedLabel : f.label}
+                      </button>
+                    );
+                  })}
+                  {h.keep && <span style={{ font: `600 10px ${MONO}`, letterSpacing: "1px", color: RISE, padding: "6px 0" }}>NO CHANGE NEEDED</span>}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+
+        <section data-screen-label="Coach's call" style={{ ...card, flex: "1 1 320px", minWidth: 0, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={sectionLabelStyle()}>COACH'S CALL · WHOLE TEAM</div>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 52px 52px 52px", gap: 8, padding: "4px 10px", font: `600 9px ${MONO}`, letterSpacing: ".7px", color: "#8f9ab0" }}>
+            <span />
+            <span style={{ textAlign: "right" }}>OUR SC.</span>
+            <span style={{ textAlign: "right" }}>THEIR SC.</span>
+            <span style={{ textAlign: "right" }}>FITNESS</span>
+          </div>
+          {COACHS_CALL_OPTIONS.map((opt) => {
+            const on = state.call === opt.style;
+            const impact = gameStyleModelledImpact(opt.style);
+            const cell = (v: number, goodWhenPositive: boolean) => {
+              const r = Math.round(v);
+              const col = r === 0 ? "#8f9ab0" : (goodWhenPositive ? r > 0 : r < 0) ? RISE : FALL;
+              return (
+                <span style={{ textAlign: "right", font: `600 12px ${MONO}`, color: col }}>
+                  {r > 0 ? "+" : ""}
+                  {r}%
+                </span>
+              );
+            };
+            return (
+              <button
+                key={opt.style}
+                role="radio"
+                aria-checked={on}
+                title={opt.blurb}
+                onClick={() => setState((s) => ({ ...s, call: opt.style }))}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0,1fr) 52px 52px 52px",
+                  gap: 8,
+                  alignItems: "center",
+                  padding: 10,
+                  borderRadius: 9,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  border: `1px solid ${on ? "var(--acc)" : "rgba(255,255,255,.06)"}`,
+                  background: on ? "color-mix(in oklch, var(--acc) 12%, transparent)" : "rgba(0,0,0,.15)",
+                  minHeight: 44,
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <span
+                    style={{
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      flex: "none",
+                      border: `2px solid ${on ? "var(--acc)" : "#5d6880"}`,
+                      background: on ? "radial-gradient(circle, var(--acc) 0 3px, transparent 3.5px)" : "transparent",
+                    }}
+                  />
+                  <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {opt.label}
+                    {opt.style === currentStyle && <span style={{ color: "#8f9ab0", fontWeight: 500 }}> · now</span>}
+                  </span>
+                </span>
+                {cell(impact.ourScoring, true)}
+                {cell(impact.theirScoring, false)}
+                {cell(impact.fitnessCost, false)}
+              </button>
+            );
+          })}
+        </section>
+
+        <section data-screen-label="Staged changes" style={{ flex: ".8 1 260px", minWidth: 0, background: PANEL_BG, border: "1px solid color-mix(in oklch, var(--acc) 25%, rgba(255,255,255,.07))", borderRadius: 14, overflow: "hidden" }}>
+          <Stripe />
+          <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={sectionLabelStyle(true)}>
+              STAGED FOR Q{nextQ} · {n} CHANGE{n === 1 ? "" : "S"}
+            </div>
+            {n === 0 && <div style={{ font: `500 13px/1.45 ${BARLOW}`, color: "#aab3c3" }}>Nothing staged. Resuming keeps the current plan.</div>}
+            {staged.map((x) => (
+              <div key={x.kind + x.text} style={{ display: "grid", gridTemplateColumns: "62px minmax(0,1fr) 20px", gap: 8, alignItems: "center", padding: "8px 0", borderTop: "1px solid rgba(255,255,255,.06)" }}>
+                <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "#8f9ab0" }}>{x.kind}</span>
+                <span style={{ font: `600 13px/1.35 ${BARLOW}`, color: "#eef2f8" }}>{x.text}</span>
+                <button onClick={x.undo} title="Remove" style={{ background: "none", border: 0, color: "#8f9ab0", font: `500 16px ${BARLOW}`, cursor: "pointer", padding: 0 }}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {/* Line instructions (critique C6, C10): natural-height cards; recommended chips marked ★. */}
+      <div style={{ ...sectionLabelStyle(), padding: "4px 2px 0" }}>LINE INSTRUCTIONS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap: 12, alignItems: "start" }}>
+        {MATCH_DAY_COACH_ROLES.map((role) => {
+          const winRate = myWinRates.find((r) => r.role === role);
+          const subRates = Object.fromEntries(Object.entries(winRate?.subRates ?? {}).map(([k, v]) => [k, (v as SubStatQuarterLine).rate])) as Partial<Record<ContestType, number>>;
+          const recommended = recommendedFocusFor(role, subRates) ?? "Default";
+          const coachId = lineCoaches[role];
+          const coach = coachId !== undefined ? ASSISTANT_COACH_POOL.find((c) => c.id === coachId) : undefined;
+          return (
+            <section key={role} style={{ ...card, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                <span style={{ font: `700 16px ${COND}`, color: "#fff" }}>{ROLE_NAME[role]}</span>
+                <span style={{ font: `500 11px ${BARLOW}`, color: "#8f9ab0" }}>
+                  {coach ? (
+                    <>
+                      {coach.name} · <span style={{ color: "var(--accT)", fontWeight: 700 }}>{gradeForOvr(coach.ratings[role].ovr)}</span>
+                    </>
+                  ) : (
+                    "No line coach"
+                  )}
+                </span>
+              </div>
+              <div style={{ font: `italic 500 13px/1.4 ${BARLOW}`, color: "#c3ccdd" }}>"{capitalise(feedbackFor(role))}"</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {focusesFor(role).map((focus) => {
+                  const on = state.lines[role] === focus;
+                  const rec = focus === recommended;
+                  const label = rec ? (focus === "Default" ? "Default ★" : `★ ${focusLabel(focus)}`) : focusLabel(focus);
+                  return (
+                    <button key={focus} onClick={() => setState((s) => ({ ...s, lines: { ...s.lines, [role]: focus } }))} style={chipBtn(on, rec)}>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      <InterchangePanel
+        team={myTeam}
+        fitness={myFitness}
+        swaps={state.swaps}
+        armedBenchId={armedBenchId}
+        onArm={(id) => setArmedBenchId((cur) => (cur === id ? null : id))}
+        onStage={(outgoingId, incomingId) => {
+          setState((s) => ({ ...s, swaps: [...s.swaps.filter((w) => w.outgoingId !== outgoingId && w.incomingId !== incomingId), { outgoingId, incomingId }] }));
+          setArmedBenchId(null);
+        }}
+        onUnstage={(outgoingId) => setState((s) => ({ ...s, swaps: s.swaps.filter((w) => w.outgoingId !== outgoingId) }))}
+        onView={setDrawerPlayer}
+      />
+
+      {drawerPlayer && (
         <PlayerMatchDrawer
-          player={selectedPlayer}
+          player={drawerPlayer}
           side={side}
-          line={result.boxScore[selectedPlayer.PlayerID]}
-          events={result.events.filter((ev) => ev.quarter <= quarterJustFinished)}
-          position={myTeam.positions?.get(selectedPlayer.PlayerID)}
-          onGround={myTeam.onGround?.has(selectedPlayer.PlayerID)}
-          fitness={fitnessFor(side, selectedPlayer.PlayerID)}
+          line={result.boxScore[drawerPlayer.PlayerID]}
+          events={events.filter((ev) => ev.quarter <= q)}
+          position={myTeam.positions?.get(drawerPlayer.PlayerID)}
+          onGround={myTeam.onGround?.has(drawerPlayer.PlayerID)}
+          fitness={myFitness(drawerPlayer.PlayerID)}
           roster={myTeam.players.map((player) => ({ player, side }))}
-          onSelect={(player) => setSelectedPlayer(player)}
-          onClose={() => setSelectedPlayer(null)}
+          onSelect={(player) => setDrawerPlayer(player)}
+          onClose={() => setDrawerPlayer(null)}
         />
       )}
     </div>
   );
 }
 
+// --- Interchange (critiques C7-C9) -----------------------------------------------------------------
+
+/** 6 lines × 3 lanes, back → forward (the oval's attacking direction), filled column by column. */
+const TILE_COLUMNS: { label: string; positions: Position[] }[] = [
+  { label: "BACK", positions: ["BP", "FB", "BP"] },
+  { label: "HALF BACK", positions: ["HBF", "CHB", "HBF"] },
+  { label: "CENTRE", positions: ["W", "C", "W"] },
+  { label: "RUCK", positions: ["RR", "R", "ROV"] },
+  { label: "HALF FWD", positions: ["HFF", "CHF", "HFF"] },
+  { label: "FORWARD →", positions: ["FP", "FF", "FP"] },
+];
+
 function InterchangePanel({
   team,
-  fitnessFor,
+  fitness,
+  swaps,
   armedBenchId,
-  stagedSwaps,
-  stagedOutgoingIds,
-  stagedIncomingIds,
-  highlighted,
-  onArmBench,
+  onArm,
   onStage,
-  onReset,
-  onConfirm,
-  onViewPlayer,
+  onUnstage,
+  onView,
 }: {
   team: MatchTeam;
-  fitnessFor: (playerId: number) => number;
+  fitness: (id: number) => number;
+  swaps: StagedSwap[];
   armedBenchId: number | null;
-  stagedSwaps: StagedSwap[];
-  stagedOutgoingIds: Set<number>;
-  stagedIncomingIds: Set<number>;
-  highlighted: HighlightTarget;
-  onArmBench: (id: number) => void;
+  onArm: (id: number) => void;
   onStage: (outgoingId: number, incomingId: number) => void;
-  onReset: () => void;
-  onConfirm: () => void;
-  /** Sep 2026 round 103 — opens the shared player drawer. On-ground cells only fire this while idle (no bench player armed) — that click is otherwise dead real-estate today; bench cards keep their primary click for arming, so their own jumper-number badge is the nested affordance instead (see that JSX's own comment). */
-  onViewPlayer: (player: Player) => void;
+  onUnstage: (outgoingId: number) => void;
+  onView: (p: Player) => void;
 }) {
   if (!team.onGround || !team.positions || !team.interchangeEligibility) {
-    return <div className="card text-xs italic text-slate-500">No real Selection Committee position data for {team.name} — nothing to interchange within.</div>;
+    return <div style={{ background: CARD_BG, border: CARD_BORDER, borderRadius: 14, padding: "12px 14px", font: `500 13px ${BARLOW}`, color: "#8f9ab0" }}>No position data for {team.name}, so there's nothing to interchange within.</div>;
   }
-
   const byPosition = groupByPosition(team);
-  const bench = benchPlayers(team).filter((p) => !stagedIncomingIds.has(p.PlayerID));
-  const armedBench = armedBenchId !== null ? bench.find((p) => p.PlayerID === armedBenchId) : undefined;
-  const armedEligible = armedBench ? team.interchangeEligibility.get(armedBench.PlayerID) : undefined;
+  const bench = benchPlayers(team);
+  const playerById = new Map(team.players.map((p) => [p.PlayerID, p]));
+  const armed = armedBenchId !== null ? playerById.get(armedBenchId) : undefined;
+  const armedEligible = armed ? team.interchangeEligibility.get(armed.PlayerID) : undefined;
 
   const seen = new Map<Position, number>();
-  function nextOccupant(pos: Position): Player | undefined {
-    const list = byPosition.get(pos) ?? [];
-    const i = seen.get(pos) ?? 0;
-    seen.set(pos, i + 1);
-    return list[i];
-  }
+  const tiles = TILE_COLUMNS.flatMap((col) =>
+    col.positions.map((pos) => {
+      const list = byPosition.get(pos) ?? [];
+      const i = seen.get(pos) ?? 0;
+      seen.set(pos, i + 1);
+      return { pos, player: list[i] as Player | undefined };
+    }),
+  );
+
+  const hint = armed ? `Now tap the player ${armed.lname} replaces` : "Tap a bench player, then the player to replace. Tap a swapped tile to undo.";
 
   return (
-    <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Interchange</div>
-      <div className="space-y-2 rounded-lg border border-black/30 bg-[#0f2a1a] p-2 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
-        <div className="grid grid-cols-3 gap-1">
-          {GROUND_ROW_POSITIONS.flatMap((row) =>
-            row.positions.map((pos, i) => {
-              const player = nextOccupant(pos);
-              const isStagedOut = player ? stagedOutgoingIds.has(player.PlayerID) : false;
-              const stagedFor = player ? stagedSwaps.find((s) => s.outgoingId === player.PlayerID) : undefined;
-              const incomingName = stagedFor ? team.players.find((p) => p.PlayerID === stagedFor.incomingId)?.lname : undefined;
-              const eligible = !!armedBench && !!player && !isStagedOut && !!armedEligible?.has(pos);
-              // Sep 2026 round 103 — [[Full-Time Review and Unified Player Drawer]]: while idle (no
-              // bench player armed) this cell's click was previously dead real-estate (`clickable`
-              // required `armedBench`) — that idle click now opens the shared drawer instead. The
-              // moment a bench player IS armed, the cell reverts to its existing arm/stage job — same
-              // button, disambiguated by armed state, exactly like its own dimming already is.
-              const viewable = !armedBench && !!player;
-              const disabled = !player || (!!armedBench && !eligible);
-              const isHighlighted = highlighted?.kind === "interchange" && player?.PlayerID === highlighted.playerId;
-              return (
-                <button
-                  key={`${row.label}-${i}`}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    if (armedBench && eligible && player) onStage(player.PlayerID, armedBench.PlayerID);
-                    else if (viewable && player) onViewPlayer(player);
-                  }}
-                  title={
-                    player
-                      ? armedBench
-                        ? `${pos} — ${player.fname} ${player.lname}`
-                        : `${pos} — ${player.fname} ${player.lname} — click to view stats`
-                      : pos
-                  }
-                  className={`flex h-[54px] flex-col items-center justify-center gap-0.5 rounded-lg border-2 px-1 text-center transition-colors ${
-                    isStagedOut
-                      ? "border-bad bg-bad/10"
-                      : armedBench
-                        ? eligible
-                          ? "cursor-pointer border-accent bg-accent/10"
-                          : "cursor-not-allowed border-base-700 opacity-30"
-                        : viewable
-                          ? "cursor-pointer border-base-600 bg-base-800/90 hover:border-slate-400"
-                          : "border-base-600 bg-base-800/90"
-                  } ${isHighlighted ? "ring-2 ring-white" : ""}`}
-                >
-                  <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">{pos}</span>
-                  {player ? (
-                    <>
-                      <span className="max-w-full truncate text-[10px] font-semibold leading-tight text-slate-100">#{player.jumperNumber} {player.lname}</span>
-                      <span className="w-9">
-                        <MiniBar value={fitnessFor(player.PlayerID)} colourClass={fitnessColour(fitnessFor(player.PlayerID))} />
-                      </span>
-                      {incomingName && <span className="text-[8px] font-semibold text-primary-light">→ {incomingName}</span>}
-                    </>
-                  ) : (
-                    <span className="text-lg leading-none text-slate-600">—</span>
-                  )}
-                </button>
-              );
-            }),
-          )}
-        </div>
-
-        {bench.length > 0 && (
-          <div className="border-t border-white/10 pt-1.5">
-            <div className="mb-1 text-center text-[9px] uppercase tracking-wide text-slate-400">
-              {armedBench ? `${armedBench.lname} armed — click a highlighted position` : "Click a bench player to arm a swap"}
+    <section data-screen-label="Interchange" style={{ background: CARD_BG, border: CARD_BORDER, borderRadius: 14, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={sectionLabelStyle()}>INTERCHANGE · FITNESS</span>
+        <span style={{ font: `500 12px ${BARLOW}`, color: armed ? "var(--accT)" : "#8f9ab0" }}>{hint}</span>
+      </div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
+        {/* The only sideways scroll on Match Day (spec §4): the pitch keeps 560px on narrow screens. */}
+        <div style={{ flex: "4 1 560px", minWidth: 0, overflowX: "auto" }}>
+          <div style={{ minWidth: 560, borderRadius: 12, padding: 10, background: "color-mix(in oklch, #2b6a35 22%, #10151f)", border: "1px solid rgba(255,255,255,.06)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6,minmax(0,1fr))", gap: 6, marginBottom: 6, font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "#8f9ab0", textAlign: "center" }}>
+              {TILE_COLUMNS.map((c) => (
+                <span key={c.label}>{c.label}</span>
+              ))}
             </div>
-            <div className="flex flex-wrap justify-center gap-1">
-              {bench.map((p) => {
-                const isArmed = armedBenchId === p.PlayerID;
-                const isHighlighted = highlighted?.kind === "interchange" && highlighted.playerId === p.PlayerID;
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6,minmax(0,1fr))", gridTemplateRows: "repeat(3,auto)", gridAutoFlow: "column", gap: 6 }}>
+              {tiles.map(({ pos, player }, i) => {
+                if (!player) {
+                  return (
+                    <div key={i} style={{ minHeight: 64, borderRadius: 9, border: "1px dashed rgba(255,255,255,.08)", padding: "8px 9px", font: `600 9px ${MONO}`, color: "#5d6880" }}>
+                      {pos}
+                    </div>
+                  );
+                }
+                const swap = swaps.find((w) => w.outgoingId === player.PlayerID);
+                const inP = swap ? playerById.get(swap.incomingId) : undefined;
+                const show = inP ?? player;
+                const fit = fitness(show.PlayerID);
+                const eligible = !!armed && !!armedEligible?.has(pos);
+                const dim = !!armed && !eligible;
                 return (
                   <button
-                    key={p.PlayerID}
+                    key={i}
                     type="button"
-                    onClick={() => onArmBench(p.PlayerID)}
-                    className={`flex items-center gap-1 rounded-lg border-2 px-1.5 py-0.5 text-[10px] transition-colors ${
-                      isArmed ? "border-accent bg-accent/10" : "border-base-600 bg-base-800/90 hover:bg-base-700"
-                    } ${isHighlighted ? "ring-2 ring-white" : ""}`}
+                    disabled={dim}
+                    title={armed ? (eligible ? `Bring ${armed.lname} on for ${player.lname}` : `${armed.lname} can't play ${pos}`) : swap ? "Tap to undo this swap" : `View ${playerFullName(player)}'s match stats`}
+                    onClick={() => {
+                      if (armed && eligible) onStage(player.PlayerID, armed.PlayerID);
+                      else if (!armed && swap) onUnstage(player.PlayerID);
+                      else if (!armed) onView(player);
+                    }}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                      gap: 4,
+                      padding: "8px 9px",
+                      borderRadius: 9,
+                      cursor: dim ? "not-allowed" : "pointer",
+                      minHeight: 64,
+                      textAlign: "left",
+                      minWidth: 0,
+                      opacity: dim ? 0.4 : 1,
+                      border: `1px solid ${armed && eligible ? "color-mix(in oklch, var(--acc) 45%, transparent)" : fit < 45 && !inP ? "rgba(255,163,122,.55)" : "rgba(255,255,255,.08)"}`,
+                      background: inP ? "color-mix(in oklch, var(--acc) 14%, rgba(0,0,0,.25))" : "rgba(0,0,0,.25)",
+                    }}
                   >
-                    <span className="flex items-center gap-1 text-slate-200">
-                      {/* Sep 2026 round 103 — this card's own click always arms/disarms (the primary
-                          interaction), so the jumper number is its own nested `role="button"` span —
-                          can't nest a real `<button>` inside one, same reasoning `PlayerLink`'s own
-                          `as="span"` doc comment gives — opening the shared drawer without disturbing it. */}
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onViewPlayer(p);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            onViewPlayer(p);
-                          }
-                        }}
-                        title={`View ${p.fname} ${p.lname}'s stats`}
-                        className="cursor-pointer rounded bg-base-900/70 px-1 tabular-nums text-slate-400 hover:text-primary-light"
-                      >
-                        #{p.jumperNumber}
-                      </span>
-                      {p.lname}
+                    <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".7px", color: "#8f9ab0" }}>{pos}</span>
+                    <span style={{ font: `600 13px ${BARLOW}`, color: inP ? "var(--accT)" : "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+                      #{show.jumperNumber} {show.lname}
+                      {inP ? " ⇄" : ""}
                     </span>
-                    <span className="w-8">
-                      <MiniBar value={fitnessFor(p.PlayerID)} colourClass={fitnessColour(fitnessFor(p.PlayerID))} />
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+                      <span style={{ flex: 1, height: 4, borderRadius: 2, background: "rgba(255,255,255,.08)", overflow: "hidden" }}>
+                        <span style={{ display: "block", height: "100%", width: `${Math.max(0, Math.min(100, fit))}%`, background: fitColor(fit) }} />
+                      </span>
+                      <span style={{ font: `600 11px ${MONO}`, color: fitColor(fit) }}>{Math.round(fit)}%</span>
                     </span>
                   </button>
                 );
               })}
             </div>
           </div>
-        )}
-      </div>
-
-      <div className="card min-h-0 space-y-1.5 !p-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Staged Changes</div>
-        {stagedSwaps.length === 0 ? (
-          <div className="text-[10.5px] italic text-slate-500">No changes staged yet.</div>
-        ) : (
-          <ul className="space-y-0.5 text-[10.5px] text-slate-300">
-            {stagedSwaps.map((s, i) => {
-              const out = team.players.find((p) => p.PlayerID === s.outgoingId);
-              const inc = team.players.find((p) => p.PlayerID === s.incomingId);
-              return (
-                <li key={i}>
-                  {out?.lname} → {inc?.lname} ({team.positions?.get(s.outgoingId)})
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <div className="flex gap-2 pt-1">
-          <button onClick={onReset} className="flex-1 rounded-lg bg-base-800 px-3 py-1.5 text-xs text-slate-400 hover:bg-base-700">
-            Reset
-          </button>
-          <button onClick={onConfirm} className="flex-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
-            Confirm & Resume
-          </button>
+        </div>
+        <div style={{ flex: "1 1 200px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "#8f9ab0" }}>BENCH · TAP TO ARM</div>
+          {bench.map((b) => {
+            const used = swaps.find((w) => w.incomingId === b.PlayerID);
+            const on = armedBenchId === b.PlayerID;
+            const fit = fitness(b.PlayerID);
+            return (
+              <button
+                key={b.PlayerID}
+                type="button"
+                onClick={() => onArm(b.PlayerID)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: 10,
+                  borderRadius: 9,
+                  cursor: "pointer",
+                  minHeight: 44,
+                  border: `1px solid ${on ? "var(--acc)" : "rgba(255,255,255,.08)"}`,
+                  background: on ? "color-mix(in oklch, var(--acc) 18%, transparent)" : used ? "color-mix(in oklch, var(--acc) 8%, rgba(0,0,0,.2))" : "rgba(0,0,0,.2)",
+                }}
+              >
+                <span style={{ font: `600 11px ${MONO}`, color: "var(--accT)", width: 26, textAlign: "left" }}>#{b.jumperNumber}</span>
+                <span style={{ flex: 1, minWidth: 0, font: `600 13px ${BARLOW}`, color: "#eef2f8", textAlign: "left", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {b.lname}
+                  {used ? ` → ${team.positions?.get(used.outgoingId) ?? ""}` : ""}
+                </span>
+                <span style={{ font: `600 11px ${MONO}`, color: fitColor(fit) }}>{Math.round(fit)}%</span>
+              </button>
+            );
+          })}
         </div>
       </div>
-    </div>
+    </section>
   );
 }

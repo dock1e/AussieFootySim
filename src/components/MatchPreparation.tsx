@@ -139,7 +139,7 @@ export function MatchPreparation({ homeTeam, awayTeam, onBack, onKickOff }: Matc
           <button onClick={onBack} className="rounded-lg bg-base-800 px-4 py-2 text-sm text-slate-400 hover:bg-base-700">
             Back
           </button>
-          <button onClick={kickOff} className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-dark">
+          <button onClick={kickOff} className="rounded-lg px-5 py-2.5 text-sm font-semibold" style={{ background: "var(--acc)", color: "var(--on)" }}>
             First Bounce
           </button>
         </div>

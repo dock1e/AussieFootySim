@@ -321,7 +321,7 @@ export default function App() {
         {screen === "squad" && <List />}
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
-        {screen === "match" && <LiveMatch onCockpitActiveChange={setMatchCockpitActive} />}
+        {screen === "match" && <LiveMatch onCockpitActiveChange={setMatchCockpitActive} onContinue={() => setScreen("dashboard")} />}
         {screen === "listNeeds" && (
           <ListNeeds
             onGoToCombine={() => setScreen("combine")}

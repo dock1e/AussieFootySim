@@ -3,10 +3,10 @@ import { POSITIONS, suitabilityFor, type Archetype, type Position, type Suitabil
 import { CLUBS, clubById } from "../../../types/club";
 import type { MatchTeam } from "../../../engine/team";
 import type { Season } from "../../../engine/season";
-import { roundsForClub } from "../../../engine/fixture";
+import { matchesInRound, roundsForClub, timeslotFor, type Timeslot } from "../../../engine/fixture";
 import { groundForMatch } from "../../../data/clubGrounds";
 import { getPlayersByClub } from "../../../data/loadPlayers";
-import { tacticGroupForSlot, type GameStyle, type Tactic, type TeamPlan } from "../../../engine/tactics";
+import type { GameStyle, Tactic, TeamPlan } from "../../../engine/tactics";
 import { COACHS_CALL_OPTIONS } from "../../CoachsCall";
 import { FALL, RISE, WARN } from "../shared";
 
@@ -18,14 +18,32 @@ import { FALL, RISE, WARN } from "../shared";
 // ---------------------------------------------------------------------------------------------------
 // Slots. `POSITIONS` indices, laid out forward-at-the-top like the reference's line-up grid.
 
-/** FP FF FP / HFF CHF HFF / ROV R RR / W C W / HBF CHB HBF / BP FB BP. */
-export const FORWARD_UP_SLOTS: number[] = [16, 15, 17, 12, 14, 13, 11, 9, 10, 6, 7, 8, 3, 5, 4, 1, 0, 2];
+/**
+ * Canonical team-sheet order (Match Day flow v2 §2): FP FF FP / HFF CHF HFF / R RR ROV / W C W /
+ * HBF CHB HBF / BP FB BP. Followers are always Ruck, Ruck-rover, Rover.
+ */
+export const FORWARD_UP_SLOTS: number[] = [16, 15, 17, 12, 14, 13, 9, 10, 11, 6, 7, 8, 3, 5, 4, 1, 0, 2];
 export const INT_SLOTS: number[] = POSITIONS.reduce<number[]>((acc, p, i) => (p === "INT" ? [...acc, i] : acc), []);
-export const ROLE_LINES: { name: string; slots: number[] }[] = [
-  { name: "FORWARDS", slots: [16, 15, 17, 12, 14, 13] },
-  { name: "MIDFIELD & RUCK", slots: [11, 9, 10, 6, 7, 8] },
-  { name: "BACKS", slots: [3, 5, 4, 1, 0, 2] },
+/** Selection's six labelled lines. */
+export const SEL_LINES: { name: string; slots: number[] }[] = [
+  { name: "FWD", slots: [16, 15, 17] },
+  { name: "H-FWD", slots: [12, 14, 13] },
+  { name: "FOLL", slots: [9, 10, 11] },
+  { name: "CENTRE", slots: [6, 7, 8] },
+  { name: "H-BACK", slots: [3, 5, 4] },
+  { name: "BACK", slots: [1, 0, 2] },
 ];
+/** Game plan's three lines; `key` picks the style's line text. */
+export const PLAN_LINES: { name: string; key: "F" | "M" | "B"; slots: number[] }[] = [
+  { name: "FORWARDS", key: "F", slots: [16, 15, 17, 12, 14, 13] },
+  { name: "FOLLOWERS & CENTRE", key: "M", slots: [9, 10, 11, 6, 7, 8] },
+  { name: "BACKS", key: "B", slots: [3, 5, 4, 1, 0, 2] },
+];
+export function lineKeyFor(pos: Position): "F" | "M" | "B" {
+  if (["FP", "FF", "HFF", "CHF"].includes(pos)) return "F";
+  if (["HBF", "CHB", "BP", "FB"].includes(pos)) return "B";
+  return "M";
+}
 
 export const POSITION_FULL: Record<Position, string> = {
   FP: "Forward pocket",
@@ -108,6 +126,21 @@ export function styleBlurb(style: GameStyle): string {
   return COACHS_CALL_OPTIONS.find((o) => o.style === style)?.blurb ?? "";
 }
 
+/**
+ * What each style does to each line — written from the engine's own style effects
+ * (`gameStyleAnchorBias` in ground.ts/positioning.ts and the multipliers in tactics.ts), so the
+ * Game plan's line headers describe real behaviour.
+ */
+export const STYLE_LINE_TEXT: Record<GameStyle, Record<"F" | "M" | "B", string>> = {
+  Balanced: { F: "Natural shape", M: "Natural shape", B: "Natural shape" },
+  "Defensive Flood": { F: "Forwards stay deep and narrow", M: "Fewer forward entries", B: "Backs push up the ground and spread" },
+  "Spread the Ground": { F: "Half-forwards hold their width", M: "Wings stay wide · more uncontested chains", B: "Half-backs hold their width" },
+  "Attack the Middle": { F: "Half-forwards pull into the corridor", M: "Clearances +15% · wings tuck in", B: "Half-backs pull into the corridor" },
+  "Forward Press": { F: "Forwards push up and spread across", M: "More inside 50s", B: "Backs sit deeper and tighter" },
+};
+
+export const STYLE_ORDER: GameStyle[] = ["Balanced", "Defensive Flood", "Spread the Ground", "Attack the Middle", "Forward Press"];
+
 // ---------------------------------------------------------------------------------------------------
 // Fixture.
 
@@ -121,12 +154,15 @@ export interface FixtureRow {
   homeClubId: number;
   awayClubId: number;
   venue: string;
+  /** Kick-off slot, e.g. "Fri 7:40pm", and whether it's a night game. */
+  when: Timeslot;
   /** e.g. "W 92–71", from your side. Null while unplayed. */
   result: { outcome: "W" | "L" | "D"; score: string } | null;
 }
 
 export function seasonFixtureRows(season: Season, myClubId: number): FixtureRow[] {
   return roundsForClub(season.fixture, myClubId).map((m) => {
+    const matchIndex = matchesInRound(season.fixture, m.round).findIndex((x) => x.homeClubId === m.homeClubId && x.awayClubId === m.awayClubId);
     const isHome = m.homeClubId === myClubId;
     const opponentId = isHome ? m.awayClubId : m.homeClubId;
     const played = season.played.find((p) => p.round === m.round && p.homeClubId === m.homeClubId && p.awayClubId === m.awayClubId);
@@ -144,6 +180,7 @@ export function seasonFixtureRows(season: Season, myClubId: number): FixtureRow[
       homeClubId: m.homeClubId,
       awayClubId: m.awayClubId,
       venue: groundForMatch(m.homeClubId, m.round, season.fixture).commonName,
+      when: timeslotFor(season.seed, m.round, matchIndex),
       result,
     };
   });
@@ -222,7 +259,11 @@ const MIRROR: Partial<Record<Position, Position>> = {
   RR: "RR",
   ROV: "ROV",
 };
-const MIDFIELD_POSITIONS: Position[] = ["C", "ROV", "RR", "W"];
+/** Match Day flow v2 §5: only these opponents can be tagged — mids, wings, half-forwards, half-backs. */
+export const TAGGABLE_POSITIONS: readonly Position[] = ["C", "RR", "ROV", "W", "HFF", "HBF"];
+export function isTaggable(pos: Position | undefined): boolean {
+  return !!pos && TAGGABLE_POSITIONS.includes(pos);
+}
 
 export interface DangerMan {
   player: Player;
@@ -231,8 +272,9 @@ export interface DangerMan {
   note: string;
   /** Your player in the mirrored position (the default match-up), if any. */
   matchup: { player: Player; pos: Position } | null;
-  /** Their most dangerous midfielder — the one the flow suggests tagging. */
+  /** Their most dangerous taggable player — the one the flow suggests tagging. */
   adviseTag: boolean;
+  taggable: boolean;
 }
 
 export function dangerMen(opp: MatchTeam, ours: MatchTeam, avgFpOf: (p: Player) => number, count = 4): DangerMan[] {
@@ -245,20 +287,20 @@ export function dangerMen(opp: MatchTeam, ours: MatchTeam, avgFpOf: (p: Player) 
     const want = pos ? MIRROR[pos] : undefined;
     const mine = want ? ours.players.find((q) => ours.positions?.get(q.PlayerID) === want && !used.has(q.PlayerID)) : undefined;
     if (mine) used.add(mine.PlayerID);
-    const adviseTag = !advised && !!pos && MIDFIELD_POSITIONS.includes(pos);
+    const taggable = isTaggable(pos);
+    const adviseTag = !advised && taggable;
     if (adviseTag) advised = true;
-    return { player: p, pos, avgFp: avg, note: dangerNote(p), matchup: mine && want ? { player: mine, pos: want } : null, adviseTag };
+    return { player: p, pos, avgFp: avg, note: dangerNote(p), matchup: mine && want ? { player: mine, pos: want } : null, adviseTag, taggable };
   });
 }
 
-/**
- * Who can run a tag: only a player whose role menu includes Tagging — a midfield slot, or a bench
- * player whose archetype plays in the midfield group (that's the check `sanitizePlan` applies before a
- * match). Best man-markers first.
- */
+/** Match Day flow v2 §5: taggers are on-field starters, never the ruck; best man-markers first, top six. */
 export function taggerCandidates(ours: MatchTeam, count = 6): Player[] {
   return ours.players
-    .filter((p) => tacticGroupForSlot(ours.positions?.get(p.PlayerID), p.archetype as Archetype) === "Midfield")
+    .filter((p) => {
+      const pos = ours.positions?.get(p.PlayerID);
+      return !!pos && pos !== "INT" && pos !== "R";
+    })
     .sort((a, b) => b.manMarking - a.manMarking)
     .slice(0, count);
 }

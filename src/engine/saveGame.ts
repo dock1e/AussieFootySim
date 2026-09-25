@@ -20,7 +20,7 @@ import { computeSeasonGrades, type SeasonGradeEntry } from "./seasonGrading.ts";
 import type { ClubHistoryEntry } from "./clubHistory.ts";
 import { advanceClubFinances, simulateAiFacilityInvestment } from "./clubFinance.ts";
 import { defaultClubFinanceState, type ClubFinanceState } from "../types/clubFinance.ts";
-import { pickBest22 } from "./team.ts";
+import { pickBest22, type Cover } from "./team.ts";
 import { CLUBS } from "../types/club.ts";
 
 /**
@@ -171,6 +171,15 @@ export interface SaveGameData {
    * defaults everywhere rather than erroring.
    */
   eligibility: Record<string, Record<number, Position[]>>;
+  /**
+   * Round 130 (Match Day flow v2) — keyed by club name, then the resting player's PlayerID: who covers
+   * him (`null` = plays through). Mirrors useSelectionStore's `covers`. A club with no entry uses
+   * covers derived from its old per-position `eligibility` (see `defaultCovers`), so an older save
+   * migrates on first read. Plain JSON, no schema bump — same treatment as `eligibility`.
+   */
+  covers?: Record<string, Record<number, Cover | null>>;
+  /** Round 130 — the team and style that last took the field, per club ("Last week's team", "Changes vs last week"). */
+  lastWeek?: Record<string, LastWeekPlan>;
   /** Keyed by club name — mirrors useTeamPlanStore's `plans`. */
   teamPlans: Record<string, TeamPlan>;
   /** Null if the coach hasn't run this year's National Combine yet — mirrors useCombineStore's `window`. See CombineWindow's own doc comment. */
@@ -329,6 +338,8 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     season: null,
     lineups: {},
     eligibility: {},
+    covers: {},
+    lastWeek: {},
     teamPlans: {},
     combineWindow: null,
     contractWindow: null,
@@ -473,6 +484,12 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
 interface SerializedTeamPlan {
   gameStyle: GameStyle;
   tactics: [number, PlayerTactic][];
+  positionTactics?: [string, PlayerTactic][];
+}
+
+export interface LastWeekPlan {
+  lineup: Lineup;
+  gameStyle: GameStyle;
 }
 
 interface SerializedSeason extends Omit<Season, "condition" | "disgruntlement"> {
@@ -491,6 +508,8 @@ export interface SerializedSaveGame {
   lineups: Record<string, Lineup>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`. */
   eligibility: Record<string, Record<number, Position[]>>;
+  covers?: Record<string, Record<number, Cover | null>>;
+  lastWeek?: Record<string, LastWeekPlan>;
   teamPlans: Record<string, SerializedTeamPlan>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`/`players`. */
   combineWindow: CombineWindow | null;
@@ -521,11 +540,11 @@ export interface SerializedSaveGame {
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
-  return { gameStyle: plan.gameStyle, tactics: [...plan.tactics.entries()] };
+  return { gameStyle: plan.gameStyle, tactics: [...plan.tactics.entries()], positionTactics: plan.positionTactics ? [...plan.positionTactics.entries()] : undefined };
 }
 
 function deserializeTeamPlan(plan: SerializedTeamPlan): TeamPlan {
-  return { gameStyle: plan.gameStyle, tactics: new Map(plan.tactics) };
+  return { gameStyle: plan.gameStyle, tactics: new Map(plan.tactics), positionTactics: plan.positionTactics ? new Map(plan.positionTactics) : undefined };
 }
 
 /** JSON-safe mirror of a SaveGameData — the only form ever actually written to IndexedDB or a `.json` export file. See this section's own comment for why. */
@@ -541,6 +560,8 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
       : null,
     lineups: save.lineups,
     eligibility: save.eligibility,
+    covers: save.covers,
+    lastWeek: save.lastWeek,
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
     combineWindow: save.combineWindow,
     contractWindow: save.contractWindow,
@@ -591,6 +612,8 @@ export function deserializeSave(json: unknown): SaveGameData {
       : null,
     lineups: s.lineups ?? {},
     eligibility: s.eligibility ?? {},
+    covers: s.covers,
+    lastWeek: s.lastWeek,
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
     combineWindow: s.combineWindow ?? null,
     contractWindow: s.contractWindow ?? null,

@@ -15,7 +15,7 @@ import type { MatchResult } from "../engine/match";
 import type { MatchTeam } from "../engine/team";
 import type { Position } from "../types/archetype";
 import { aiTeamPlan, type TeamPlan } from "../engine/tactics";
-import { isLineupComplete, lineupToMatchTeam } from "../engine/selection";
+import { defaultCovers, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
 import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
 import { useGameStore } from "./useGameStore";
 import { useSelectionStore } from "./useSelectionStore";
@@ -72,7 +72,10 @@ function buildTeamsForMyClub(): Map<number, MatchTeam> {
   const myLineup = useSelectionStore.getState().lineupFor(myClub);
   const myEligibility = useSelectionStore.getState().eligibilityFor(myClub);
   if (myClubId !== undefined && myLineup && isLineupComplete(myLineup)) {
-    overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, getPlayersByClub(myClub), myEligibility));
+    // Round 130 — your club's covers (or the defaults derived from its line-up) apply to headless rounds too.
+    const myPlayers = getPlayersByClub(myClub);
+    const myCovers = useSelectionStore.getState().covers[myClub] ?? defaultCovers(myLineup, myPlayers, myEligibility);
+    overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, myPlayers, myEligibility, myCovers));
   }
   // [[Interchange Rotation]], round 48 — thread every club's saved
   // eligibility overrides through (see buildTeams's own doc comment for why

@@ -91,3 +91,48 @@ export function roundsForClub(fixture: FixtureMatch[], clubId: number): FixtureM
     .filter((m) => m.homeClubId === clubId || m.awayClubId === clubId)
     .sort((a, b) => a.round - b.round);
 }
+
+/**
+ * Round 130 (Match Day flow v2) — a kick-off slot for each fixtured match. The generated fixture has
+ * no times of its own, so each round's matches are dealt a round's worth of typical AFL slots,
+ * shuffled deterministically by season seed and round (the same match always gets the same slot).
+ * `night` drives the ball colour on the match screen: yellow at night, red in the day.
+ */
+export interface Timeslot {
+  label: string;
+  night: boolean;
+}
+
+const ROUND_SLOTS: Timeslot[] = [
+  { label: "Thu 7:30pm", night: true },
+  { label: "Fri 7:40pm", night: true },
+  { label: "Sat 1:45pm", night: false },
+  { label: "Sat 4:35pm", night: false },
+  { label: "Sat 7:30pm", night: true },
+  { label: "Sun 1:10pm", night: false },
+  { label: "Sun 3:20pm", night: false },
+  { label: "Sun 4:40pm", night: false },
+  { label: "Sat 7:25pm", night: true },
+];
+
+export function timeslotFor(seasonSeed: number, round: number, matchIndexInRound: number): Timeslot {
+  // Deterministic Fisher-Yates over the round's slots, seeded by season and round.
+  let a = (seasonSeed * 31 + round * 7919) >>> 0;
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const order = ROUND_SLOTS.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return ROUND_SLOTS[order[matchIndexInRound % order.length]];
+}
+
+/** A friendly's slot — one of the same slots, fixed per opponent so it doesn't change between visits. */
+export function friendlyTimeslot(opponentClubId: number): Timeslot {
+  return ROUND_SLOTS[(opponentClubId * 5) % ROUND_SLOTS.length];
+}

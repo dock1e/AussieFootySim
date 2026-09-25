@@ -1,7 +1,7 @@
 import type { Player } from "../types/player.ts";
 import type { Archetype } from "../types/archetype.ts";
 import { POSITIONS, suitabilityFor, defaultEligiblePositions, type Position, type Suitability } from "../types/archetype.ts";
-import type { MatchTeam } from "./team.ts";
+import type { Cover, MatchTeam } from "./team.ts";
 import { pickBest22 } from "./team.ts";
 
 /**
@@ -117,6 +117,8 @@ export function lineupToMatchTeam(
   lineup: Lineup,
   allClubPlayers: readonly Player[],
   eligibilityOverrides?: Record<number, Position[]>,
+  /** Round 130 — the coach's per-player covers (see `MatchTeam.covers`). Only entries whose players are all in this 23 are kept. */
+  covers?: Record<number, Cover | null>,
 ): MatchTeam {
   const byId = new Map(allClubPlayers.map((p) => [p.PlayerID, p]));
   const picked: Player[] = [];
@@ -157,7 +159,17 @@ export function lineupToMatchTeam(
     const defaults = defaultEligiblePositions(p.archetype as Archetype);
     interchangeEligibility.set(p.PlayerID, new Set(assigned ? [...defaults, assigned] : defaults));
   }
-  return { name: clubName, players: picked.slice(0, 23), positions, onGround, interchangeEligibility };
+  const squad = picked.slice(0, 23);
+  let coverMap: Map<number, Cover> | undefined;
+  if (covers) {
+    const inSquad = new Set(squad.map((p) => p.PlayerID));
+    coverMap = new Map();
+    for (const [id, c] of Object.entries(covers)) {
+      if (!c || !inSquad.has(Number(id)) || !inSquad.has(c.by) || (c.fill !== undefined && !inSquad.has(c.fill))) continue;
+      coverMap.set(Number(id), c);
+    }
+  }
+  return { name: clubName, players: squad, positions, onGround, interchangeEligibility, covers: coverMap };
 }
 
 /** Convenience: the existing pickBest22 stand-in, exposed here too so callers can offer "reset to auto-pick" without importing team.ts directly. */
@@ -166,3 +178,79 @@ export function bestAvailableTeam(clubName: string, allClubPlayers: readonly Pla
 }
 
 export type { Position };
+
+// --- Round 130: per-player covers (Match Day flow v2) --------------------------------------------
+
+/** Positions where a player with no relief is flagged as a fatigue risk (and which default covers go to first). */
+export const RELIEF_POSITIONS: readonly Position[] = ["R", "RR", "ROV", "C", "W", "HFF", "HBF"];
+const DEFAULT_COVER_ORDER: readonly Position[] = ["R", "RR", "ROV", "C", "W", "HFF", "HBF", "FP"];
+const MAX_DEFAULT_COVERS_PER_BENCH = 3;
+
+/** Keeps only covers that still make sense for `lineup`: the rester is on the ground; `by` is on the bench (swap), or on the ground with `fill` on the bench (chain). */
+export function validCovers(lineup: Lineup, covers: Record<number, Cover | null>): Record<number, Cover> {
+  const slotOf = new Map<number, number>();
+  lineup.forEach((id, i) => {
+    if (id !== null) slotOf.set(id, i);
+  });
+  const onField = (id: number) => slotOf.has(id) && POSITIONS[slotOf.get(id)!] !== "INT";
+  const onBench = (id: number) => slotOf.has(id) && POSITIONS[slotOf.get(id)!] === "INT";
+  const out: Record<number, Cover> = {};
+  for (const [r, c] of Object.entries(covers)) {
+    const rester = Number(r);
+    if (!c || !onField(rester)) continue;
+    if (onBench(c.by)) out[rester] = { by: c.by };
+    else if (onField(c.by) && c.by !== rester && c.fill !== undefined && onBench(c.fill)) out[rester] = { by: c.by, fill: c.fill };
+  }
+  return out;
+}
+
+/**
+ * Covers for a club that hasn't set any yet — and the migration from the old per-position rotations:
+ * each bench player covers starters in the positions he was cleared for (`eligibility`, else his
+ * archetype default), best fit first, at most three each, ruck and midfield first. A ruck with no
+ * bench cover gets a chain instead: an on-field teammate suited to the ruck moves across (van Rooyen
+ * from the forward pocket) and a bench player fills his spot.
+ */
+export function defaultCovers(lineup: Lineup, players: readonly Player[], eligibility?: Record<number, Position[]>): Record<number, Cover | null> {
+  const byId = new Map(players.map((p) => [p.PlayerID, p]));
+  const bench: Player[] = [];
+  const starters: { p: Player; pos: Position }[] = [];
+  lineup.forEach((id, i) => {
+    const p = id !== null ? byId.get(id) : undefined;
+    if (!p) return;
+    if (POSITIONS[i] === "INT") bench.push(p);
+    else starters.push({ p, pos: POSITIONS[i] });
+  });
+  const eligibleFor = (b: Player) => eligibility?.[b.PlayerID] ?? defaultEligiblePositions(b.archetype as Archetype);
+  const load = new Map<number, number>();
+  const rank = (p: Player, pos: Position) => SUITABILITY_RANK[suitabilityFor(p.archetype as Archetype, pos)];
+  const bestBench = (pos: Position) =>
+    bench
+      .filter((b) => eligibleFor(b).includes(pos) && (load.get(b.PlayerID) ?? 0) < MAX_DEFAULT_COVERS_PER_BENCH)
+      .sort((a, b) => rank(b, pos) - rank(a, pos) || (load.get(a.PlayerID) ?? 0) - (load.get(b.PlayerID) ?? 0) || b.OVR - a.OVR)[0];
+  const out: Record<number, Cover | null> = {};
+  const movers = new Set<number>();
+  const ordered = [...starters]
+    .filter((s) => DEFAULT_COVER_ORDER.includes(s.pos))
+    .sort((a, b) => DEFAULT_COVER_ORDER.indexOf(a.pos) - DEFAULT_COVER_ORDER.indexOf(b.pos));
+  for (const { p, pos } of ordered) {
+    if (movers.has(p.PlayerID)) continue; // already moving across to cover the ruck — he isn't also rested
+    const b = bestBench(pos);
+    if (b) {
+      out[p.PlayerID] = { by: b.PlayerID };
+      load.set(b.PlayerID, (load.get(b.PlayerID) ?? 0) + 1);
+      continue;
+    }
+    if (pos !== "R") continue;
+    const mover = starters
+      .filter((s) => s.p.PlayerID !== p.PlayerID && s.pos !== "R" && !movers.has(s.p.PlayerID) && rank(s.p, "R") >= 2)
+      .sort((a, b) => rank(b.p, "R") - rank(a.p, "R") || b.p.OVR - a.p.OVR)[0];
+    const fill = mover ? bestBench(mover.pos) : undefined;
+    if (mover && fill) {
+      out[p.PlayerID] = { by: mover.p.PlayerID, fill: fill.PlayerID };
+      movers.add(mover.p.PlayerID);
+      load.set(fill.PlayerID, (load.get(fill.PlayerID) ?? 0) + 1);
+    }
+  }
+  return out;
+}

@@ -165,10 +165,16 @@ describe("simulateMatch with tactics/game-style plans", () => {
 
   it("sanitizePlan resets a tactic that doesn't belong to a player's own group back to their group default", () => {
     const defender = home.players.find((p) => p.archetype === "Key Defender")!;
-    // "Tagging" is Midfield-only per Configuration.md's tactics menus — invalid for a defender.
-    const invalid: TeamPlan = { gameStyle: "Balanced", tactics: new Map([[defender.PlayerID, { tactic: "Tagging", taggingTargetId: away.players[0].PlayerID }]]) };
+    // "Follow the Ball" is a Ruck-only tactic — invalid for a defender.
+    const invalid: TeamPlan = { gameStyle: "Balanced", tactics: new Map([[defender.PlayerID, { tactic: "Follow the Ball" }]]) };
     const cleaned = sanitizePlan(home.players, invalid);
     expect(cleaned.tactics.get(defender.PlayerID)?.tactic).toBe("Defensive Shoulder");
+  });
+
+  it("sanitizePlan keeps a weekly tag on any non-ruck player (Match Day flow v2 tag rules)", () => {
+    const defender = home.players.find((p) => p.archetype === "Key Defender")!;
+    const tagged: TeamPlan = { gameStyle: "Balanced", tactics: new Map([[defender.PlayerID, { tactic: "Tagging", taggingTargetId: away.players[0].PlayerID }]]) };
+    expect(sanitizePlan(home.players, tagged).tactics.get(defender.PlayerID)?.tactic).toBe("Tagging");
   });
 
   it("simulateMatch doesn't throw when handed a plan with a cross-group-mismatched tactic", () => {

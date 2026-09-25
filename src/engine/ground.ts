@@ -218,6 +218,8 @@ export interface DotPosition {
   y: number;
   /** True if this player is one of the 1-2 involved in the current event (drawn near the ball, highlighted). */
   involved: boolean;
+  /** Round 130 — on the interchange bench right now (drawn faded at the gate). */
+  bench?: boolean;
 }
 
 /**
@@ -1561,6 +1563,20 @@ export function computeDotPositions(
       const y = Math.min(yMax, Math.max(yMin, dot.y + dy));
       all.set(id, { ...dot, x, y });
     }
+  }
+
+  // Round 130 (Match Day flow v2 §6) — the benches: everyone not on the ground sits at the interchange
+  // gate just outside the boundary, at the bottom centre of the oval (home to the left of the gate,
+  // away to the right). Drawn faded by GroundView; because every dot is keyed by player, a player
+  // coming on or going off slides between the gate and his position instead of popping in or out.
+  const gateY = CENTER_Y + trueHalfHeightAt(GROUND_WIDTH / 2) + 16;
+  const gap = 26 * (GROUND_WIDTH / 880);
+  for (const [side, team] of [["home", home] as const, ["away", away] as const]) {
+    const benchers = team.players.filter((p) => !all.has(p.PlayerID)).sort((a, b) => a.jumperNumber - b.jumperNumber);
+    benchers.forEach((p, i) => {
+      const x = GROUND_WIDTH / 2 + (side === "home" ? -(i + 1) : i + 1) * gap;
+      all.set(p.PlayerID, { playerId: p.PlayerID, lname: p.lname, jumperNumber: p.jumperNumber, side, x, y: gateY, involved: false, bench: true });
+    });
   }
 
   return [...all.values()];

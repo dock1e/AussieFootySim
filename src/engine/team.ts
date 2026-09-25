@@ -59,6 +59,19 @@ export interface MatchTeam {
    * — exactly like a missing `onGround` today means "no bench distinction."
    */
   interchangeEligibility?: Map<number, Set<Position>>;
+  /**
+   * Round 130 (Match Day flow v2) — the coach's per-player rotation plan, keyed by the player who
+   * rests. `by` on the bench is a straight swap; `by` on the ground with `fill` on the bench is a
+   * chain (`by` moves across into the rester's position, `fill` comes on in `by`'s). When present,
+   * automatic rotation follows these covers instead of `interchangeEligibility`; a player with no
+   * cover plays through. Absent for AI clubs, which keep the position-eligibility rotation.
+   */
+  covers?: Map<number, Cover>;
+}
+
+export interface Cover {
+  by: number;
+  fill?: number;
 }
 
 /**
@@ -192,6 +205,7 @@ export function cloneMatchTeam(t: MatchTeam): MatchTeam {
     positions: t.positions ? new Map(t.positions) : undefined,
     onGround: t.onGround ? new Set(t.onGround) : undefined,
     interchangeEligibility: t.interchangeEligibility ? new Map(t.interchangeEligibility) : undefined,
+    covers: t.covers ? new Map(t.covers) : undefined,
   };
 }
 
@@ -211,6 +225,7 @@ export function teamAtEvent(kickoff: MatchTeam, side: "home" | "away", events: r
     t.onGround?.add(x.incomingId);
     t.positions?.set(x.outgoingId, "INT");
     t.positions?.set(x.incomingId, x.position);
+    if (x.moved) t.positions?.set(x.moved.playerId, x.moved.position);
   }
   return t;
 }

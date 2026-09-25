@@ -446,7 +446,7 @@ interface PlayRow {
   clock: string;
   teamName: string;
   text: string;
-  kind: "goal" | "behind" | "play";
+  kind: "goal" | "behind" | "play" | "rotation";
   score?: string;
   mine: boolean;
 }
@@ -491,7 +491,9 @@ export function PlayByPlayWidget({
           else if (kind !== "goal") kind = "behind";
         }
       }
-      const side: Side = scorerSide ?? ev.possession;
+      // Round 130 — a rotation is the rotating team's line, shown in accent colour.
+      if (ev.interchange) kind = "rotation";
+      const side: Side = ev.interchange ? ev.interchange.side : (scorerSide ?? ev.possession);
       const prefix = kind === "goal" ? "GOAL · " : kind === "behind" ? "BEHIND · " : "";
       out.push({
         index,
@@ -499,14 +501,14 @@ export function PlayByPlayWidget({
         teamName: side === "home" ? homeTeam.name : awayTeam.name,
         text: prefix + ev.description,
         kind,
-        score: kind === "play" ? undefined : `${homeAbbr} ${hp} · ${ap} ${awayAbbr}`,
+        score: kind === "play" || kind === "rotation" ? undefined : `${homeAbbr} ${hp} · ${ap} ${awayAbbr}`,
         mine: side === yourSide,
       });
     });
     return out.reverse();
   }, [events, ticksPerQuarter, homeTeam, awayTeam, homeIds, yourSide, homeAbbr, awayAbbr]);
 
-  const shown = rows.filter((r) => filter === "all" || (filter === "scores" && r.kind !== "play") || (filter === "mine" && r.mine)).slice(0, 80);
+  const shown = rows.filter((r) => filter === "all" || (filter === "scores" && (r.kind === "goal" || r.kind === "behind")) || (filter === "mine" && r.mine)).slice(0, 80);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
@@ -543,13 +545,13 @@ export function PlayByPlayWidget({
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
         {shown.length === 0 && <div style={{ padding: "12px 0", font: `500 13px ${BARLOW}`, color: "#8f9ab0" }}>{events.length === 0 ? "First bounce coming up…" : "Nothing here yet."}</div>}
         {shown.map((r) => {
-          const scoring = r.kind !== "play";
+          const scoring = r.kind === "goal" || r.kind === "behind";
           return (
             <div key={r.index} style={{ display: "grid", gridTemplateColumns: "64px 44px minmax(0,1fr)", gap: 8, alignItems: "start", padding: "7px 0", borderBottom: "1px solid rgba(255,255,255,.04)" }}>
               <span style={{ font: `500 11px ${MONO}`, color: "#8f9ab0", whiteSpace: "nowrap" }}>{r.clock}</span>
               <TeamChip name={r.teamName} size={10} />
               <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-                <span style={{ font: `${r.kind === "goal" ? 700 : 500} 14px/1.35 ${BARLOW}`, color: r.kind === "goal" ? "#fff" : "#c3ccdd" }}>{r.text}</span>
+                <span style={{ font: `${r.kind === "goal" ? 700 : 500} 14px/1.35 ${BARLOW}`, color: r.kind === "goal" ? "#fff" : r.kind === "rotation" ? "var(--accT)" : "#c3ccdd" }}>{r.text}</span>
                 {scoring && <span style={{ font: `600 11px ${MONO}`, color: WARN }}>{r.score}</span>}
               </span>
             </div>

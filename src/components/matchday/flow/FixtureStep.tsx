@@ -5,13 +5,13 @@ import type { FixtureChoice, FixtureRow } from "./flowData";
 import { flowCard, monoLabel } from "./FlowChrome";
 
 /**
- * Step 4 · Fixture (`Match Day Flow.dc.html` "4 Fixture"): your season fixture with results, the next
+ * Step 1 · Fixture (`Match Day Flow v2.dc.html` "1 Fixture"): your season fixture with results, the next
  * match flagged NEXT UP, and the selected match's card. Only the next unplayed round can be played live
  * (rounds stay in order), so later rounds can be looked at but not chosen. With no season running (or
  * once the home-and-away rounds are done) it becomes a friendly against any club.
  *
- * The reference also shows a kick-off time and day/night ball colour; the engine's fixture has neither,
- * so those are left out rather than made up.
+ * Kick-off times come from `timeslotFor` (engine/fixture.ts) — the generated fixture's own slot for
+ * each match — and set the ball colour: yellow at night, red in the day.
  */
 
 function Badge({ club, width = 48 }: { club: string; width?: number }) {
@@ -36,7 +36,34 @@ function Badge({ club, width = 48 }: { club: string; width?: number }) {
   );
 }
 
-const ROW_GRID = "34px 52px minmax(0,1fr) 64px 86px";
+const ROW_GRID = "34px 52px minmax(0,1fr) 70px 86px";
+
+/** The match ball's colour as a small swatch — yellow at night, red in the day (Match Day flow v2 §6). */
+export function BallSwatch({ night }: { night: boolean }) {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        width: 16,
+        height: 10,
+        borderRadius: "50%",
+        background: night ? "#f6c624" : "#d0202e",
+        boxShadow: "0 0 0 1px rgba(0,0,0,.5)",
+        transform: "rotate(-20deg)",
+        flex: "none",
+      }}
+    />
+  );
+}
+
+function DayNight({ night }: { night: boolean }) {
+  return (
+    <span className="mdf-hide-sm" style={{ display: "flex", alignItems: "center", gap: 6, font: `600 10px ${MONO}`, letterSpacing: ".8px", color: "#aab3c3" }}>
+      <BallSwatch night={night} />
+      {night ? "NIGHT" : "DAY"}
+    </span>
+  );
+}
 
 function rowStyle(on: boolean, dim: boolean, clickable: boolean): CSSProperties {
   return {
@@ -63,6 +90,10 @@ export interface SelectedFixtureCard {
   opponent: string;
   venue: string;
   homeAway: string;
+  when: string;
+  night: boolean;
+  /** The round whose plan is carried over, or null for the first match. */
+  carriedFrom: number | null;
   ladder: string;
   lastMet: string;
 }
@@ -77,6 +108,7 @@ export function FixtureStep({
   onChoose,
   card,
   homeVenue,
+  friendlyWhen,
 }: {
   myClub: string;
   year: number;
@@ -87,6 +119,7 @@ export function FixtureStep({
   onChoose: (c: FixtureChoice) => void;
   card: SelectedFixtureCard;
   homeVenue: string;
+  friendlyWhen: (club: string) => { label: string; night: boolean };
 }) {
   return (
     <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
@@ -101,17 +134,18 @@ export function FixtureStep({
             <div style={{ maxHeight: 640, overflowY: "auto" }}>
               {CLUBS.filter((c) => c.name !== myClub).map((c) => {
                 const on = choice.kind === "friendly" && choice.opponent === c.name;
+                const when = friendlyWhen(c.name);
                 return (
                   <button key={c.ClubID} onClick={() => onChoose({ kind: "friendly", opponent: c.name })} className="mdf-fix-grid" style={rowStyle(on, false, true)}>
                     <span style={{ font: `600 12px ${MONO}`, color: "#8f9ab0" }}>—</span>
                     <Badge club={c.name} />
                     <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                       <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</span>
-                      <span style={{ font: `500 11px ${BARLOW}`, color: "#8f9ab0" }}>{homeVenue}</span>
+                      <span style={{ font: `500 11px ${BARLOW}`, color: "#8f9ab0" }}>
+                        {homeVenue} · {when.label}
+                      </span>
                     </span>
-                    <span className="mdf-hide-sm" style={{ font: `600 10px ${MONO}`, letterSpacing: ".8px", color: "#aab3c3" }}>
-                      HOME
-                    </span>
+                    <DayNight night={when.night} />
                     <span style={{ textAlign: "right", font: `600 11px ${MONO}`, letterSpacing: ".6px", color: on ? "var(--accT)" : "#8f9ab0" }}>FRIENDLY</span>
                   </button>
                 );
@@ -141,11 +175,11 @@ export function FixtureStep({
                     <Badge club={f.opponent} />
                     <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                       <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.opponent}</span>
-                      <span style={{ font: `500 11px ${BARLOW}`, color: "#8f9ab0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.venue}</span>
+                      <span style={{ font: `500 11px ${BARLOW}`, color: "#8f9ab0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {f.venue} · {f.when.label} · {f.isHome ? "home" : "away"}
+                      </span>
                     </span>
-                    <span className="mdf-hide-sm" style={{ font: `600 10px ${MONO}`, letterSpacing: ".8px", color: "#aab3c3" }}>
-                      {f.isHome ? "HOME" : "AWAY"}
-                    </span>
+                    <DayNight night={f.when.night} />
                     <span style={{ textAlign: "right", font: `600 11px ${MONO}`, letterSpacing: ".6px", color: resColor, whiteSpace: "nowrap" }}>
                       {played ? `${f.result!.outcome} ${f.result!.score}` : isNext ? "NEXT UP" : "UPCOMING"}
                     </span>
@@ -192,7 +226,7 @@ export function FixtureStep({
               <div>
                 <div style={{ font: `700 30px/1 ${COND}`, color: "#fff" }}>vs {card.opponent}</div>
                 <div style={{ font: `500 13px ${BARLOW}`, color: "#aab3c3", marginTop: 4 }}>
-                  {card.venue} · {card.homeAway}
+                  {card.venue} · {card.when} · {card.homeAway}
                 </div>
               </div>
             </div>
@@ -202,6 +236,17 @@ export function FixtureStep({
             <span>{card.ladder}</span>
             <span style={{ font: `600 10px ${MONO}`, letterSpacing: "1px", color: "#8f9ab0", paddingTop: 2 }}>LAST MET</span>
             <span>{card.lastMet}</span>
+            <span style={{ font: `600 10px ${MONO}`, letterSpacing: "1px", color: "#8f9ab0", paddingTop: 2 }}>BALL</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <BallSwatch night={card.night} />
+              {card.night ? "NIGHT · YELLOW BALL" : "DAY · RED BALL"}
+            </span>
+          </div>
+          <div style={{ borderTop: "1px solid rgba(255,255,255,.08)", paddingTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={monoLabel}>{card.carriedFrom !== null ? `CARRIED OVER FROM ROUND ${card.carriedFrom}` : "YOUR PLAN"}</div>
+            <div style={{ font: `500 13px/1.5 ${BARLOW}`, color: "#c3ccdd", textWrap: "pretty" }}>
+              {card.carriedFrom !== null ? "Last week's team, rotations, roles and game style." : "Your saved team, rotations, roles and game style."} Tags reset every week.
+            </div>
           </div>
         </div>
       </section>

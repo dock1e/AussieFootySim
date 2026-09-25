@@ -12,7 +12,8 @@ import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nu
 import { getStadium, DEFAULT_STADIUM_ID, type AFLStadium } from "../data/stadiums.ts";
 import {
   tacticGroupForSlot,
-  defaultTacticForPosition,
+  resolveTactic,
+  styleFatigueDrainMultiplier,
   ruckHitoutMultiplier,
   taggingClearanceMultiplier,
   carrierDisposalMultiplier,
@@ -305,7 +306,15 @@ export interface MatchEvent {
    * describe the end of the simulated stretch, not the moment on screen. Undefined on every other
    * event and on older saves.
    */
-  interchange?: { side: Side; outgoingId: number; incomingId: number; position: Position };
+  interchange?: {
+    side: Side;
+    outgoingId: number;
+    incomingId: number;
+    /** Where the incoming player plays. */
+    position: Position;
+    /** Round 130 — a cover chain also moves one on-field player to a different position. */
+    moved?: { playerId: number; position: Position };
+  };
   /**
    * Sep 2026 round 111 — which real kind of stoppage this STOPPAGE/CLEARANCE
    * event actually is: a genuine centre bounce (always `MIDFIELD` zone), or a
@@ -1238,6 +1247,11 @@ export interface Ctx {
    */
   restUntilTick: Map<number, number>;
   /**
+   * Round 130 — covers currently in effect, per side, keyed by the resting player: where he played,
+   * who covered him and (for a chain) who filled the mover's spot. Emptied as each rester returns.
+   */
+  activeCovers: Record<Side, Map<number, ActiveCover>>;
+  /**
    * Aug 2026 round 55 — [[Season Stats and Records]] Goal Assists, the one gap stat the design
    * note itself flagged as needing "a new piece of match `ctx` state, not just a new field on an
    * existing struct." Names whoever most recently disposed the ball to a genuine teammate
@@ -1323,12 +1337,9 @@ function planFor(ctx: Ctx, side: Side): TeamPlan | null {
  * disagree with `sanitizePlan`'s own group if this is ever called with a raw
  * plan some other way.
  */
+/** Round 130 — resolved per current position (`resolveTactic`), so a player who moves across mid-match plays his role for the position he's in. */
 function tacticFor(plan: TeamPlan | null, player: Player, positions?: Map<number, Position>): Tactic | undefined {
-  if (!plan) return undefined;
-  const explicit = plan.tactics.get(player.PlayerID)?.tactic;
-  if (explicit) return explicit;
-  const position = positions?.get(player.PlayerID);
-  return defaultTacticForPosition(position, tacticGroupForSlot(position, player.archetype as Archetype));
+  return resolveTactic(plan, player, positions?.get(player.PlayerID));
 }
 
 function styleFor(plan: TeamPlan | null) {
@@ -4562,6 +4573,7 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
     homeFitness: new Map(home.players.map((p) => [p.PlayerID, 100])),
     awayFitness: new Map(away.players.map((p) => [p.PlayerID, 100])),
     restUntilTick: new Map(),
+    activeCovers: { home: new Map(), away: new Map() },
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. No disposal chain
     // exists yet at kick-off, same as at every other stoppage.
     lastEffectiveDisposal: null,
@@ -4600,7 +4612,9 @@ function stepFitness(ctx: Ctx): void {
 function stepFitnessSide(ctx: Ctx, side: Side, team: MatchTeam, fitness: Map<number, number>): void {
   for (const p of onGroundPlayers(team)) {
     const { focus } = lineCoachStateFor(ctx, side, p);
-    const drain = ON_GROUND_FITNESS_DRAIN * digDeeperFitnessDrainMultiplier(focus);
+    // Round 130 — the side's game style now really changes how hard players work (`STYLE_FATIGUE`).
+    const style = styleFor(side === "home" ? ctx.homePlan : ctx.awayPlan);
+    const drain = ON_GROUND_FITNESS_DRAIN * digDeeperFitnessDrainMultiplier(focus) * styleFatigueDrainMultiplier(style);
     fitness.set(p.PlayerID, Math.max(FITNESS_FLOOR, (fitness.get(p.PlayerID) ?? 100) - drain));
   }
   for (const p of benchPlayers(team)) {
@@ -4680,7 +4694,133 @@ function maybeRotateForFitness(ctx: Ctx, state: State): void {
  * is still correctly left alone; it just no longer blocks every OTHER,
  * coverable position from rotating too.
  */
+interface ActiveCover {
+  resterPos: Position;
+  by: number;
+  /** Chain only: the mover's own position, and who came on in it. */
+  byPos?: Position;
+  fill?: number;
+}
+
+/** Round 130 — a rester comes back once he's recovered this far (and has sat at least `MIN_BENCH_REST_TICKS`). */
+export const COVER_RETURN_FITNESS = 85;
+
+/**
+ * One rotation step with an optional third player moving across — the general form behind both a
+ * straight swap and a cover chain. `outgoing` goes to the bench, `incoming` comes on at
+ * `incomingPos`, `moved` (if any) changes position on the ground. Logged with structured
+ * `interchange` data so a viewer can replay who's on at any tick.
+ */
+function executeRotation(
+  ctx: Ctx,
+  team: MatchTeam,
+  state: State,
+  outgoing: Player,
+  incoming: Player,
+  incomingPos: Position,
+  moved: { player: Player; position: Position } | null,
+  description: string,
+): void {
+  if (!team.onGround || !team.positions) return;
+  team.onGround.delete(outgoing.PlayerID);
+  team.onGround.add(incoming.PlayerID);
+  team.positions.set(outgoing.PlayerID, "INT");
+  team.positions.set(incoming.PlayerID, incomingPos);
+  if (moved) team.positions.set(moved.player.PlayerID, moved.position);
+  ctx.restUntilTick.set(outgoing.PlayerID, ctx.tick + MIN_BENCH_REST_TICKS);
+  ctx.matchups = resolveMatchups(ctx.home, ctx.away);
+  const ids = [outgoing.PlayerID, incoming.PlayerID, ...(moved ? [moved.player.PlayerID] : [])];
+  log(ctx, state.zone, state.possession, state.phase, description, ids, [], true);
+  if (ctx.recordEvents) {
+    const side: Side = team === ctx.home ? "home" : "away";
+    ctx.events[ctx.events.length - 1].interchange = {
+      side,
+      outgoingId: outgoing.PlayerID,
+      incomingId: incoming.PlayerID,
+      position: incomingPos,
+      moved: moved ? { playerId: moved.player.PlayerID, position: moved.position } : undefined,
+    };
+  }
+}
+
+/**
+ * Round 130 (Match Day flow v2) — rotation for a side with a coach's cover plan (`MatchTeam.covers`).
+ * Same fitness model and cadence as `rotateSideForFitness`, but WHO relieves WHOM comes from the
+ * plan: a straight swap with a named bench player, or a chain where a teammate moves across and a
+ * bench player fills his spot (van Rooyen FP → R for Gawn, Henderson on at FP). A rester comes back
+ * once recovered, reversing the chain. One change per side per check; a player tied up in one cover
+ * can't start another until it ends. Anyone without a cover plays through.
+ */
+function rotateByCovers(ctx: Ctx, team: MatchTeam, fitness: Map<number, number>, state: State): void {
+  if (!team.onGround || !team.positions || !team.covers) return;
+  const side: Side = team === ctx.home ? "home" : "away";
+  const active = ctx.activeCovers[side];
+  const byId = new Map(team.players.map((p) => [p.PlayerID, p]));
+  const onGround = (id: number) => team.onGround!.has(id);
+  const rested = (id: number) => ctx.tick >= (ctx.restUntilTick.get(id) ?? 0);
+
+  // Returns first: a recovered rester comes back on and the chain unwinds.
+  for (const [resterId, a] of active) {
+    if (!rested(resterId) || (fitness.get(resterId) ?? 100) < COVER_RETURN_FITNESS) continue;
+    const rester = byId.get(resterId);
+    const by = byId.get(a.by);
+    if (!rester || !by) {
+      active.delete(resterId);
+      continue;
+    }
+    if (a.fill !== undefined && a.byPos) {
+      const fill = byId.get(a.fill);
+      if (!fill || !onGround(fill.PlayerID) || !onGround(by.PlayerID)) {
+        active.delete(resterId);
+        continue;
+      }
+      executeRotation(ctx, team, state, fill, rester, a.resterPos, { player: by, position: a.byPos }, `${rester.lname} back on at ${a.resterPos} — ${by.lname} returns to ${a.byPos}, ${fill.lname} to the bench.`);
+    } else {
+      if (!onGround(by.PlayerID)) {
+        active.delete(resterId);
+        continue;
+      }
+      executeRotation(ctx, team, state, by, rester, a.resterPos, null, `${rester.lname} back on at ${a.resterPos} — ${by.lname} to the bench.`);
+    }
+    active.delete(resterId);
+    return;
+  }
+
+  // Then goes: the tiredest covered player whose cover is free right now.
+  const busy = new Set<number>();
+  for (const [r, a] of active) {
+    busy.add(r);
+    busy.add(a.by);
+    if (a.fill !== undefined) busy.add(a.fill);
+  }
+  const tired = onGroundPlayers(team)
+    .filter((p) => team.covers!.has(p.PlayerID) && !busy.has(p.PlayerID) && (fitness.get(p.PlayerID) ?? 100) < FITNESS_ROTATION_THRESHOLD)
+    .sort((a, b) => (fitness.get(a.PlayerID) ?? 100) - (fitness.get(b.PlayerID) ?? 100));
+  for (const rester of tired) {
+    const c = team.covers.get(rester.PlayerID)!;
+    const resterPos = team.positions.get(rester.PlayerID);
+    const by = byId.get(c.by);
+    if (!resterPos || resterPos === "INT" || !by || busy.has(by.PlayerID)) continue;
+    if (!onGround(by.PlayerID)) {
+      if (!rested(by.PlayerID)) continue;
+      executeRotation(ctx, team, state, rester, by, resterPos, null, `${rester.lname} to the bench — ${by.lname} on at ${resterPos}.`);
+      active.set(rester.PlayerID, { resterPos, by: by.PlayerID });
+      return;
+    }
+    const fill = c.fill !== undefined ? byId.get(c.fill) : undefined;
+    const byPos = team.positions.get(by.PlayerID);
+    if (!fill || busy.has(fill.PlayerID) || onGround(fill.PlayerID) || !rested(fill.PlayerID) || !byPos || byPos === "INT") continue;
+    executeRotation(ctx, team, state, rester, fill, byPos, { player: by, position: resterPos }, `${rester.lname} to the bench — ${by.lname} moves ${byPos} → ${resterPos}, ${fill.lname} on at ${byPos}.`);
+    active.set(rester.PlayerID, { resterPos, by: by.PlayerID, byPos, fill: fill.PlayerID });
+    return;
+  }
+}
+
 function rotateSideForFitness(ctx: Ctx, team: MatchTeam, fitness: Map<number, number>, state: State): void {
+  if (team.covers) {
+    rotateByCovers(ctx, team, fitness, state);
+    return;
+  }
   // No real position/eligibility data for this side (e.g. a pickBest22
   // stand-in with no Selection Committee lineup behind it) — nothing safe to
   // rotate, same "no bench distinction" degradation onGroundPlayers/
@@ -4747,6 +4887,11 @@ export function attemptInterchange(match: MatchInProgress, side: Side, outgoingI
   if (!position || position === "INT") return { ok: false, reason: `${outgoing.lname} has no real slot to hand off.` };
   if (!team.interchangeEligibility.get(incomingId)?.has(position)) {
     return { ok: false, reason: `${incoming.lname} isn't eligible for ${position}.` };
+  }
+  // Round 130 — a manual change overrides any cover it cuts across: that cover no longer unwinds itself.
+  const active = match.ctx.activeCovers[side];
+  for (const [r, a] of active) {
+    if ([r, a.by, a.fill].includes(outgoingId) || [r, a.by, a.fill].includes(incomingId)) active.delete(r);
   }
   performInterchangeSwap(match.ctx, team, outgoing, incoming, position, match.state, "manual");
   return { ok: true };

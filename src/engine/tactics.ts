@@ -189,6 +189,35 @@ export interface TeamPlan {
   gameStyle: GameStyle;
   /** Keyed by PlayerID. Any player not present uses their tactic group's default. */
   tactics: Map<number, PlayerTactic>;
+  /**
+   * Round 130 (Match Day flow v2 — roles per player per position): keyed `${playerId}@${position}`.
+   * A player who moves across mid-match (a second ruck covering the ruck from the forward pocket)
+   * plays a different role in each position; `resolveTactic` looks here first for whatever position
+   * he's standing in right now. Optional — a plan without it (every older save, every AI plan)
+   * behaves exactly as before.
+   */
+  positionTactics?: Map<string, PlayerTactic>;
+}
+
+export function positionTacticKey(playerId: number, position: Position): string {
+  return `${playerId}@${position}`;
+}
+
+/**
+ * The tactic a player is playing right now, at `position`: a weekly tag first (it follows the player
+ * wherever he stands), then his role for that position, then his player-level role if it's valid
+ * there, then the position's default. One shared resolver for `match.ts` and `movement.ts`.
+ */
+export function resolveTactic(plan: TeamPlan | null, player: Player, position: Position | undefined): Tactic | undefined {
+  if (!plan) return undefined;
+  const own = plan.tactics.get(player.PlayerID);
+  if (own?.tactic === "Tagging") return "Tagging";
+  const group = tacticGroupForSlot(position, player.archetype as Archetype);
+  const valid = tacticsFor(group);
+  const at = position ? plan.positionTactics?.get(positionTacticKey(player.PlayerID, position))?.tactic : undefined;
+  if (at && valid.includes(at)) return at;
+  if (own && valid.includes(own.tactic)) return own.tactic;
+  return defaultTacticForPosition(position, group);
 }
 
 export function defaultTeamPlan(): TeamPlan {
@@ -271,9 +300,12 @@ export function sanitizePlan(players: readonly Player[], plan: TeamPlan, positio
     const valid: readonly Tactic[] = tacticsFor(group);
     const existing = plan.tactics.get(p.PlayerID);
     const fallback = defaultTacticForPosition(positions?.get(p.PlayerID), group);
-    tactics.set(p.PlayerID, existing && valid.includes(existing.tactic) ? existing : { tactic: fallback });
+    // Round 130 — a weekly tag is valid from any non-ruck position (the Opposition step only offers
+    // on-field, non-ruck starters), not just a midfield slot's own menu.
+    const isTag = existing?.tactic === "Tagging" && existing.taggingTargetId !== undefined && group !== "Ruck";
+    tactics.set(p.PlayerID, existing && (isTag || valid.includes(existing.tactic)) ? existing : { tactic: fallback });
   }
-  return { gameStyle: plan.gameStyle, tactics };
+  return { gameStyle: plan.gameStyle, tactics, positionTactics: plan.positionTactics };
 }
 
 // --- Per-player tactic effects -------------------------------------------------------------
@@ -454,11 +486,32 @@ export function opponentFloodGoalAccuracyMultiplier(defendingTeamStyle: GameStyl
 
 // --- Modelled impact summary — Sep 2026 [[Quarter-Time Decision Room]] --------------------------
 
+/**
+ * Round 130 (Match Day flow v2, "Fatigue feeds rotations") — how much harder a style works its players,
+ * as a percentage change in on-ground fitness drain. Wired into `match.ts`'s fitness step
+ * (`styleFatigueDrainMultiplier`), so it's a real mechanic: a style that drains faster sends covered
+ * players to the bench sooner and more often. Values from the Match Day Flow v2 design's own table.
+ */
+export const STYLE_FATIGUE: Record<GameStyle, number> = {
+  Balanced: 0,
+  "Defensive Flood": -5,
+  "Spread the Ground": 20,
+  "Attack the Middle": 15,
+  "Forward Press": 10,
+};
+
+export function styleFatigueDrainMultiplier(style: GameStyle): number {
+  return 1 + STYLE_FATIGUE[style] / 100;
+}
+
 export interface GameStyleImpact {
   /** Percentage-point deltas, signed so positive always reads as "more" — the UI decides colour/direction-labelling, this only returns the real computed number. */
   ourScoring: number;
   /** Negative = less of their scoring (good for us), matching `ourScoring`'s own sign convention. */
   theirScoring: number;
+  /** Round 130 — change in defensive pressure in the forward half, straight from `gameStyleDefenderMultiplier`. */
+  pressure: number;
+  /** Round 130 — now the real drain change from `STYLE_FATIGUE` (previously an unwired intensity proxy). */
   fitnessCost: number;
 }
 
@@ -468,20 +521,21 @@ export interface GameStyleImpact {
  * above, so nothing here can silently drift from what the engine actually does. `match.ts` has no
  * dedicated per-`GameStyle` fitness multiplier today (only the line-coach "Demand They Dig Deeper"
  * lever drains fitness for real — see `lineCoaching.ts`'s `digDeeperFitnessDrainMultiplier`), so
- * `fitnessCost` is explicitly an intensity proxy, not a wired mechanic — see the design note's own
- * "What's real vs. what's a disclosed derived proxy" section.
+ * round 130 made `fitnessCost` real: it now reads `STYLE_FATIGUE`, which `match.ts` applies to fitness drain.
  *
  * Formula, and the full real 5-style table it produces (kept here as a comment so the two can't
  * silently drift apart — see the design note for the full derivation):
  *   ourScoring   = (forwardEntry - 1)*100 + (disposal - 1)*100
  *   theirScoring = -(avg(defender(true), defender(false)) - 1)*100 + (floodAccuracy - 1)*100
- *   fitnessCost  = (disposal - 1)*100 + (1 - contestChance)*100
+ *   fitnessCost  = STYLE_FATIGUE[style] (round 130 — was a derived intensity proxy, now the real drain change)
+ *   pressure     = (defender(true) - 1)*100
  *
- *   Balanced (Trust the Players):        0 /   0 /  0
- *   Defensive Flood (Focus on Defence): -15 / -25 /  0
- *   Spread the Ground (Run & Carry):    +15 /   0 / +35
- *   Attack the Middle (Push Harder):    +15 / +10 /  0
- *   Forward Press (Focus on Attack):    +10 / -2.5 / 0
+ *   (ourScoring / theirScoring / fitnessCost, round 130)
+ *   Balanced (Trust the Players):        0 /   0  /   0
+ *   Defensive Flood (Focus on Defence): -15 / -25  /  -5
+ *   Spread the Ground (Run & Carry):    +15 /   0  / +20
+ *   Attack the Middle (Push Harder):    +15 / +10  / +15
+ *   Forward Press (Focus on Attack):    +10 / -2.5 / +10
  *
  * Averaging `gameStyleDefenderMultiplier`'s two branches for `theirScoring` is the one real
  * simplification: Forward Press's own real effect genuinely cuts both ways (better if the press
@@ -493,6 +547,6 @@ export function gameStyleModelledImpact(style: GameStyle): GameStyleImpact {
   const ourScoring = (gameStyleForwardEntryMultiplier(style) - 1) * 100 + (gameStyleDisposalMultiplier(style) - 1) * 100;
   const avgDefenderMult = (gameStyleDefenderMultiplier(style, true) + gameStyleDefenderMultiplier(style, false)) / 2;
   const theirScoring = -(avgDefenderMult - 1) * 100 + (opponentFloodGoalAccuracyMultiplier(style) - 1) * 100;
-  const fitnessCost = (gameStyleDisposalMultiplier(style) - 1) * 100 + (1 - gameStyleContestChanceMultiplier(style)) * 100;
-  return { ourScoring, theirScoring, fitnessCost };
+  const pressure = (gameStyleDefenderMultiplier(style, true) - 1) * 100;
+  return { ourScoring, theirScoring, pressure, fitnessCost: STYLE_FATIGUE[style] };
 }

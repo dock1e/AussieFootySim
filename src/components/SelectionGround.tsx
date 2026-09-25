@@ -30,7 +30,7 @@ import { PlayerLink } from "./PlayerLink";
 export const GROUND_ROWS: { label: string; slots: readonly number[] }[] = [
   { label: "Forward", slots: [16, 15, 17] }, // FP, FF, FP
   { label: "Half-Forward", slots: [12, 14, 13] }, // HFF, CHF, HFF
-  { label: "Followers", slots: [11, 9, 10] }, // ROV, R, RR
+  { label: "Followers", slots: [9, 10, 11] }, // R, RR, ROV (round 130: canonical follower order)
   { label: "Centre", slots: [6, 7, 8] }, // W, C, W
   { label: "Half-Back", slots: [3, 5, 4] }, // HBF, CHB, HBF
   { label: "Back", slots: [1, 0, 2] }, // BP, FB, BP

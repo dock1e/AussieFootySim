@@ -579,6 +579,8 @@ const DOT_R = 13;
 const DOT_HALO_R = 15;
 const SELECT_RING_R = 20;
 const BALL_R = 6;
+/** Round 130 — how long a kicked ball's lift arc takes to rise and land (ms). */
+const KICK_ARC_MS = 900;
 
 /**
  * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3 rewrite. Was: a fixed team-colour fill
@@ -639,7 +641,8 @@ function drawNode(
 function drawDot(ctx: CanvasRenderingContext2D, dot: DotPosition, colors: NodeColors, highlighted = false, highlightColor?: string) {
   const k = groundScale();
   const radiusPx = DOT_R * k;
-  drawNode(ctx, dot.x, dot.y, dot.jumperNumber, radiusPx, colors, 1, highlighted, highlightColor);
+  // Round 130 — bench players wait at the interchange gate at 55% opacity.
+  drawNode(ctx, dot.x, dot.y, dot.jumperNumber, radiusPx, colors, dot.bench && !highlighted ? 0.55 : 1, highlighted, highlightColor);
   if (dot.involved && !highlighted) {
     // The player currently involved in the play keeps a thin white outer ring so the ball carrier reads.
     ctx.beginPath();
@@ -690,16 +693,41 @@ function drawSelectionLabel(ctx: CanvasRenderingContext2D, x: number, y: number,
  * constant across venues today, but this keeps the drawing self-consistent
  * rather than re-hardcoding pixel literals against it).
  */
-function drawBall(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }, _rotation: number) {
-  // Match Day v2 (spec §1.2): the ball is a 6px gold disc, `#f0c04a` with a `#5a3d00` stroke.
+function drawBall(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }, rotation: number, night: boolean, lift: number) {
+  // Round 130 (Match Day flow v2 §6): the spinning oval football — yellow for night games, red for
+  // day games — turning end over end in flight and lifting in an arc on each kick (`lift` 0..1),
+  // with its shadow left on the grass.
   const k = groundScale();
+  const rx = BALL_R * 1.55 * k * (1 + lift * 0.35);
+  const ry = BALL_R * k * (1 + lift * 0.35);
+  const up = lift * 10 * k;
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,.35)";
   ctx.beginPath();
-  ctx.arc(pos.x, pos.y, BALL_R * k, 0, Math.PI * 2);
-  ctx.fillStyle = "#f0c04a";
+  ctx.ellipse(pos.x, pos.y + 3 * k, BALL_R * 1.3 * k, BALL_R * 0.5 * k, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = "#5a3d00";
-  ctx.lineWidth = 1.2 * k;
+  ctx.translate(pos.x, pos.y - up);
+  ctx.rotate(rotation);
+  const [hi, mid, lo] = night ? ["#fff3a8", "#f6c624", "#9c7400"] : ["#ff9a9a", "#d0202e", "#6e0b12"];
+  const grad = ctx.createRadialGradient(-rx * 0.3, -ry * 0.35, 0, 0, 0, rx);
+  grad.addColorStop(0, hi);
+  grad.addColorStop(0.55, mid);
+  grad.addColorStop(1, lo);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,.45)";
+  ctx.lineWidth = 1 * k;
   ctx.stroke();
+  // The lace: the asymmetric mark that makes the spin legible.
+  ctx.strokeStyle = "rgba(255,255,255,.9)";
+  ctx.lineWidth = 1.6 * k;
+  ctx.beginPath();
+  ctx.moveTo(-rx * 0.35, -ry * 0.15);
+  ctx.lineTo(rx * 0.35, -ry * 0.15);
+  ctx.stroke();
+  ctx.restore();
 }
 
 export interface GroundViewProps {
@@ -749,6 +777,10 @@ export interface GroundViewProps {
   selectedPlayerId?: number | null;
   /** Opens the full player drawer for the selected player (header strip link). */
   onOpenSelected?: () => void;
+  /** Round 130 — night game: yellow ball; day game: red ball. */
+  night?: boolean;
+  /** Round 130 — your side's starting 18, so the bench strip can highlight a starter who's resting. */
+  startingIds?: Set<number>;
 }
 
 const EMPTY_FANTASY_METRICS: Map<number, PlayerMatchFantasyMetrics> = new Map();
@@ -771,6 +803,8 @@ export function GroundView({
   yourSide = "home",
   selectedPlayerId = null,
   onOpenSelected,
+  night = false,
+  startingIds,
 }: GroundViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<DotPosition | null>(null);
@@ -797,6 +831,10 @@ export function GroundView({
   homeStyleRef.current = homeStyle;
   const awayStyleRef = useRef(awayStyle);
   awayStyleRef.current = awayStyle;
+  const nightRef = useRef(night);
+  nightRef.current = night;
+  /** When the current kick left the boot (ms), for the ball's lift arc; null when no kick is in flight. */
+  const kickStartRef = useRef<number | null>(null);
   const highlightedPlayerIdRef = useRef(highlightedPlayerId);
   highlightedPlayerIdRef.current = highlightedPlayerId;
   const selectedPlayerIdRef = useRef(selectedPlayerId);
@@ -901,6 +939,11 @@ export function GroundView({
       ballRenderedRef.current = stepToward(ballRenderedRef.current, ballTarget, ballSmoothing, maxBallStep);
 
       if (ballTarget.speedMultiplier === KICK_SPEED_MULTIPLIER) {
+        if (kickStartRef.current === null) kickStartRef.current = now;
+      } else {
+        kickStartRef.current = null;
+      }
+      if (ballTarget.speedMultiplier === KICK_SPEED_MULTIPLIER) {
         if (isPlayingRef.current) {
           ballRotationRef.current = (ballRotationRef.current + BALL_SPIN_RATE_RAD_PER_SEC * (dt / 1000)) % (Math.PI * 2);
         }
@@ -927,7 +970,9 @@ export function GroundView({
         for (const dot of drawn) {
           if (dot.involved) drawDot(ctx, dot, dot.side === "home" ? homeNode : awayNode, ringIds.has(dot.playerId), ourAccT);
         }
-        drawBall(ctx, ballRenderedRef.current, ballRotationRef.current);
+        const kickStart = kickStartRef.current;
+        const lift = kickStart === null ? 0 : Math.sin(Math.PI * Math.min(1, (now - kickStart) / KICK_ARC_MS));
+        drawBall(ctx, ballRenderedRef.current, ballRotationRef.current, nightRef.current, lift);
 
         const selId = selectedPlayerIdRef.current;
         const selDot = selId != null ? drawn.find((d) => d.playerId === selId) : undefined;
@@ -1029,47 +1074,6 @@ export function GroundView({
   const selectedPlayer = selectedPlayerId != null ? [...home.players, ...away.players].find((p) => p.PlayerID === selectedPlayerId) : undefined;
   const legendDot = (fill: string, ring: string, size = 12): CSSProperties => ({ width: size, height: size, borderRadius: "50%", background: fill, boxShadow: `0 0 0 2px ${ring}`, flex: "none" });
 
-  function benchRail(team: MatchTeam, players: Player[], ours: boolean) {
-    const side: Side = team === home ? "home" : "away";
-    return (
-      <div style={{ flex: "none", width: "2.8%", minWidth: 26, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, paddingTop: "4%" }}>
-        <span style={{ font: `500 9px ${"'IBM Plex Mono', monospace"}`, letterSpacing: ".8px", color: ours ? "var(--accT)" : "#c3ccdd" }}>INT</span>
-        {players.map((p) => {
-          const selected = p.PlayerID === selectedPlayerId;
-          return (
-            <button
-              key={p.PlayerID}
-              type="button"
-              title={`#${p.jumperNumber} ${p.fname} ${p.lname} — interchange`}
-              onClick={() => onSelectPlayer?.(p, side)}
-              onMouseEnter={() => onHoverPlayer?.(p.PlayerID)}
-              onMouseLeave={() => onHoverPlayer?.(null)}
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                flex: "none",
-                cursor: onSelectPlayer ? "pointer" : "default",
-                opacity: 0.85,
-                background: ours ? "var(--deep)" : "#f2f4f8",
-                border: ours ? "2px solid var(--acc)" : "2px solid #1c2230",
-                boxShadow: selected ? "0 0 0 3px var(--accT)" : undefined,
-                color: ours ? "#f2f4f8" : "#12161c",
-                font: "600 10px 'IBM Plex Mono', monospace",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 0,
-              }}
-            >
-              {p.jumperNumber}
-            </button>
-          );
-        })}
-      </div>
-    );
-  }
-
   return (
     /*
      * Match Day v2 (spec §1.2 / critique B4, B6): a header strip OUTSIDE the canvas (ground name, real
@@ -1103,13 +1107,12 @@ export function GroundView({
             {clubByName(theirTeam.name)?.abbreviation ?? theirTeam.name}
           </span>
           <span className="flex items-center gap-1.5">
-            <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#f0c04a" }} />
-            BALL
+            <span style={{ width: 16, height: 10, borderRadius: "50%", background: night ? "#f6c624" : "#d0202e", transform: "rotate(-20deg)", boxShadow: "0 0 0 1px rgba(0,0,0,.5)" }} />
+            {night ? "NIGHT · YELLOW BALL" : "DAY · RED BALL"}
           </span>
         </div>
       </div>
       <div className="relative flex min-h-0 flex-1 items-start" style={{ padding: "8px 4px" }}>
-        {benchRail(ourTeam, ourBench, true)}
         <div className="relative min-w-0 flex-1">
           <canvas
             ref={canvasRef}
@@ -1143,7 +1146,35 @@ export function GroundView({
             </div>
           )}
         </div>
-        {benchRail(theirTeam, theirBench, false)}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,.06)" }}>
+        <span style={{ font: "600 9px 'IBM Plex Mono', monospace", letterSpacing: ".8px", color: "#8f9ab0" }}>ON THE BENCH</span>
+        {ourBench.map((p) => {
+          const resting = !!startingIds?.has(p.PlayerID);
+          return (
+            <button
+              key={p.PlayerID}
+              type="button"
+              onClick={() => onSelectPlayer?.(p, yourSide)}
+              title={resting ? `${p.fname} ${p.lname} — resting` : `${p.fname} ${p.lname} — interchange`}
+              style={{
+                font: "600 12px Barlow, sans-serif",
+                color: resting ? "var(--accT)" : "#c3ccdd",
+                padding: "3px 8px",
+                borderRadius: 6,
+                border: 0,
+                cursor: onSelectPlayer ? "pointer" : "default",
+                background: resting ? "color-mix(in oklch, var(--acc) 16%, transparent)" : "rgba(255,255,255,.05)",
+              }}
+            >
+              #{p.jumperNumber} {p.lname}
+            </button>
+          );
+        })}
+        {theirBench.length > 0 && <span style={{ flex: 1 }} />}
+        <span style={{ font: "500 11px 'IBM Plex Mono', monospace", color: "#8f9ab0" }}>
+          {clubByName(theirTeam.name)?.abbreviation ?? theirTeam.name} bench: {theirBench.map((p) => `#${p.jumperNumber}`).join(" ")}
+        </span>
       </div>
     </div>
   );

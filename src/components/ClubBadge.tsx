@@ -1,4 +1,5 @@
 import { clubById, clubByName, type Club } from "../types/club";
+import { clubTokensFor } from "../theme/clubTokens";
 
 /**
  * A club's real colours as a solid pill (`abbreviation` on a
@@ -24,13 +25,33 @@ import { clubById, clubByName, type Club } from "../types/club";
  * existing `"sm"`/`"md"` call site (and the `md` default) renders
  * byte-identically to before this size existed.
  */
+/**
+ * Round 126 — Cowork fix pass 1, item 4: every club chip is exactly ONE fill + ONE hairline border,
+ * drawn from that club's own theme tokens (brief 2.6 monogram chip): solid `deep` fill, a 1px
+ * `acc`-at-55% border, `accT` text, no gradient/shadow/ring. Replaces the old solid
+ * `primaryColor`/`secondaryColor` pill, which read as a second, clashing shade whenever it sat on a
+ * themed surface (e.g. Melbourne's navy chip inside the Dashboard's navy club tile). The tokens are
+ * applied inline per club, so an opponent's chip still shows its own colours whatever club you coach.
+ */
 export function ClubBadge({ club, size = "md" }: { club: Club | undefined; size?: "sm" | "md" | "lg" }) {
   if (!club) return null;
-  const sizeClass = size === "sm" ? "px-1.5 py-0.5 text-[10px]" : size === "lg" ? "px-2.5 py-1 text-sm" : "px-2 py-0.5 text-xs";
+  const t = clubTokensFor(club.abbreviation);
+  const sizeStyle = size === "sm" ? { padding: "1px 5px", fontSize: 10 } : size === "lg" ? { padding: "3px 9px", fontSize: 14 } : { padding: "2px 6px", fontSize: 11 };
   return (
     <span
-      className={`inline-flex shrink-0 items-center justify-center rounded font-bold uppercase tracking-wide ${sizeClass}`}
-      style={{ backgroundColor: club.primaryColor, color: club.secondaryColor }}
+      className="inline-flex shrink-0 items-center justify-center uppercase"
+      style={{
+        ...sizeStyle,
+        borderRadius: 5,
+        background: t.deep,
+        border: `1px solid color-mix(in oklch, ${t.acc} 55%, transparent)`,
+        color: t.accT,
+        boxShadow: "none",
+        fontFamily: "'Barlow Condensed', sans-serif",
+        fontWeight: 700,
+        letterSpacing: ".3px",
+        lineHeight: 1.2,
+      }}
       title={club.name}
     >
       {club.abbreviation}

@@ -139,8 +139,8 @@ const STATUS_COLOR: Record<StatusTone, string> = {
 };
 
 /** Status chip — mono 9px, 1px border in the status colour, transparent fill — brief 2.6. */
-export function StatusChip({ children, tone = "neutral" }: { children: ReactNode; tone?: StatusTone }) {
-  const color = STATUS_COLOR[tone];
+export function StatusChip({ children, tone = "neutral", color: colorOverride, style }: { children: ReactNode; tone?: StatusTone; color?: string; style?: CSSProperties }) {
+  const color = colorOverride ?? STATUS_COLOR[tone];
   return (
     <span
       style={{
@@ -153,6 +153,7 @@ export function StatusChip({ children, tone = "neutral" }: { children: ReactNode
         font: `600 9px ${FONT_MONO}`,
         letterSpacing: ".75px",
         textTransform: "uppercase",
+        ...style,
       }}
     >
       {children}
@@ -161,10 +162,10 @@ export function StatusChip({ children, tone = "neutral" }: { children: ReactNode
 }
 
 /** A labelled stat tile, e.g. inside a hero card's chip row — brief matches Dashboard hero. */
-export function KpiTile({ value, label, tone = "neutral" }: { value: ReactNode; label: string; tone?: "neutral" | "accent" }) {
+export function KpiTile({ value, label, tone = "neutral", color }: { value: ReactNode; label: string; tone?: "neutral" | "accent"; color?: string }) {
   return (
     <div style={{ background: "rgba(0,0,0,.28)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, padding: "10px 12px" }}>
-      <div style={{ font: `700 30px/1 ${FONT_COND}`, color: tone === "accent" ? "var(--accT)" : "#fff" }}>{value}</div>
+      <div style={{ font: `700 30px/1 ${FONT_COND}`, color: color ?? (tone === "accent" ? "var(--accT)" : "#fff") }}>{value}</div>
       <div style={{ font: `500 9px ${FONT_MONO}`, letterSpacing: "1px", color: "#aab3c3", marginTop: 4, textTransform: "uppercase" }}>
         {label}
       </div>

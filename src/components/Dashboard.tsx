@@ -199,7 +199,8 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
     <div className="space-y-4">
       <Card padding="18px 22px" style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
         <div style={{ width: 64, height: 64, flex: "none", borderRadius: 13, background: "var(--deep)", border: "1px solid color-mix(in oklch, var(--acc) 55%, transparent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <ClubBadge club={club} size="lg" />
+          {/* Round 126 — fix pass 1, item 4: the tile IS the badge (one fill + one hairline border); no nested chip. */}
+          <span style={{ font: "700 20px 'Barlow Condensed',sans-serif", color: "var(--accT)", letterSpacing: ".3px" }}>{club?.abbreviation}</span>
         </div>
         <div style={{ flex: "1 1 280px", minWidth: 0 }}>
           <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>

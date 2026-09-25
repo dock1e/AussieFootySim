@@ -17,7 +17,7 @@ import { PlayerProfileModal } from "./components/PlayerProfileModal";
 import { ThemeSystemScreen } from "./components/ThemeSystemScreen";
 import { ClubStripe } from "./components/theme/primitives";
 import { clubTokensFor } from "./theme/clubTokens";
-import { clubThemeStyle, pageBackgroundStyle } from "./theme/useClubTheme";
+import { clubThemeStyle, pageBackgroundStyle, topWashStyle } from "./theme/useClubTheme";
 import { useGameStore } from "./store/useGameStore";
 import { useSaveStore } from "./store/useSaveStore";
 import { ALL_PLAYERS } from "./data/loadPlayers";
@@ -175,17 +175,15 @@ export default function App() {
   // for every other one of its states and on unmount — so this stays a precise, per-state gate rather
   // than the Draft screen's coarser whole-screen one.
   //
-  // Round 125 — Tyler: "when I open the 'Draft' tab the visual UI is wider than other tabs. The width
-  // should be aligned across our UI for consistency." The cockpit shell used to drop the width cap
-  // (`lg:max-w-none`) for Draft too. Now every ordinary screen AND the Draft cockpit share one cap,
-  // `max-w-7xl` (1280px — UI Redesign3's own standard content wrap is 1240px; `max-w-6xl` was too
-  // narrow for Draft's three columns without its board scrolling sideways). Draft keeps its
-  // full-height, non-scrolling cockpit behaviour, just at the shared width. The live-match cockpit
-  // alone still goes full-width: its centre column is the ground itself, which would shrink to ~450px
-  // between the 460px LiveBoard and 316px side widgets under the cap.
+  // Round 126 — Cowork fix pass 1, item 5 ("Page jumps when switching tabs"): every tab, cockpit or
+  // not, now renders inside ONE identical shell — same 1440px max-width, same 16px/20px padding, same
+  // fixed-height header rows (56px logo row, 44px tabs, 36px sub-tab row that is ALWAYS rendered,
+  // empty when a tab has no sub-tabs). The cockpit screens (Draft, live match) keep their full-height,
+  // non-scrolling layout at `lg:`, but no longer vary width, top padding or header spacing, so the
+  // logo, tab bar and first card's top edge sit on identical pixels across every tab. (Supersedes
+  // Round 125's 1280px cap and its full-width live-match exception.)
   const [matchCockpitActive, setMatchCockpitActive] = useState(false);
   const isCockpitScreen = screen === "draft" || (screen === "match" && matchCockpitActive);
-  const isFullWidthCockpit = screen === "match" && matchCockpitActive;
   const myClub = useGameStore((s) => s.myClub);
   // Round 114 — Club Theme System: the 5 CSS custom properties every themed
   // component/screen reads via `var(--…)`, set once here from the coached
@@ -217,21 +215,21 @@ export default function App() {
 
   return (
     // Round 114 — Club Theme System: `clubThemeStyle` sets the 5 CSS custom
-    // properties + tint vars app-wide from here down; `pageBackgroundStyle`'s
-    // subtle low-tint background (~8% at the default 14% card tint) is close
-    // enough to the existing fixed `#0a0e14`-ish Tailwind background that it
-    // doesn't visually clash with the screens below that haven't been
-    // migrated to the token system yet — see clubTokens.ts's own doc comment
-    // for why the two colour systems coexist this round.
+    // properties + tint vars app-wide from here down. Round 126 (fix pass 1,
+    // item 1): two background layers, as in the reference — the root carries
+    // the `--tb` page tint, and `.wash` over it fades the club's deep colour
+    // into that base across the top 340px. The club stripe sits above the
+    // header, full width.
     <div
+      className={`app-root ${isCockpitScreen ? "lg:flex lg:h-screen lg:flex-col lg:overflow-hidden" : ""}`}
       style={{ ...clubThemeStyle(clubTokens), ...pageBackgroundStyle() }}
-      className={isCockpitScreen ? "lg:flex lg:h-screen lg:flex-col lg:overflow-hidden" : ""}
     >
+      <div className={`wash ${isCockpitScreen ? "lg:flex lg:min-h-0 lg:flex-1 lg:flex-col" : ""}`} style={{ ...topWashStyle, minHeight: "100vh" }}>
       <ClubStripe />
       <div
-        className={`mx-auto w-full max-w-7xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-full lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-hidden lg:py-4" : ""} ${isFullWidthCockpit ? "lg:max-w-none" : ""}`}
+        className={`app-shell ${isCockpitScreen ? "lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-hidden lg:!pb-4" : ""}`}
       >
-      <header className={`mb-6 ${isCockpitScreen ? "lg:mb-3 lg:shrink-0" : ""}`}>
+      <header className={isCockpitScreen ? "lg:shrink-0" : ""} style={{ marginBottom: 20 }}>
         {/* Logo + SaveMenu get their own row, deliberately separate from nav
             below — see the regression this fixed: with both in one
             `flex-wrap` row, nav growing to 11 tabs (Position Switch) was
@@ -242,7 +240,7 @@ export default function App() {
             as "the save button is gone" even though Export/Import/New Game
             were still there. Splitting the row means nav can keep growing
             and wrapping freely without ever touching this row again. */}
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3" style={{ minHeight: 56 }}>
           <div className="flex items-center gap-2.5">
             <Logo />
             <div className="font-display text-3xl italic tracking-tight">
@@ -263,7 +261,7 @@ export default function App() {
             group+screen structure itself is unchanged (this app has far more screens than the
             mockup's single flat row ever needed to hold) — only the visual treatment of each tier. */}
         <nav style={{ borderBottom: "1px solid rgba(255,255,255,.08)" }}>
-          <div className="flex flex-wrap gap-1" style={{ marginBottom: -1 }}>
+          <div className="flex flex-wrap items-stretch gap-1" style={{ minHeight: 44, marginBottom: -1 }}>
             {NAV_GROUPS.map((group) => {
               const active = activeGroup.key === group.key;
               return (
@@ -285,9 +283,10 @@ export default function App() {
               );
             })}
           </div>
-          {activeGroup.screens.length > 1 && (
-            <div className="flex flex-wrap gap-1" style={{ padding: "6px 0" }}>
-              {activeGroup.screens.map((s) => {
+          {/* Always rendered (36px), empty on a tab with no sub-tabs, so every tab's header is the same height. */}
+          <div className="flex flex-wrap items-center gap-1" style={{ minHeight: 36 }}>
+            {activeGroup.screens.length > 1 &&
+              activeGroup.screens.map((s) => {
                 const active = screen === s;
                 return (
                   <button
@@ -307,8 +306,7 @@ export default function App() {
                   </button>
                 );
               })}
-            </div>
-          )}
+          </div>
         </nav>
       </header>
 
@@ -344,6 +342,7 @@ export default function App() {
         {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />
+      </div>
       </div>
     </div>
   );

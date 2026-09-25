@@ -6,6 +6,8 @@ import { usePlayerProfileStore } from "../store/usePlayerProfileStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { Modal } from "./Modal";
+import { StatusChip } from "./theme/primitives";
+import { MEANING_TOKENS } from "../theme/clubTokens";
 import { ClubBadgeByName } from "./ClubBadge";
 import { PlayerLink } from "./PlayerLink";
 import { seasonPlayerTotals, allTimePlayerTotals, toAverageMap, realSeasonEntryToTotals, ALL_LEAGUE_STATS, LEADERBOARD_STAT_FIELDS, type LeagueStat, type SeasonPlayerTotals, type SeasonArchiveEntry } from "../engine/seasonSummary";
@@ -162,6 +164,23 @@ export const TIER_TONE: Record<BenchmarkTier, string> = {
   "BELOW AVG.": "text-slate-500",
 };
 
+/**
+ * Round 126 — Cowork fix pass 1, item 7: tier words read as the benchmark cell shading used on the
+ * Statistics table (Elite `rgba(79,214,154,.30)`, Above `.12`, Below `rgba(255,163,122,.13)`) plus a
+ * status chip in the meaning colour, instead of plain grey text.
+ */
+const TIER_CELL_BG: Record<BenchmarkTier, string | undefined> = {
+  "ELITE": "rgba(79,214,154,.30)",
+  "ABOVE AVG.": "rgba(79,214,154,.12)",
+  "AVERAGE": undefined,
+  "BELOW AVG.": "rgba(255,163,122,.13)",
+};
+
+function BenchmarkTierChip({ tier }: { tier: BenchmarkTier }) {
+  const color = tier === "ELITE" || tier === "ABOVE AVG." ? MEANING_TOKENS.rise : tier === "BELOW AVG." ? MEANING_TOKENS.fall : "#8f9ab0";
+  return <StatusChip color={color}>{tier}</StatusChip>;
+}
+
 function statLabel(stat: LeagueStat): string {
   return ALL_LEAGUE_STATS.find((s) => s.key === stat)?.label ?? stat;
 }
@@ -184,7 +203,7 @@ export function PlayerProfileModal() {
   if (viewingMatch) {
     const match = resolveMatchLocator(viewingMatch, seasonArchives, season, year);
     return (
-      <Modal title={match ? match.label : "Match not found"} onClose={closeProfile}>
+      <Modal title={match ? match.label : "Match not found"} onClose={closeProfile} themed>
         <button onClick={closeMatch} className="mb-4 text-sm text-accent-light hover:underline">
           ← Back to {playerFullName(player)}'s profile
         </button>
@@ -200,7 +219,7 @@ export function PlayerProfileModal() {
   }
 
   return (
-    <Modal title={playerFullName(player)} onClose={closeProfile}>
+    <Modal title={playerFullName(player)} onClose={closeProfile} themed>
       <PlayerProfileContent player={player} seasonArchives={seasonArchives} season={season} year={year} clubHistory={clubHistory} />
     </Modal>
   );
@@ -387,13 +406,13 @@ export function PlayerProfileContent({
       )}
 
       <section>
-        <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">Summary</div>
+        <div className="mb-1.5 afs-section-label">Summary</div>
         <p className="text-sm leading-relaxed text-slate-300">{profileBlurb}</p>
       </section>
 
       {allTimeStanding && allTimeWriteup && (
         <section>
-          <div className="mb-1.5 text-xs uppercase tracking-wide text-slate-400">
+          <div className="mb-1.5 afs-section-label">
             All-Time Standing
             <span className="ml-1.5 normal-case tracking-normal text-slate-500">
               — {RECORD_CATEGORY_LABEL[allTimeStanding.category] ?? allTimeStanding.category}, #{allTimeStanding.row.rank} all-time
@@ -414,10 +433,10 @@ export function PlayerProfileContent({
               one-row-per-entry) and a "Career Honours" section below (Brownlow/Coaches votes +
               merged awards — these are properties of the PLAYER, not any one entry, so shown once).
               See `mergedHonoursFor`'s own doc comment for exactly how the merge is done and why. */}
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Draft &amp; Club History</div>
+          <div className="mb-2 afs-section-label">Draft &amp; Club History</div>
           <p className="mb-2 text-[11px] text-slate-500">Real-world draft/trade history sourced from draftguru.com.au (Aug 2026).</p>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="afs-table w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-slate-500">
                   <th className="py-1.5 pr-3 font-normal">Year</th>
@@ -458,7 +477,7 @@ export function PlayerProfileContent({
 
           {honours && (honours.coachesVotes > 0 || honours.brownlowVotes > 0 || honours.awards) && (
             <div className="mt-4">
-              <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Career Honours</div>
+              <div className="mb-2 afs-section-label">Career Honours</div>
               <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-sm">
                 <div>
                   <span className="text-slate-400">Coaches votes </span>
@@ -480,13 +499,13 @@ export function PlayerProfileContent({
       )}
 
       <section>
-        <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Key Stats &amp; Performance</div>
+        <div className="mb-2 afs-section-label">Key Stats &amp; Performance</div>
         <p className="mb-2 text-[11px] text-slate-500">
           Benchmarked against every other {player.archetype} with at least one game this window — AFL.com.au's own
           bands: ELITE top 10%, ABOVE AVG. next 25%, AVERAGE next 30%, BELOW AVG. bottom third.
         </p>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="afs-table w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500">
                 <th className="py-1.5 pr-3 font-normal">Stat</th>
@@ -503,12 +522,12 @@ export function PlayerProfileContent({
                 <tr key={r.stat} className="border-t border-base-800">
                   <td className="py-1.5 pr-3 font-medium">{statLabel(r.stat)}</td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">{r.seasonAvg !== undefined ? r.seasonAvg.toFixed(1) : "—"}</td>
-                  <td className={`py-1.5 pr-3 text-xs font-semibold ${r.seasonBench ? TIER_TONE[r.seasonBench.tier] : "text-slate-600"}`}>
-                    {r.seasonBench ? r.seasonBench.tier : "—"}
+                  <td className="py-1.5 pr-3" style={{ background: r.seasonBench ? TIER_CELL_BG[r.seasonBench.tier] : undefined }}>
+                    {r.seasonBench ? <BenchmarkTierChip tier={r.seasonBench.tier} /> : <span className="text-slate-600">—</span>}
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">{r.careerAvg !== undefined ? r.careerAvg.toFixed(1) : "—"}</td>
-                  <td className={`py-1.5 pr-3 text-xs font-semibold ${r.careerBench ? TIER_TONE[r.careerBench.tier] : "text-slate-600"}`}>
-                    {r.careerBench ? r.careerBench.tier : "—"}
+                  <td className="py-1.5 pr-3" style={{ background: r.careerBench ? TIER_CELL_BG[r.careerBench.tier] : undefined }}>
+                    {r.careerBench ? <BenchmarkTierChip tier={r.careerBench.tier} /> : <span className="text-slate-600">—</span>}
                   </td>
                   <td className="py-1.5 pr-3 text-xs">
                     {r.topSeason ? (
@@ -543,7 +562,7 @@ export function PlayerProfileContent({
 
       <section>
         <div className="mb-2 flex items-center justify-between">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Career &amp; Season Stats</div>
+          <div className="afs-section-label">Career &amp; Season Stats</div>
           <ToggleGroup value={tableMode} onChange={setTableMode} labels={{ total: "Total", average: "Average" }} />
         </div>
         {hasRealRows && (
@@ -561,7 +580,7 @@ export function PlayerProfileContent({
 
       <section>
         <div className="mb-2 flex items-center justify-between">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Fantasy Points Over Time</div>
+          <div className="afs-section-label">Fantasy Points Over Time</div>
           <ToggleGroup value={chartMode} onChange={setChartMode} labels={{ total: "Total", average: "Per Game" }} />
         </div>
         <FantasyPointsChart yearRows={yearRows} mode={chartMode} />
@@ -829,7 +848,7 @@ function CareerTable({
   const totalColumns = 2 + 1 + TABLE_COLUMNS.length + 1; // Year, GM, Grade, ...stat columns, Awards
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className="afs-table w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-slate-500">
             <th className="py-1.5 pr-3 font-normal">Year</th>
@@ -975,7 +994,7 @@ function ArchivedMatchView({ match, highlightPlayerId }: { match: LocatedMatch; 
   return (
     <div className="space-y-5">
       <div className="rounded-card border border-base-700 bg-base-800/60 p-4 text-center">
-        <div className="text-xs uppercase tracking-wide text-slate-400">{match.label}</div>
+        <div className="afs-section-label">{match.label}</div>
         <div className="mt-1 font-display text-2xl italic">
           {match.result.home.name} {match.result.home.points} — {match.result.away.points} {match.result.away.name}
         </div>
@@ -1001,9 +1020,9 @@ function ArchivedMatchView({ match, highlightPlayerId }: { match: LocatedMatch; 
       )}
 
       <div>
-        <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Full Box Score</div>
+        <div className="mb-2 afs-section-label">Full Box Score</div>
         <div className="max-h-80 overflow-y-auto overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="afs-table w-full text-sm">
             <thead className="sticky top-0 bg-base-900">
               <tr className="text-left text-xs text-slate-500">
                 <th className="py-1.5 pr-3 font-normal">Player</th>

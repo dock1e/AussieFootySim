@@ -299,7 +299,9 @@ function SortableHeader({
   onClick,
   align = "center",
   title,
+  className = "",
 }: {
+  className?: string;
   label: string;
   active: boolean;
   onClick: () => void;
@@ -313,7 +315,7 @@ function SortableHeader({
       onClick={onClick}
       title={title}
       style={active ? { background: "color-mix(in oklch, var(--acc) 15%, transparent)", color: "var(--accT)" } : undefined}
-      className={`flex cursor-pointer items-center whitespace-nowrap px-2 py-2 ${
+      className={`${className} flex cursor-pointer items-center whitespace-nowrap px-2 py-2 ${
         align === "left" ? "justify-start text-left" : align === "right" ? "justify-end text-right" : "justify-center text-center"
       }`}
     >
@@ -327,7 +329,7 @@ function SortableHeader({
  * row (Tyler: "single grid template shared by the header row and every data row so columns align
  * exactly"), copied from the chosen mockup's own board rather than from Tyler's typed pixel values
  * (which described the mockup's other, unchosen option). */
-const BOARD_GRID_COLS = "grid-cols-[36px_74px_minmax(110px,1fr)_48px_96px_76px_50px_84px_58px]";
+const BOARD_GRID_COLS = "draft-grid";
 
 /** Round 99 — display label for the board's own "Sorted: X" hint, replacing round 98's separate "Sort:"
  * pill row now that the columns themselves are the sort control. */
@@ -349,8 +351,10 @@ const LABEL_CLASS = "font-mono uppercase text-[9.5px] tracking-[1.1px] text-[#6f
  * depends on club colour") it now routes through `MEANING_TOKENS.rise`/`warn`/`fall` — the same
  * rise/fall/warn a Bulldogs fan and a Collingwood fan see for the identical confidence value, rather than
  * a colour that happened to double as this file's own old literal palette. Thresholds unchanged. */
+// Round 126 — Cowork fix pass 1, item 2: thresholds realigned to the brief's own §4.5 spec ("green ≥70,
+// amber ≥45, coral below"); still meaning tokens, never the club accent.
 function confidenceColor(value: number): string {
-  return value >= 48 ? MEANING_TOKENS.rise : value >= 40 ? MEANING_TOKENS.warn : MEANING_TOKENS.fall;
+  return value >= 70 ? MEANING_TOKENS.rise : value >= 45 ? MEANING_TOKENS.warn : MEANING_TOKENS.fall;
 }
 
 /** Round 99 — the mockup's "Confidence renders as a small bar plus the percentage." Round 100: recoloured
@@ -529,7 +533,9 @@ export function Draft() {
     }
     return predictedMidpoint(a.PlayerID, predictedRangeByPlayerId) - predictedMidpoint(b.PlayerID, predictedRangeByPlayerId);
   });
-  const selected = selectedId !== null ? (remaining.find((p) => p.PlayerID === selectedId) ?? null) : null;
+  // Round 126 — fix pass 1, item 8: the detail panel always shows someone — with nothing (or an
+  // already-drafted prospect) selected, it defaults to the top prospect in the board's current sort.
+  const selected = (selectedId !== null ? remaining.find((p) => p.PlayerID === selectedId) : undefined) ?? sortedRemaining[0] ?? null;
 
   const myPicks = window_.picks.filter((p) => p.clubName === myClub);
   // Round 97 — excludes the current on-the-clock pick (that's `clubOnClock`, shown separately/highlighted
@@ -750,7 +756,9 @@ export function Draft() {
                 Sorted: {SORT_MODE_LABEL[sortMode]} ▾ · Click a column header to sort
               </span>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-base-700" role="table">
+            {/* Round 126 — fix pass 1, item 3: vertical scroll only; `.draft-grid` (index.css) drops State
+                then Tier as the board narrows instead of scrolling sideways. */}
+            <div className="board-container min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-lg border border-base-700" role="table">
               <div
                 role="row"
                 className={`sticky top-0 z-10 grid ${BOARD_GRID_COLS} h-[34px] items-center border-b border-base-700 bg-base-900 ${LABEL_CLASS}`}
@@ -767,10 +775,10 @@ export function Draft() {
                 <div role="columnheader" className="flex items-center px-2 text-left">
                   Prospect
                 </div>
-                <div role="columnheader" className="flex items-center justify-center px-2">
+                <div role="columnheader" className="col-state flex items-center justify-center px-2">
                   State
                 </div>
-                <div role="columnheader" className="flex items-center justify-center px-2">
+                <div role="columnheader" className="col-arch flex items-center justify-center px-2">
                   Archetype
                 </div>
                 <SortableHeader
@@ -780,12 +788,14 @@ export function Draft() {
                   title="Sort by true overall rating — the displayed band stays fogged"
                 />
                 <SortableHeader
+                  className="col-pot"
                   label="Pot."
                   active={sortMode === "potential"}
                   onClick={() => setSortMode("potential")}
                   title="Sort by true potential — the displayed grade stays fogged"
                 />
                 <SortableHeader
+                  className="col-tier"
                   label="Tier"
                   active={sortMode === "tier"}
                   onClick={() => setSortMode("tier")}
@@ -812,7 +822,7 @@ export function Draft() {
                       // in place of round 99's `base-900`/`base-800/40`/`bg-primary/15`, matching the
                       // mockup's own embedded striping function exactly.
                       style={
-                        selectedId === p.PlayerID
+                        selected?.PlayerID === p.PlayerID
                           ? { background: "color-mix(in oklch, var(--acc) 16%, transparent)" }
                           : { background: i % 2 === 0 ? "rgba(255,255,255,.02)" : "transparent" }
                       }
@@ -821,7 +831,8 @@ export function Draft() {
                       <div role="cell" className="px-2 text-center text-slate-500">
                         {i + 1}
                       </div>
-                      <div role="cell" className="px-2 text-center tabular-nums" style={{ color: "var(--accT)" }}>
+                      {/* Round 126 — fix pass 1, item 8: predicted range is data, not "yours" — neutral text; --accT is kept for the sorted header only. */}
+                      <div role="cell" className="px-2 text-center tabular-nums" style={{ color: "#c3ccdd" }}>
                         {(() => {
                           const range = predictedRangeByPlayerId.get(p.PlayerID);
                           if (!range) return "—";
@@ -833,19 +844,19 @@ export function Draft() {
                         {combineInvitedIds?.has(p.PlayerID) && <BoardPill label="CMB" tone="teal" />}
                         {tie && <BoardPill label={TIE_TYPE_ABBR[tie.type]} tone="yellow" />}
                       </div>
-                      <div role="cell" className="truncate px-2 text-center text-slate-400">
+                      <div role="cell" className="col-state truncate px-2 text-center text-slate-400">
                         {p.homeState}
                       </div>
-                      <div role="cell" className="truncate px-2 text-center text-slate-400" title={p.archetype}>
+                      <div role="cell" className="col-arch truncate px-2 text-center text-slate-400" title={p.archetype}>
                         {p.archetype}
                       </div>
                       <div role="cell" className="px-2 text-center tabular-nums">
                         {band.low}-{band.high}
                       </div>
-                      <div role="cell" className="px-2 text-center tabular-nums">
+                      <div role="cell" className="col-pot px-2 text-center tabular-nums">
                         {revealed.length === 0 ? "?" : potentialLetterGrade(p.POT)}
                       </div>
-                      <div role="cell" className="flex items-center justify-center px-2">
+                      <div role="cell" className="col-tier flex items-center justify-center px-2">
                         {revealed.length === 0 ? <span className="text-slate-500">?</span> : <CompactTierLabel tier={tierByPlayerId.get(p.PlayerID)} />}
                       </div>
                       <div role="cell" className="flex items-center justify-center px-2">

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { CLUBS, clubByName } from "../types/club";
 import type { Player } from "../types/player";
-import { getPlayersByClub } from "../data/loadPlayers";
-import type { MatchTeam } from "../engine/team";
-import { autoFillLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
+import type { Position } from "../types/archetype";
+import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
+import { cloneMatchTeam, type MatchTeam } from "../engine/team";
+import { autoFillLineup, emptyLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
 import {
-  simulateMatch,
   startMatch,
   simulateQuarter,
   setGameStyle,
@@ -29,81 +29,162 @@ import { fantasyPointsFor } from "../engine/ratings";
 import { seasonPlayerTotals, toAverageMap } from "../engine/seasonSummary";
 import { computeFantasyMetrics, type PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
 import { groundForMatch } from "../data/clubGrounds";
-import { DEFAULT_GAME_STYLE, type TeamPlan, type GameStyle } from "../engine/tactics";
+import type { AFLStadium } from "../data/stadiums";
+import { aiTeamPlan, defaultTeamPlan, DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
+import { nextUnplayedRound } from "../engine/season";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
+import { useTeamPlanStore } from "../store/useTeamPlanStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { GroundView } from "./GroundView";
-import { Scoreboard, StatStrip, TransportBar, breakLabel, clubAbbr, gameClock, nextBreakName, quarterGoalsBehinds } from "./matchday/shared";
+import { Scoreboard, StatStrip, TransportBar, breakLabel, clubAbbr, gameClock, nextBreakName, quarterGoalsBehinds, plural } from "./matchday/shared";
 import { LiveBoard, MoversWidget, PlayByPlayWidget, DangerMenWidget, baselineFpAverage } from "./matchday/LiveWidgets";
 import { useMatchStoryStore } from "../store/useMatchStoryStore";
 import { generateMatchCoachesVotes } from "../engine/coachesVotes";
 import { FullTimeResult } from "./FullTimeResult";
-import { MatchPreparation } from "./MatchPreparation";
 import { QuarterTimeDecisionRoom } from "./QuarterTimeDecisionRoom";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
+import { FlowFooter, FlowStepper, type FlowStep, type StepInfo } from "./matchday/flow/FlowChrome";
+import { SelectionStep, lineupStat } from "./matchday/flow/SelectionStep";
+import { RotationsStep, coverageCount } from "./matchday/flow/RotationsStep";
+import { RolesStep } from "./matchday/flow/RolesStep";
+import { FixtureStep } from "./matchday/flow/FixtureStep";
+import { OppositionStep, type WeeklyChange } from "./matchday/flow/OppositionStep";
+import { useTogProjection } from "./matchday/flow/useTogProjection";
+import {
+  dangerMen,
+  lastMetLine,
+  ladderLine,
+  scoutingRows,
+  seasonFixtureRows,
+  styleBlurb,
+  styleLabel,
+  taggerCandidates,
+  weeklyPlan,
+  type FixtureChoice,
+} from "./matchday/flow/flowData";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8, 16];
 
 const TEAM_STAT_KEYS = ["disposals", "marks", "tackles", "clearances", "hitouts"] as const;
 
-type Stage = "setup" | "prep";
+/** Everything a started match needs, frozen at the first bounce so a season round being recorded (which moves the fixture on) can't change the teams under a match already on screen. */
+interface ActiveMatch {
+  home: MatchTeam;
+  away: MatchTeam;
+  venue: AFLStadium;
+  /** The season round being played, or null for a friendly. */
+  round: number | null;
+  /** An untouched copy of the coach's own team as it took the field — interchanges mutate `home`/`away`. */
+  myTeamAtBounce: MatchTeam;
+}
 
+/**
+ * Match Day — round 128 rebuilds the pre-match side as the six-step flow from `Match Day Flow.dc.html`:
+ * Selection, Rotations and Roles (the standing plan, saved to the Selection/team-plan stores and used
+ * every week), then Fixture, Opposition and Match (this week only). The Match step is the Match Day v2
+ * live / break / full-time screens, unchanged apart from sitting under the same stepper.
+ *
+ * With a season running, the Fixture step plays your next round and full time records it into the
+ * season (`useSeasonStore.recordLiveRound`), the rest of the round simulating headlessly as before.
+ * Without one it's a friendly against any club at your home ground.
+ */
 export function LiveMatch({
   onCockpitActiveChange,
   onContinue,
+  initialStep,
 }: {
   onCockpitActiveChange?: (active: boolean) => void;
   /** Match Day v2 (spec §3, critique D8): full time's primary action — back to the post-round Dashboard. */
   onContinue?: () => void;
+  /** Where the flow opens. Defaults to Selection until the line-up is full, then Fixture. */
+  initialStep?: FlowStep;
 } = {}) {
-  const [homeClub, setHomeClub] = useState(CLUBS[10].name); // Melbourne, arbitrary
-  const [awayClub, setAwayClub] = useState(CLUBS[3].name); // Collingwood, arbitrary
-  const [stage, setStage] = useState<Stage>("setup");
+  const myClub = useGameStore((s) => s.myClub);
+  const myClubId = clubByName(myClub)?.ClubID ?? -1;
+  const myPlayers = useMemo(() => getPlayersByClub(myClub), [myClub]);
+  const myById = useMemo(() => new Map(myPlayers.map((p) => [p.PlayerID, p])), [myPlayers]);
+
+  const savedLineup = useSelectionStore((s) => s.lineupFor(myClub));
+  const lineup = savedLineup ?? emptyLineup();
+  const setSlot = useSelectionStore((s) => s.setSlot);
+  const autoFill = useSelectionStore((s) => s.autoFill);
+  const allEligibility = useSelectionStore((s) => s.eligibility);
+  const setEligibility = useSelectionStore((s) => s.setEligibility);
+  const myEligibility = allEligibility[myClub];
+
+  const standingPlan = useTeamPlanStore((s) => s.plans[myClub]) ?? defaultTeamPlan();
+  const setStandingStyle = useTeamPlanStore((s) => s.setGameStyle);
+  const setStandingTactic = useTeamPlanStore((s) => s.setTactic);
+
+  const season = useSeasonStore((s) => s.season);
+  const seasonTeams = useSeasonStore((s) => s.teams);
+  const recordLiveRound = useSeasonStore((s) => s.recordLiveRound);
+  const year = useSaveStore((s) => s.year);
+
+  const [step, setStep] = useState<FlowStep>(() => initialStep ?? (savedLineup && isLineupComplete(savedLineup) ? 3 : 0));
+  const [friendlyOpponent, setFriendlyOpponent] = useState(() => CLUBS.find((c) => c.name !== myClub)?.name ?? CLUBS[0].name);
+  /** This week only: opponent PlayerID → your tagger's PlayerID. */
+  const [tags, setTags] = useState<Map<number, number>>(new Map());
+  const [weekStyle, setWeekStyle] = useState<GameStyle | null>(null);
+
+  const [active, setActive] = useState<ActiveMatch | null>(null);
   const [result, setResult] = useState<MatchResult | null>(null);
   const [lastSeed, setLastSeed] = useState<number | null>(null);
+  const [recordedRound, setRecordedRound] = useState<number | null>(null);
+
+  // --- This week's fixture --------------------------------------------------------------------------
+  const fixtureRows = useMemo(() => (season ? seasonFixtureRows(season, myClubId) : []), [season, myClubId]);
+  const nextRound = season ? nextUnplayedRound(season) : null;
+  const nextRow = fixtureRows.find((r) => r.round === nextRound) ?? null;
+  const friendlyOnly = !nextRow;
+  const choice: FixtureChoice = nextRow ? { kind: "season", round: nextRow.round } : { kind: "friendly", opponent: friendlyOpponent };
+  const oppName = nextRow ? nextRow.opponent : friendlyOpponent;
+  const oppClubId = clubByName(oppName)?.ClubID ?? -1;
+  const iAmHome = nextRow ? nextRow.isHome : true;
+  const flowVenue = useMemo(
+    () => (nextRow && season ? groundForMatch(nextRow.homeClubId, nextRow.round, season.fixture) : groundForMatch(myClubId)),
+    [nextRow, season, myClubId],
+  );
+  const homeVenue = useMemo(() => groundForMatch(myClubId).commonName, [myClubId]);
 
   /**
-   * Quarter-time Coach's Call (Engine.md "Match-day flow" step 4) — only
-   * ever populated when the user's own club is playing (see `mySide` and
-   * `kickOff()` below). `matchInProgress` stays null for an AI-vs-AI game,
-   * which still simulates instantly in one `simulateMatch()` call exactly
-   * like every Match-tab game did before this feature existed.
+   * Your side is always your saved line-up (topped up by `lineupToMatchTeam` if it isn't full yet);
+   * the opponent is its season team when there is one, else the same suitability-aware auto-fill an AI
+   * club gets in season simulation.
+   */
+  const flowMine = useMemo(
+    () => lineupToMatchTeam(myClub, savedLineup ?? autoFillLineup(myPlayers), myPlayers, myEligibility),
+    [myClub, savedLineup, myPlayers, myEligibility],
+  );
+  const flowOpp = useMemo(() => {
+    const fromSeason = nextRow ? seasonTeams?.get(oppClubId) : undefined;
+    if (fromSeason) return fromSeason;
+    const players = getPlayersByClub(oppName);
+    return lineupToMatchTeam(oppName, autoFillLineup(players), players, allEligibility[oppName]);
+  }, [nextRow, seasonTeams, oppClubId, oppName, allEligibility]);
+  const oppPlan = useMemo(() => aiTeamPlan(getPlayersByClub(oppName), leagueAverageOvr()), [oppName]);
+  const minePlan = useMemo(() => weeklyPlan(standingPlan, weekStyle, tags), [standingPlan, weekStyle, tags]);
+
+  const homeTeam = active?.home ?? (iAmHome ? flowMine : flowOpp);
+  const awayTeam = active?.away ?? (iAmHome ? flowOpp : flowMine);
+  const venue = active?.venue ?? flowVenue;
+
+  /**
+   * Quarter-time Coach's Call (Engine.md "Match-day flow" step 4). Every flow match is the coach's
+   * own, so it's always interactive: simulated a quarter at a time with a break between.
    */
   const [matchInProgress, setMatchInProgress] = useState<MatchInProgress | null>(null);
   const [quartersSimulated, setQuartersSimulated] = useState(0);
   const [pendingCoachsCall, setPendingCoachsCall] = useState<{ side: "home" | "away"; quarterJustFinished: 1 | 2 | 3 } | null>(null);
 
-  /**
-   * Each side's current game style, kept in sync with whatever `kickOff`
-   * actually started the match with and whatever a Coach's Call changes it
-   * to mid-match — Aug 2026, feeds `GroundView`'s (formerly `MatchCanvas`'s)
-   * `homeStyle`/`awayStyle` props (see engine/ground.ts's `gameStyleAnchorBias`) so the
-   * ground rendering's positional shape actually reflects the chosen game
-   * style, not just its disposal/contest-rating effects. Deliberately local
-   * state here rather than reading back through `matchInProgress` (which
-   * only exists for an interactive match — see `getGameStyle`'s other call
-   * site below) so a non-interactive AI-vs-AI game (no `matchInProgress` at
-   * all) still renders its own fixed-for-the-whole-match style correctly.
-   */
+  /** Each side's current game style — feeds `GroundView`'s positional shape (see engine/ground.ts's `gameStyleAnchorBias`). */
   const [homeStyle, setHomeStyle] = useState<GameStyle>(DEFAULT_GAME_STYLE);
   const [awayStyle, setAwayStyle] = useState<GameStyle>(DEFAULT_GAME_STYLE);
 
-  /**
-   * Click-to-inspect player stats (Aug 2026, Tyler: "In the match sim and at
-   * half time I want to be able to click on a player and see their
-   * statistics and how they're influencing the game... so that as a coach we
-   * can make decisions on what to do next") — available any time `result`
-   * exists, which covers both cases in his ask without needing separate
-   * plumbing: mid-match is just this screen while playing/paused, and half
-   * time is just this same screen sitting on the Q2 Coach's Call. Holds the
-   * clicked `Player` plus which `side` they're on (needed to mirror the zone
-   * breakdown into *their own* attacking-direction terms — see
-   * `PlayerMatchStatsModal`'s own doc comment) rather than re-deriving side
-   * from `homeIds`/`awayIds` again on every render.
-   */
+  /** Click-to-inspect player stats drawer (live, break and full time). */
   const [selectedPlayer, setSelectedPlayer] = useState<{ player: Player; side: Side } | null>(null);
   /**
    * Match Day v2 (critique B7): selecting a player from the board, a mover, a danger-man match-up or a
@@ -114,78 +195,21 @@ export function LiveMatch({
   function selectOnGround(player: Player, side: Side) {
     setGroundSel((cur) => (cur?.player.PlayerID === player.PlayerID ? null : { player, side }));
   }
-  /** Sep 2026 round 112 — [[Match Day Fantasy Layer]] Section B's cross-highlight: hovering a `LiveBoard`
-   * row highlights its ground node and vice versa. Lifted here (not local to either component) since
-   * both `LiveBoard` and `GroundView` are siblings in the render tree below. */
+  /** Hovering a `LiveBoard` row highlights its ground node and vice versa. */
   const [hoveredPlayerId, setHoveredPlayerId] = useState<number | null>(null);
 
-  const myClub = useGameStore((s) => s.myClub);
-  const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
-  /**
-   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Same "single-slot, the human coach's own
-   * club" shape as `talentScout` — see `SaveGameData.lineCoaches`'s own doc comment. Round 85 — read
-   * ONLY here now; `assignLineCoach` moved to `SelectionCommittee.tsx`, since a hire made mid-match had
-   * no retroactive effect on the match already in progress. This panel just displays whoever's
-   * currently assigned (frozen at kickoff) alongside their live feedback/focus.
-   */
+  /** Line coaches (hired from Football Dept.), frozen at kickoff. */
   const lineCoaches = useSaveStore((s) => s.lineCoaches);
-  /** [[Interchange Rotation]], round 48 — read broadly (every club, not just myClub) so resolveTeam can thread whichever side's own saved overrides through symmetrically; in practice only the human coach's own club ever has any (see Selection Committee's new eligibility editor). */
-  const allEligibility = useSelectionStore((s) => s.eligibility);
 
-  /**
-   * Fixture-driven ground selection (Aug 2026, Phase 10 round 14 — Tyler:
-   * "Build just the smaller scope fixture") — this screen has no fixture/
-   * round of its own (an ad-hoc "pick any two clubs" friendly, a fresh
-   * random seed every time), so `groundForMatch` is called with just the
-   * home club's id, which always resolves to that club's *primary* real
-   * ground (see that function's own doc comment for why round-based
-   * exceptions deliberately don't fire here).
-   *
-   * Sep 2026 round 104 — [[Venue-Accurate Ground Renderer]]: `groundForMatch`
-   * now returns a real `AFLStadium` (`data/stadiums.ts`), not the old
-   * pixel-based `GroundConfig`. The `setActiveGround`/`useEffect` pairing
-   * that used to live here is gone too — `GroundView` now owns syncing
-   * `engine/ground.ts`'s active-stadium state to whatever `venue` prop it's
-   * given (see its own venue-sync effect), so this screen just resolves the
-   * venue and passes it straight through as a prop, same as `homeTeam`/
-   * `awayTeam` below.
-   */
-  const homeClubId = clubByName(homeClub)?.ClubID;
-  const venue = groundForMatch(homeClubId ?? -1);
-
-  /** Uses the coach's own Selection Committee lineup when it's their club and it's complete; every other club falls back to the same real, suitability-aware auto-fill (`autoFillLineup`) an AI club gets in season simulation now — see engine/season.ts's `buildTeams` and [[Tactics and Positional Play]] — rather than the old coarse OVR-only `pickBest22`. */
-  function resolveTeam(clubName: string): MatchTeam {
-    const clubPlayers = getPlayersByClub(clubName);
-    const eligibilityOverrides = allEligibility[clubName];
-    if (clubName === myClub && myLineup && isLineupComplete(myLineup)) {
-      return lineupToMatchTeam(clubName, myLineup, clubPlayers, eligibilityOverrides);
-    }
-    return lineupToMatchTeam(clubName, autoFillLineup(clubPlayers), clubPlayers, eligibilityOverrides);
-  }
-
-  const homeTeam = useMemo(() => resolveTeam(homeClub), [homeClub, myClub, myLineup, allEligibility]);
-  const awayTeam = useMemo(() => resolveTeam(awayClub), [awayClub, myClub, myLineup, allEligibility]);
   const homeIds = useMemo(() => new Set(homeTeam.players.map((p) => p.PlayerID)), [homeTeam]);
   const awayIds = useMemo(() => new Set(awayTeam.players.map((p) => p.PlayerID)), [awayTeam]);
-  const homeIsCustom = homeClub === myClub && !!myLineup && isLineupComplete(myLineup);
-  const awayIsCustom = awayClub === myClub && !!myLineup && isLineupComplete(myLineup);
 
   const playback = useMatchPlayback(result, homeIds, awayIds);
 
-  /** Which side (if any) the user is actually coaching this game — a Coach's Call only ever applies to them; the AI opponent has no UI to make its own calls (ROADMAP.md gap #22). */
-  const mySide: "home" | "away" | null = homeTeam.name === myClub ? "home" : awayTeam.name === myClub ? "away" : null;
+  const mySide: "home" | "away" = homeTeam.name === myClub ? "home" : "away";
 
-  /**
-   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. Resolves `lineCoaches` (the human
-   * coach's own club-wide assignment) into the plain `role -> ovr/99` map `startMatch`'s
-   * `homeLineCoachEffectiveness`/`awayLineCoachEffectiveness` options expect — match.ts itself has
-   * no `Coach`/coach-pool dependency (see lineCoaching.ts's own top comment), so that resolution
-   * happens here. Only ever non-empty for `mySide` — an AI opponent (or the other side, when
-   * neither is the user's club) always plays with every line at the flat, unassigned baseline,
-   * same as it always has for `homeCondition`/`homePlan` opting out.
-   */
-  function lineCoachEffectivenessForSide(side: "home" | "away"): Partial<Record<MatchDayCoachRole, number>> {
-    if (side !== mySide) return {};
+  /** The coach's own line-coach assignments as `role -> ovr/99`; the opponent always plays the flat baseline. */
+  function lineCoachEffectiveness(): Partial<Record<MatchDayCoachRole, number>> {
     const effectiveness: Partial<Record<MatchDayCoachRole, number>> = {};
     for (const role of MATCH_DAY_COACH_ROLES) {
       const coachId = lineCoaches[role];
@@ -196,42 +220,60 @@ export function LiveMatch({
     return effectiveness;
   }
 
-  function kickOff(homePlan: TeamPlan, awayPlan: TeamPlan) {
+  function kickOff() {
     const seed = Math.floor(Math.random() * 1_000_000_000);
     setLastSeed(seed);
+    const mine = cloneMatchTeam(flowMine);
+    const opp = cloneMatchTeam(flowOpp);
+    const home = iAmHome ? mine : opp;
+    const away = iAmHome ? opp : mine;
+    const homePlan = iAmHome ? minePlan : oppPlan;
+    const awayPlan = iAmHome ? oppPlan : minePlan;
     setHomeStyle(homePlan.gameStyle);
     setAwayStyle(awayPlan.gameStyle);
-    const homeLineCoachEffectiveness = lineCoachEffectivenessForSide("home");
-    const awayLineCoachEffectiveness = lineCoachEffectivenessForSide("away");
-
-    if (!mySide) {
-      // Neither side is the user's own club (e.g. watching two AI clubs
-      // play) - no one to offer a Coach's Call to, so simulate the whole
-      // match up front exactly like every Match-tab game did before this
-      // feature existed.
-      const fresh = simulateMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness, stadium: venue });
-      setResult(fresh);
-      setMatchInProgress(null);
-      setQuartersSimulated(4);
-      return;
-    }
-
-    const match = startMatch(homeTeam, awayTeam, mulberry32(seed), seed, { homePlan, awayPlan, homeLineCoachEffectiveness, awayLineCoachEffectiveness, stadium: venue });
+    const mineLc = lineCoachEffectiveness();
+    const condition = nextRow && season ? season.condition : undefined;
+    const match = startMatch(home, away, mulberry32(seed), seed, {
+      homePlan,
+      awayPlan,
+      homeLineCoachEffectiveness: iAmHome ? mineLc : {},
+      awayLineCoachEffectiveness: iAmHome ? {} : mineLc,
+      homeCondition: condition,
+      awayCondition: condition,
+      stadium: flowVenue,
+    });
     simulateQuarter(match, 1);
+    setActive({ home, away, venue: flowVenue, round: nextRow?.round ?? null, myTeamAtBounce: cloneMatchTeam(flowMine) });
     setMatchInProgress(match);
     setQuartersSimulated(1);
+    setPendingCoachsCall(null);
     setResult(matchResultSoFar(match));
+    setRecordedRound(null);
+    setGroundSel(null);
+    setSelectedPlayer(null);
+    setStep(5);
   }
 
-  function newMatchup() {
+  /** Leaves the match (or its full time) and goes back into the flow. A season round not yet at full time isn't recorded. */
+  function leaveMatch(to: FlowStep) {
     setResult(null);
-    setStage("setup");
+    setActive(null);
     setMatchInProgress(null);
     setQuartersSimulated(0);
     setPendingCoachsCall(null);
     setHomeStyle(DEFAULT_GAME_STYLE);
     setAwayStyle(DEFAULT_GAME_STYLE);
+    setGroundSel(null);
+    setSelectedPlayer(null);
+    if (recordedRound !== null) {
+      // That round is on the ladder now; next week's plan starts clean.
+      setTags(new Map());
+      setWeekStyle(null);
+    }
+    setRecordedRound(null);
+    setStep(to);
   }
+  const newMatchup = () => leaveMatch(3);
 
   function chooseCoachsCall(style: GameStyle) {
     if (!matchInProgress || !pendingCoachsCall) return;
@@ -246,20 +288,7 @@ export function LiveMatch({
     playback.play(); // auto-resume - "click play and let it run," the Coach's Call is the only interruption
   }
 
-  /**
-   * Quarter-time manual interchange ([[Interchange Rotation]], round 48
-   * Slice 1) — `QuarterTimeInterchange`'s own click-to-arm UI only ever
-   * offers an already-eligibility-gated swap, so `attemptInterchange`
-   * rejecting it here would only mean a genuine bug, not a real user
-   * mistake to surface; logged rather than silently swallowed either way.
-   * `matchInProgress`/`homeTeam`/`awayTeam` are mutated in place (the same
-   * `MatchTeam` object references `startMatch` was handed at kick-off — see
-   * `attemptInterchange`'s own doc comment), so the only thing actually
-   * needed to make the swap visible is a re-render; re-deriving `result`
-   * from the now-current `matchInProgress` is the exact same "something
-   * changed inside the live match" signal `chooseCoachsCall`/
-   * `skipRestOfMatch` already use for this.
-   */
+  /** Quarter-time manual interchange — the break screen only offers eligibility-checked swaps, so a rejection here is a bug, logged rather than swallowed. */
   function handleInterchange(side: "home" | "away", outgoingId: number, incomingId: number) {
     if (!matchInProgress) return;
     const outcome = attemptInterchange(matchInProgress, side, outgoingId, incomingId);
@@ -270,23 +299,14 @@ export function LiveMatch({
     setResult(matchResultSoFar(matchInProgress));
   }
 
-  /**
-   * Sep 2026 round 84 — [[Match-Day Line Coach Direction]]. `setLineFocus` mutates `matchInProgress`
-   * in place (same pattern `setGameStyle` already uses), so — same as `handleInterchange` above —
-   * the only thing needed to make the change visible is a re-render; re-deriving `result` from the
-   * now-current `matchInProgress` is the same "something changed inside the live match" signal
-   * `chooseCoachsCall`/`handleInterchange` already use for this. Deliberately does NOT auto-advance
-   * the quarter or resume playback the way `chooseCoachsCall` does — a line-coach focus change isn't
-   * "the" decision that ends the break the way picking a game style is; the coach can set as many
-   * (or as few) line focuses as they like before actually choosing a Coach's Call option.
-   */
+  /** Line-coach focus changes mutate `matchInProgress` in place; re-deriving `result` re-renders them. */
   function handleLineFocusChange(side: "home" | "away", role: MatchDayCoachRole, focus: LineCoachFocus) {
     if (!matchInProgress) return;
     setLineFocus(matchInProgress, side, role, focus);
     setResult(matchResultSoFar(matchInProgress));
   }
 
-  /** "Skip to Full Time" during an interactive match auto-simulates every remaining quarter with no further Coach's Call prompts (current game style holds), then jumps playback straight to the end - same "stop asking me things, just finish it" behaviour as skipping any other screen. A no-op simulation-wise for a non-interactive (AI-vs-AI) match, which already has the full result. */
+  /** "Sim to full time": simulates every remaining quarter with no further Coach's Call (current style holds), then jumps playback to the end. */
   function skipRestOfMatch() {
     if (matchInProgress) {
       let q = quartersSimulated;
@@ -301,36 +321,30 @@ export function LiveMatch({
     playback.skipToFullTime();
   }
 
-  // Detects "playback has caught up to a just-simulated quarter's end" and
-  // surfaces the Coach's Call for the user's side. Falls back to
-  // auto-continuing with no prompt if somehow neither side is the user's
-  // club (shouldn't happen - kickOff() only ever starts an interactive,
-  // matchInProgress-tracked match when mySide is set) rather than getting
-  // stuck.
+  // Detects "playback has caught up to a just-simulated quarter's end" and surfaces the break.
   useEffect(() => {
     if (!matchInProgress || !playback.isComplete || quartersSimulated >= 4 || pendingCoachsCall) return;
-    if (mySide) {
-      setPendingCoachsCall({ side: mySide, quarterJustFinished: quartersSimulated as 1 | 2 | 3 });
-    } else {
-      const nextQuarter = (quartersSimulated + 1) as 1 | 2 | 3 | 4;
-      simulateQuarter(matchInProgress, nextQuarter);
-      setQuartersSimulated(nextQuarter);
-      setResult(matchResultSoFar(matchInProgress));
-    }
+    setPendingCoachsCall({ side: mySide, quarterJustFinished: quartersSimulated as 1 | 2 | 3 });
   }, [playback.isComplete, matchInProgress, quartersSimulated, pendingCoachsCall, mySide]);
 
-  // Match Day v2: the live, break and full-time screens are ordinary scrolling pages in the shared
-  // app shell (spec §1-§3 layouts stack top to bottom), so this screen never asks App.tsx for the old
-  // fixed-height cockpit shell any more. Kept as a prop so App.tsx's wiring needs no change.
+  // Match Day screens are ordinary scrolling pages in the shared app shell.
   useEffect(() => {
     onCockpitActiveChange?.(false);
   }, [onCockpitActiveChange]);
+
+  const atFullTime = !!result && playback.isComplete && quartersSimulated >= 4 && !pendingCoachsCall;
+
+  // Full time of a season round records it (and simulates the rest of that round). Replaying the
+  // playback afterwards doesn't re-record: the round is already played.
+  useEffect(() => {
+    if (!atFullTime || !active || active.round === null || !result || recordedRound === active.round) return;
+    if (recordLiveRound(active.round, result, myClubId, active.myTeamAtBounce)) setRecordedRound(active.round);
+  }, [atFullTime, active, result, recordedRound, recordLiveRound, myClubId]);
 
   // Sep 2026 round 112 — [[Match Day Fantasy Layer]]: replaces the old `useFantasyHistory` wall-clock
   // ring buffer. Every ribbon/board/drawer number for this match now comes from one pass over the
   // revealed events via `engine/fantasyEngine.ts`'s `computeFantasyMetrics` — see that module's own doc
   // comment and the vault note for why this is match-time based rather than real-wall-clock based.
-  const season = useSeasonStore((s) => s.season);
   // Raw totals computed once here, not separately inside `seasonAvgFpMap` and again at the drawer's own
   // `seasonTotals` prop — `benchmarkPlayer` (the drawer's "Vs every archetype") needs the RAW map (it
   // calls `toAverageMap` on it itself), while the ribbon/board's pace numbers want the pre-averaged one;
@@ -369,95 +383,217 @@ export function LiveMatch({
   // the whole match exists.
   const friendlyVotes = useMemo(() => (result && quartersSimulated >= 4 ? generateMatchCoachesVotes(result, homeTeam, awayTeam) : null), [result, quartersSimulated, homeTeam, awayTeam]);
 
-  if (playback.isComplete && result && quartersSimulated >= 4 && !pendingCoachsCall) {
+  // --- Flow view-model (steps 1-5) -------------------------------------------------------------------
+  const avgFpOfPlayer = (p: Player) => {
+    const inSave = seasonAvgFpMap.get(p.PlayerID)?.fantasyPoints;
+    return inSave !== undefined && inSave > 0 ? inSave : baselineFpAverage(p);
+  };
+  const danger = useMemo(() => dangerMen(flowOpp, flowMine, avgFpOfPlayer), [flowOpp, flowMine, seasonAvgFpMap]); // eslint-disable-line react-hooks/exhaustive-deps
+  const taggers = useMemo(() => taggerCandidates(flowMine), [flowMine]);
+  const scout = useMemo(() => scoutingRows(oppName), [oppName]);
+  const covered = coverageCount(lineup, myById, myEligibility);
+  const filled = lineup.filter((id) => id !== null).length;
+  const oppAbbr = clubAbbr(oppName);
+  const roundLabel = nextRow ? `Round ${nextRow.round}` : "Friendly";
+  const homeAway = iAmHome ? "Home" : "Away";
+
+  const changes: WeeklyChange[] = [];
+  for (const [targetId, taggerId] of tags) {
+    const tagger = myById.get(taggerId);
+    const target = flowOpp.players.find((p) => p.PlayerID === targetId);
+    if (!tagger || !target) continue;
+    const pos = flowMine.positions?.get(taggerId);
+    changes.push({ kind: "TAG", text: `${tagger.lname} (${pos === "INT" || !pos ? "interchange" : pos}) → tags ${target.fname} ${target.lname}` });
+  }
+  if (weekStyle) changes.push({ kind: "STYLE", text: `${styleLabel(standingPlan.gameStyle)} → ${styleLabel(weekStyle)}` });
+
+  function setTag(targetId: number, taggerId: number | null) {
+    setTags((cur) => {
+      const next = new Map([...cur].filter(([, t]) => t !== taggerId));
+      if (taggerId === null) next.delete(targetId);
+      else next.set(targetId, taggerId);
+      return next;
+    });
+  }
+
+  function placeInLineup(slot: number, playerId: number) {
+    const from = lineup.findIndex((id) => id === playerId);
+    const displaced = lineup[slot];
+    setSlot(myClub, slot, playerId);
+    if (from >= 0 && from !== slot && displaced !== null) setSlot(myClub, from, displaced);
+  }
+
+  // Rotations: projected time on ground against this week's opponent, re-run whenever anything that
+  // changes it does. Only computed while that step is open.
+  const projectionKey =
+    step === 1 && !active
+      ? JSON.stringify([
+          lineup,
+          myEligibility ?? null,
+          standingPlan.gameStyle,
+          [...standingPlan.tactics].map(([id, t]) => [id, t.tactic]),
+          oppName,
+          iAmHome,
+          flowVenue.commonName,
+          nextRow?.round ?? null,
+        ])
+      : "";
+  const projection = useTogProjection(
+    projectionKey
+      ? {
+          mine: flowMine,
+          opp: flowOpp,
+          mineIsHome: iAmHome,
+          minePlan: standingPlan,
+          oppPlan,
+          stadium: flowVenue,
+          condition: nextRow && season ? season.condition : undefined,
+        }
+      : null,
+    projectionKey,
+  );
+
+  // --- Stepper ---------------------------------------------------------------------------------------
+  const locked = !!active && !atFullTime;
+  const scoreSub = active && result ? `${playback.liveScore.homePoints} – ${playback.liveScore.awayPoints}` : "Ready";
+  const steps: StepInfo[] = [
+    { sub: `${filled}/23 picked`, disabled: locked },
+    { sub: `${covered}/18 covered`, disabled: locked },
+    { sub: styleLabel(standingPlan.gameStyle), disabled: locked },
+    { sub: nextRow ? `Rd ${nextRow.round} · ${oppAbbr}` : `Friendly · ${oppAbbr}`, disabled: locked },
+    { sub: changes.length ? plural(changes.length, "change") : "Standing plan", disabled: locked },
+    { sub: scoreSub },
+  ];
+  function goStep(s: FlowStep) {
+    if (active) {
+      if (s < 5 && atFullTime) leaveMatch(s);
+      return;
+    }
+    if (s === 5) kickOff();
+    else setStep(s);
+  }
+  const stepper = (
+    <FlowStepper step={active ? 5 : step} steps={steps} weekLabel={nextRow ? `ROUND ${nextRow.round} VS ${oppAbbr}` : `FRIENDLY VS ${oppAbbr}`} onGo={goStep} />
+  );
+
+  if (atFullTime && result) {
     return (
-      <FullTimeResult
-        result={result}
-        homeTeam={homeTeam}
-        awayTeam={awayTeam}
-        onNewMatch={newMatchup}
-        myClub={mySide ? myClub : undefined}
-        venueName={venue.commonName}
-        coachesVotes={friendlyVotes ?? undefined}
-        onContinue={(stories) => {
-          if (stories.length > 0) {
-            useMatchStoryStore.getState().publish({
-              matchLabel: `${homeTeam.name} ${result.home.points} – ${result.away.points} ${awayTeam.name}`,
-              stories,
-              at: Date.now(),
-            });
-          }
-          onContinue?.();
-        }}
-        onReplay={playback.restart}
-      />
+      <div className="flex flex-col gap-3">
+        {stepper}
+        <FullTimeResult
+          result={result}
+          homeTeam={homeTeam}
+          awayTeam={awayTeam}
+          onNewMatch={newMatchup}
+          myClub={myClub}
+          venueName={venue.commonName}
+          coachesVotes={friendlyVotes ?? undefined}
+          onContinue={(stories) => {
+            if (stories.length > 0) {
+              useMatchStoryStore.getState().publish({
+                matchLabel: `${homeTeam.name} ${result.home.points} – ${result.away.points} ${awayTeam.name}`,
+                stories,
+                at: Date.now(),
+              });
+            }
+            onContinue?.();
+          }}
+          onReplay={playback.restart}
+        />
+      </div>
     );
   }
 
-  if (stage === "prep" && !result) {
-    return <MatchPreparation homeTeam={homeTeam} awayTeam={awayTeam} onBack={() => setStage("setup")} onKickOff={kickOff} />;
-  }
-
-  if (!result) {
+  if (!active || !result) {
+    const NEXT = ["Next · Rotations", "Next · Roles", "Save plan · Pick fixture", `Plan for ${oppName}`, "First bounce"];
+    const HINT = [
+      lineupStat(lineup, myById),
+      `${covered}/18 positions covered by the bench`,
+      "Roles save to your standing plan as you change them",
+      `${roundLabel} · ${flowVenue.commonName} · ${homeAway}`,
+      changes.length ? `${plural(changes.length, "change")} for this match only` : "Playing the standing plan",
+    ];
     return (
-      <div className="space-y-4">
-        <div className="card flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-1.5">
-            <select
-              className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
-              value={homeClub}
-              onChange={(e) => setHomeClub(e.target.value)}
-            >
-              {CLUBS.map((c) => (
-                <option key={c.ClubID} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            {homeIsCustom && <span className="stat-pill stat-pill-good">your lineup</span>}
-          </div>
-          <span className="text-slate-500">vs</span>
-          <div className="flex items-center gap-1.5">
-            <select
-              className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
-              value={awayClub}
-              onChange={(e) => setAwayClub(e.target.value)}
-            >
-              {CLUBS.map((c) => (
-                <option key={c.ClubID} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            {awayIsCustom && <span className="stat-pill stat-pill-good">your lineup</span>}
-          </div>
-          <span className="text-xs text-slate-500" title="Fixture-driven ground selection (Phase 10 round 14) - the home club's real primary ground, since this screen has no fixture round to check exceptions against">
-            @ {venue.commonName}
-          </span>
-          <button
-            onClick={() => setStage("prep")}
-            disabled={homeClub === awayClub}
-            className="ml-auto rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-40"
-            style={{ background: "var(--acc)", color: "var(--on)" }}
-          >
-            Continue to Match Preparation
-          </button>
-        </div>
-
-        <div className="card text-sm text-slate-400">
-          Pick two clubs and continue to Match Preparation to set tactics, a tagger, and a game
-          style (or just start with the defaults). {myClub} fields whatever's set on the
-          Selection tab once it's a complete lineup; every other club fields the same real,
-          suitability-aware auto-fill an AI club gets in season simulation. The match runs against
-          a fresh random seed every time.
-        </div>
+      <div className="flex flex-col gap-3">
+        {stepper}
+        {step === 0 && <SelectionStep players={myPlayers} lineup={lineup} onPlace={placeInLineup} onAutoPick={() => autoFill(myClub, myPlayers)} />}
+        {step === 1 && (
+          <RotationsStep
+            lineup={lineup}
+            byId={myById}
+            overrides={myEligibility}
+            onSetRotations={(id, positions: Position[]) => setEligibility(myClub, id, positions)}
+            tog={projection.tog}
+            projecting={projection.pending}
+          />
+        )}
+        {step === 2 && (
+          <RolesStep
+            lineup={lineup}
+            byId={myById}
+            plan={standingPlan}
+            overrides={myEligibility}
+            onStyle={(s) => setStandingStyle(myClub, s)}
+            onTactic={(id, pt) => setStandingTactic(myClub, id, pt)}
+          />
+        )}
+        {step === 3 && (
+          <FixtureStep
+            myClub={myClub}
+            year={year}
+            rows={fixtureRows}
+            nextRound={nextRow?.round ?? null}
+            friendlyOnly={friendlyOnly}
+            choice={choice}
+            onChoose={(c) => {
+              if (c.kind === "friendly") setFriendlyOpponent(c.opponent);
+              setTags(new Map());
+            }}
+            homeVenue={homeVenue}
+            card={{
+              roundLabel: roundLabel.toUpperCase(),
+              opponent: oppName,
+              venue: flowVenue.commonName,
+              homeAway,
+              ladder: season ? ladderLine(season, oppClubId) : "No season in progress",
+              lastMet: season ? lastMetLine(season, myClubId, oppClubId) : "—",
+            }}
+          />
+        )}
+        {step === 4 && (
+          <OppositionStep
+            opponent={oppName}
+            subtitle={`${roundLabel} · ${flowVenue.commonName} · ${homeAway}`}
+            howTheyPlay={`${styleLabel(oppPlan.gameStyle)}. ${styleBlurb(oppPlan.gameStyle)}`}
+            danger={danger}
+            taggers={taggers}
+            tags={tags}
+            onTag={setTag}
+            standingStyle={standingPlan.gameStyle}
+            weekStyle={weekStyle}
+            onWeekStyle={setWeekStyle}
+            scout={scout}
+            changes={changes}
+            onReset={() => {
+              setTags(new Map());
+              setWeekStyle(null);
+            }}
+          />
+        )}
+        <FlowFooter
+          showBack={step > 0}
+          onBack={() => setStep((step - 1) as FlowStep)}
+          hint={HINT[step]}
+          nextLabel={NEXT[step]}
+          onNext={() => (step === 4 ? kickOff() : setStep((step + 1) as FlowStep))}
+        />
       </div>
     );
   }
 
   // Everything below renders once a match exists (live, paused or at a break). "Your"/"their" default
   // to home/away when spectating an AI-vs-AI match with no `mySide`.
-  const yourSide: Side = mySide ?? "home";
+  const yourSide: Side = mySide;
   const theirSide: Side = yourSide === "home" ? "away" : "home";
   const yourTeam = yourSide === "home" ? homeTeam : awayTeam;
   const theirTeam = theirSide === "home" ? homeTeam : awayTeam;
@@ -507,6 +643,7 @@ export function LiveMatch({
 
   return (
     <div className="flex flex-col gap-3">
+      {stepper}
       {scoreboard}
 
       {pendingCoachsCall ? (
@@ -592,7 +729,7 @@ export function LiveMatch({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 400px), 1fr))", gap: 12 }}>
             <MoversWidget team={yourTeam} side={yourSide} events={revealedEvents} ticksPerQuarter={tpq} fantasyMetrics={fantasyMetrics} onSelect={selectOnGround} />
             <PlayByPlayWidget events={revealedEvents} ticksPerQuarter={tpq} homeTeam={homeTeam} awayTeam={awayTeam} homeIds={homeIds} yourSide={yourSide} />
-            <DangerMenWidget theirTeam={theirTeam} ourTeam={yourTeam} ourSide={yourSide} fantasyMetrics={fantasyMetrics} fitnessOf={fitnessOf} onSelect={selectOnGround} />
+            <DangerMenWidget theirTeam={theirTeam} ourTeam={yourTeam} ourSide={yourSide} fantasyMetrics={fantasyMetrics} fitnessOf={fitnessOf} onSelect={selectOnGround} tags={tags} />
           </div>
         </>
       )}

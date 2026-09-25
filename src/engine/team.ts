@@ -164,3 +164,32 @@ export function bestByRating(players: Player[], rate: (p: Player) => number): Pl
   if (players.length === 0) throw new Error("bestByRating: players must be non-empty");
   return players.reduce((best, p) => (rate(p) > rate(best) ? p : best), players[0]);
 }
+
+/**
+ * Groups `team.players` by their real assigned on-ground `Position`, preserving squad order — the two
+ * copies of BP/HBF/W/HFF/FP land in list order (the engine records which position a player fills,
+ * never which copy of a duplicated slot). Interchange players are left out; see `benchPlayers`.
+ * Moved here from the old MatchPreparation screen (round 128) so the break screen keeps one copy.
+ */
+export function groupByPosition(team: MatchTeam): Map<Position, Player[]> {
+  const map = new Map<Position, Player[]>();
+  if (!team.positions) return map;
+  for (const p of team.players) {
+    const pos = team.positions.get(p.PlayerID);
+    if (!pos || pos === "INT") continue;
+    if (!map.has(pos)) map.set(pos, []);
+    map.get(pos)!.push(p);
+  }
+  return map;
+}
+
+/** A copy whose position/on-ground/eligibility state can change (interchanges mutate these in place during a match) without touching the original. */
+export function cloneMatchTeam(t: MatchTeam): MatchTeam {
+  return {
+    ...t,
+    players: [...t.players],
+    positions: t.positions ? new Map(t.positions) : undefined,
+    onGround: t.onGround ? new Set(t.onGround) : undefined,
+    interchangeEligibility: t.interchangeEligibility ? new Map(t.interchangeEligibility) : undefined,
+  };
+}

@@ -7,8 +7,11 @@ import {
   runFinals,
   nextUnplayedRound,
   isHomeAndAwayComplete,
+  presetResultKey,
   type Season,
 } from "../engine/season";
+import { matchesInRound } from "../engine/fixture";
+import type { MatchResult } from "../engine/match";
 import type { MatchTeam } from "../engine/team";
 import type { Position } from "../types/archetype";
 import { aiTeamPlan, type TeamPlan } from "../engine/tactics";
@@ -38,6 +41,13 @@ interface SeasonStoreState {
   simulateNextRound: () => void;
   simulateAllRemaining: () => void;
   playFinals: () => void;
+  /**
+   * Match Day flow (round 128): folds the coach's own live-played fixture into `round` and simulates the
+   * rest of that round headlessly, exactly as `simulateNextRound` would. Only the next unplayed round can
+   * be recorded (rounds stay in order), and only when `myTeam`'s club is actually playing in it. `myTeam`
+   * replaces the club's frozen season team so condition and disgruntlement follow who really played.
+   */
+  recordLiveRound: (round: number, result: MatchResult, myClubId: number, myTeam: MatchTeam) => boolean;
   /** Hydrates a Season loaded from a save — see useSaveStore.ts. Rebuilds `teams` the same way startNewSeason does (my-club override from the current Selection Committee lineup, everyone else the real suitability-aware auto-fill — see engine/season.ts's `buildTeams`) rather than persisting `teams` itself, since it's always cheaply re-derivable and persisting it too would just be redundant, staler-prone state. */
   restoreSeason: (season: Season) => void;
   /** Back to "no season in progress" — used after a real off-season step (see useSaveStore.ts's runOffSeason) so SeasonHub's existing empty-state flow runs again fresh. */
@@ -156,6 +166,18 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
       round = nextUnplayedRound(season);
     }
     set({ season });
+  },
+
+  recordLiveRound: (round, result, myClubId, myTeam) => {
+    const { season, teams } = get();
+    if (!season || !teams || nextUnplayedRound(season) !== round) return false;
+    const mine = matchesInRound(season.fixture, round).find((m) => m.homeClubId === myClubId || m.awayClubId === myClubId);
+    if (!mine) return false;
+    const nextTeams = new Map(teams);
+    nextTeams.set(myClubId, myTeam);
+    const preset = new Map([[presetResultKey(mine.homeClubId, mine.awayClubId), result]]);
+    set({ season: simulateRound(season, round, nextTeams, currentPlans(), preset), teams: nextTeams });
+    return true;
   },
 
   playFinals: () => {

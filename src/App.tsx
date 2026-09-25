@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Dashboard } from "./components/Dashboard";
 import { List } from "./components/List";
 import { LiveMatch } from "./components/LiveMatch";
+import type { FlowStep } from "./components/matchday/flow/FlowChrome";
 import { SeasonHub } from "./components/SeasonHub";
-import { SelectionCommittee } from "./components/SelectionCommittee";
 import { ListNeeds } from "./components/ListNeeds";
 import { Combine } from "./components/Combine";
 import { Contracts } from "./components/Contracts";
@@ -26,7 +26,6 @@ import { clubByName } from "./types/club";
 type Screen =
   | "dashboard"
   | "squad"
-  | "selection"
   | "season"
   | "match"
   | "listNeeds"
@@ -69,9 +68,9 @@ type Screen =
  * slot — Selection, Position Switch, List Needs, Talent Scouting, Trade,
  * Contracts — needed a documented new home rather than an invented 9th tab
  * the brief never asked for:
- *   - Selection (pre-match team-sheet prep) joins Match Day's own group,
- *     ordered second so the top-level "Match Day" button still lands on the
- *     live match screen by default, with Selection one pill-click away.
+ *   - Selection (pre-match team-sheet prep) joined Match Day's own group.
+ *     Round 128 folded it into the Match Day flow itself (steps 1-3 of
+ *     `LiveMatch`'s stepper), so Match Day is a single screen again.
  *   - Position Switch and Contracts join List's own group — round 117's own
  *     doc comment already treats both as List's natural companions (Position
  *     Switch is the batch review queue for the single-player Position Fit
@@ -109,7 +108,7 @@ type Screen =
  */
 const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "dashboard", label: "Dashboard", screens: ["dashboard"] },
-  { key: "matchDay", label: "Match Day", screens: ["match", "selection"] },
+  { key: "matchDay", label: "Match Day", screens: ["match"] },
   { key: "list", label: "List", screens: ["squad", "contracts", "positionSwitch"] },
   { key: "career", label: "Player Career", screens: ["career"] },
   { key: "draft", label: "Draft", screens: ["draft", "listNeeds", "combine", "trade"] },
@@ -121,7 +120,6 @@ const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
 const SCREEN_LABELS: Record<Screen, string> = {
   dashboard: "Dashboard",
   squad: "Squad",
-  selection: "Selection",
   season: "Season",
   match: "Match",
   listNeeds: "List Needs",
@@ -155,6 +153,7 @@ export default function App() {
     // Re-entering a group you're already in keeps whichever of its screens
     // you were last on (e.g. Combine within Future Planning) rather than
     // resetting to that group's first screen every click.
+    setMatchEntryStep(undefined);
     setScreen((prev) => (group.screens.includes(prev) ? prev : group.screens[0]));
   }
   // Round 99 — the Draft screen's new "three-column cockpit" layout (Draft.tsx's own doc comment)
@@ -183,6 +182,8 @@ export default function App() {
   // logo, tab bar and first card's top edge sit on identical pixels across every tab. (Supersedes
   // Round 125's 1280px cap and its full-width live-match exception.)
   const [matchCockpitActive, setMatchCockpitActive] = useState(false);
+  /** Round 128 — the Match Day flow's opening step when arriving from a Dashboard link (e.g. "go to selection"); the tab itself picks its own default. */
+  const [matchEntryStep, setMatchEntryStep] = useState<FlowStep | undefined>(undefined);
   const isCockpitScreen = screen === "draft" || (screen === "match" && matchCockpitActive);
   const myClub = useGameStore((s) => s.myClub);
   // Round 114 — Club Theme System: the 5 CSS custom properties every themed
@@ -313,15 +314,17 @@ export default function App() {
       <main key={poolVersion} className={isCockpitScreen ? "lg:min-h-0 lg:flex-1 lg:overflow-hidden" : undefined}>
         {screen === "dashboard" && (
           <Dashboard
-            onGoToSelection={() => setScreen("selection")}
+            onGoToSelection={() => {
+              setMatchEntryStep(0);
+              setScreen("match");
+            }}
             onGoToContracts={() => setScreen("contracts")}
             onGoToSeason={() => setScreen("season")}
           />
         )}
         {screen === "squad" && <List />}
-        {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
-        {screen === "match" && <LiveMatch onCockpitActiveChange={setMatchCockpitActive} onContinue={() => setScreen("dashboard")} />}
+        {screen === "match" && <LiveMatch onCockpitActiveChange={setMatchCockpitActive} onContinue={() => setScreen("dashboard")} initialStep={matchEntryStep} />}
         {screen === "listNeeds" && (
           <ListNeeds
             onGoToCombine={() => setScreen("combine")}

@@ -239,3 +239,21 @@
     flex-basis: 100%;
   }
 }
+
+/* Round 128 — Match Day flow at phone width: the squad table drops TYPE and AGE so names fit, and step
+   buttons tighten so all three in a group stay on one row. */
+@media (max-width: 640px) {
+  .mdf-squad-grid {
+    grid-template-columns: 26px minmax(0, 1fr) 34px 48px 44px !important;
+  }
+  .mdf-fix-grid {
+    grid-template-columns: 30px 48px minmax(0, 1fr) 74px !important;
+  }
+  .mdf-hide-sm {
+    display: none;
+  }
+  .mdf-step {
+    gap: 6px !important;
+    padding: 8px 8px !important;
+  }
+}

@@ -2,7 +2,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import { playerFullName, type Player } from "../types/player";
 import type { Position } from "../types/archetype";
 import type { MatchTeam } from "../engine/team";
-import { benchPlayers } from "../engine/team";
+import { benchPlayers, groupByPosition } from "../engine/team";
 import type { MatchEvent, MatchResult, BoxScoreLine } from "../engine/match";
 import { CONTEST_STAT_FIELDS } from "../engine/match";
 import type { Side } from "../engine/zones";
@@ -14,7 +14,6 @@ import type { ContestType } from "../engine/contestTypes";
 import { fantasyPointsFor } from "../engine/ratings";
 import { COACHS_CALL_OPTIONS } from "./CoachsCall";
 import { ASSISTANT_COACH_POOL } from "../data/assistantCoachPool";
-import { groupByPosition } from "./MatchPreparation";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
 import { directOpponents } from "./matchday/LiveWidgets";
 import {

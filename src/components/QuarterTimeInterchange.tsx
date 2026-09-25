@@ -2,10 +2,9 @@ import { useState } from "react";
 import type { Player } from "../types/player";
 import type { Position } from "../types/archetype";
 import type { MatchTeam } from "../engine/team";
-import { benchPlayers } from "../engine/team";
+import { benchPlayers, groupByPosition } from "../engine/team";
 import { seedMorale } from "../engine/morale";
 import { GROUND_ROW_POSITIONS } from "./SelectionGround";
-import { groupByPosition } from "./MatchPreparation";
 
 /**
  * Aug 2026, round 48 — [[Interchange Rotation]]. Tyler: "When the user

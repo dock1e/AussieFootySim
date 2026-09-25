@@ -16,7 +16,8 @@ import type { SeasonArchiveEntry } from "./seasonSummary.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
 import { committedWages } from "./contracts.ts";
 import { mulberry32 } from "./rng.ts";
-import { FACILITY_DEFS, defaultClubFinanceState, type ClubFinanceState, type FacilityId } from "../types/clubFinance.ts";
+import { FACILITY_DEFS, defaultClubFinanceState, type ActiveMarketingCampaign, type ClubFinanceState, type FacilityId } from "../types/clubFinance.ts";
+import { MARKETING_CAMPAIGNS, marketingCampaignDef, type CampaignRisk, type MarketingCampaignDef, type MarketingCampaignId } from "../types/marketing.ts";
 
 function facilityDef(id: FacilityId) {
   const def = FACILITY_DEFS.find((f) => f.id === id);
@@ -84,30 +85,155 @@ const BASE_RUNNING_COSTS = 180_000;
 const ADMIN_COST_REDUCTION_PER_LEVEL = 0.04;
 const ADMIN_COST_REDUCTION_CAP = 0.12;
 
-/** One club's real revenue for the season that just finished — base floor, `fan` facility level, and real ladder/finals performance from `seasonArchives`'s most recent entry (if any; a brand-new save with no completed season yet just gets the base+fan floor). */
-export function clubRevenueForSeason(clubName: string, state: ClubFinanceState, seasonArchives: readonly SeasonArchiveEntry[]): number {
-  let revenue = BASE_CLUB_REVENUE + facilityLevel(state, "fan") * FAN_REVENUE_PER_LEVEL;
-  const lastSeason = seasonArchives[seasonArchives.length - 1];
-  if (!lastSeason) return revenue;
-  const club = clubByName(clubName);
-  if (!club) return revenue;
-  const row = lastSeason.ladder.find((r) => r.clubId === club.ClubID);
-  if (row) {
-    const ladderRank = 1 + lastSeason.ladder.filter((r) => r.premiershipPoints > row.premiershipPoints || (r.premiershipPoints === row.premiershipPoints && r.percentage > row.percentage)).length;
-    const positionsBetterThanMid = Math.max(0, 9 - ladderRank);
-    revenue += positionsBetterThanMid * LADDER_FINISH_REVENUE_BONUS;
-  }
-  if (lastSeason.finals?.matches.some((m) => m.homeClubId === club.ClubID || m.awayClubId === club.ClubID)) {
-    revenue += FINALS_APPEARANCE_BONUS;
-  }
-  return revenue;
+/**
+ * One line item in a revenue/expense projection — shared shape for `revenueBreakdownFor`/
+ * `expenseBreakdownFor` below, which `clubRevenueForSeason`/`clubRunningCosts` and the Overview tab's
+ * `projectedRevenueBreakdown`/`projectedExpenseBreakdown` all build on, so there's exactly one place
+ * that actually computes each dollar figure.
+ */
+export interface FinanceLineItem {
+  label: string;
+  value: number;
 }
 
-/** One club's real running costs for the season that just finished — `committedWages` (real player payments) plus a base football-ops/admin/travel floor, discounted by the `admin` facility. */
-export function clubRunningCosts(players: readonly Player[], clubName: string, currentYear: number, state: ClubFinanceState): number {
+/** The real revenue components for the season that just finished — base floor, `fan` facility level, and real ladder/finals performance from `seasonArchives`'s most recent entry (if any; a brand-new save with no completed season yet just gets the base+fan floor). `clubRevenueForSeason` sums these; `projectedRevenueBreakdown` below reuses this list and adds a forward-looking campaign row on top. */
+function revenueBreakdownFor(clubName: string, state: ClubFinanceState, seasonArchives: readonly SeasonArchiveEntry[]): FinanceLineItem[] {
+  const rows: FinanceLineItem[] = [{ label: "Membership & broadcast (base)", value: BASE_CLUB_REVENUE }];
+  const fanBonus = facilityLevel(state, "fan") * FAN_REVENUE_PER_LEVEL;
+  if (fanBonus > 0) rows.push({ label: "Members & Match-Day Experience", value: fanBonus });
+  const lastSeason = seasonArchives[seasonArchives.length - 1];
+  const club = clubByName(clubName);
+  if (lastSeason && club) {
+    const row = lastSeason.ladder.find((r) => r.clubId === club.ClubID);
+    if (row) {
+      const ladderRank = 1 + lastSeason.ladder.filter((r) => r.premiershipPoints > row.premiershipPoints || (r.premiershipPoints === row.premiershipPoints && r.percentage > row.percentage)).length;
+      const positionsBetterThanMid = Math.max(0, 9 - ladderRank);
+      if (positionsBetterThanMid > 0) rows.push({ label: "Ladder finish bonus", value: positionsBetterThanMid * LADDER_FINISH_REVENUE_BONUS });
+    }
+    if (lastSeason.finals?.matches.some((m) => m.homeClubId === club.ClubID || m.awayClubId === club.ClubID)) {
+      rows.push({ label: "Finals appearance bonus", value: FINALS_APPEARANCE_BONUS });
+    }
+  }
+  return rows;
+}
+
+/** One club's real revenue for the season that just finished — see `revenueBreakdownFor` for the itemised version this sums. */
+export function clubRevenueForSeason(clubName: string, state: ClubFinanceState, seasonArchives: readonly SeasonArchiveEntry[]): number {
+  return revenueBreakdownFor(clubName, state, seasonArchives).reduce((sum, r) => sum + r.value, 0);
+}
+
+/** The real running-cost components for the season that just finished. `clubRunningCosts` sums these; `projectedExpenseBreakdown` below reuses this list as-is (running costs, unlike revenue, have no forward-looking "in progress" row to add). */
+function expenseBreakdownFor(players: readonly Player[], clubName: string, currentYear: number, state: ClubFinanceState): FinanceLineItem[] {
   const wages = committedWages(players, clubName, currentYear);
   const adminDiscount = Math.min(ADMIN_COST_REDUCTION_CAP, facilityLevel(state, "admin") * ADMIN_COST_REDUCTION_PER_LEVEL);
-  return wages + BASE_RUNNING_COSTS * (1 - adminDiscount);
+  return [
+    { label: "Player payments", value: wages },
+    { label: "Football operations & admin", value: BASE_RUNNING_COSTS * (1 - adminDiscount) },
+  ];
+}
+
+/** One club's real running costs for the season that just finished — `committedWages` (real player payments) plus a base football-ops/admin/travel floor, discounted by the `admin` facility. See `expenseBreakdownFor` for the itemised version this sums. */
+export function clubRunningCosts(players: readonly Player[], clubName: string, currentYear: number, state: ClubFinanceState): number {
+  return expenseBreakdownFor(players, clubName, currentYear, state).reduce((sum, r) => sum + r.value, 0);
+}
+
+// --- Marketing (round 122) ---
+
+/** Absent/empty means no campaigns currently running. Old (pre-round-122) `ClubFinanceState` objects never have this key — every reader goes through this helper rather than `state.activeCampaigns` directly, so a missing key always reads as "none running" instead of throwing. */
+export function activeCampaignsOf(state: ClubFinanceState): readonly ActiveMarketingCampaign[] {
+  return state.activeCampaigns ?? [];
+}
+
+/** `marketing` facility level -> concurrent campaign slots, per the design note's own "an extra campaign slot every 2 levels" rule — 1 slot at level 0-1, 2 at level 2-3, 3 at the facility's max (level 4). */
+export function marketingSlots(state: ClubFinanceState): number {
+  return 1 + Math.floor(facilityLevel(state, "marketing") / 2);
+}
+
+/** `marketing` facility level's return-boosting effect — +8%/level, so a maxed-level-4 Marketing Department lifts every campaign's actual payout by up to 32%. */
+const MARKETING_RETURN_BONUS_PER_LEVEL = 0.08;
+export function marketingReturnMultiplier(state: ClubFinanceState): number {
+  return 1 + facilityLevel(state, "marketing") * MARKETING_RETURN_BONUS_PER_LEVEL;
+}
+
+export function canLaunchCampaign(state: ClubFinanceState, id: MarketingCampaignId): boolean {
+  const def = marketingCampaignDef(id);
+  if (state.budget < def.cost) return false;
+  const active = activeCampaignsOf(state);
+  if (active.some((c) => c.campaignId === id)) return false; // already running -- no stacking the same campaign
+  return active.length < marketingSlots(state);
+}
+
+/** Pure — returns `state` unchanged if `canLaunchCampaign` would say no (callers should check that first if they want to distinguish "no-op" from "succeeded"). Deducts the cost immediately; the return lands one off-season later, see `types/clubFinance.ts`'s `ActiveMarketingCampaign` doc comment. */
+export function launchCampaign(state: ClubFinanceState, id: MarketingCampaignId, currentYear: number): ClubFinanceState {
+  if (!canLaunchCampaign(state, id)) return state;
+  const def = marketingCampaignDef(id);
+  return {
+    ...state,
+    budget: state.budget - def.cost,
+    activeCampaigns: [...activeCampaignsOf(state), { campaignId: id, launchedYear: currentYear }],
+  };
+}
+
+/** Risk-tier variance band applied to a campaign's `expectedReturn` when it actually resolves — `Low` stays close to the number shown at launch, `High` can swing all the way to a real net loss (the "Sell a Home Game Interstate" tension the design note names explicitly). */
+const RISK_VARIANCE: Record<CampaignRisk, [number, number]> = {
+  Low: [0.85, 1.15],
+  Medium: [0.55, 1.45],
+  High: [-0.4, 2.0],
+};
+
+/** One campaign's actual resolved payout — seeded (never `Math.random`) so replaying the same save is deterministic. `campaignSeedIndex` is the campaign's own fixed position in `MARKETING_CAMPAIGNS` (stable regardless of array edits elsewhere), combined with the resolving year and club so two different clubs' identical campaigns in the same year don't resolve identically. */
+function resolveCampaignReturn(def: MarketingCampaignDef, state: ClubFinanceState, seed: number): number {
+  const [lo, hi] = RISK_VARIANCE[def.risk];
+  const rng = mulberry32(seed);
+  const variance = lo + rng() * (hi - lo);
+  return Math.round(def.expectedReturn * marketingReturnMultiplier(state) * variance);
+}
+
+/**
+ * Resolves every campaign this club launched in a PRIOR year (removing it from `activeCampaigns`) and
+ * returns both the updated state and the total payout to add to this season's revenue — called from
+ * `advanceClubFinances` below. A campaign launched THIS year (the off-season just being processed) is
+ * deliberately left running, not resolved — see `ActiveMarketingCampaign`'s own doc comment for the
+ * one-season delay this is enforcing.
+ */
+function resolveMaturedCampaigns(state: ClubFinanceState, clubName: string, currentYear: number): { state: ClubFinanceState; payout: number } {
+  const active = activeCampaignsOf(state);
+  const stillRunning: ActiveMarketingCampaign[] = [];
+  let payout = 0;
+  const club = clubByName(clubName);
+  for (const c of active) {
+    if (currentYear > c.launchedYear) {
+      const def = marketingCampaignDef(c.campaignId);
+      const campaignIndex = MARKETING_CAMPAIGNS.findIndex((m) => m.id === c.campaignId);
+      const seed = currentYear * 10_000 + (club?.ClubID ?? 0) * 100 + campaignIndex;
+      payout += resolveCampaignReturn(def, state, seed);
+    } else {
+      stillRunning.push(c);
+    }
+  }
+  return { state: { ...state, activeCampaigns: stillRunning }, payout };
+}
+
+/**
+ * Forward-looking revenue projection for the Overview tab — the real breakdown `clubRevenueForSeason`
+ * itself sums, PLUS a row for any campaigns currently in flight (using their `expectedReturn` at the
+ * club's current Marketing facility multiplier, since the real risk-adjusted number is only known once
+ * `resolveMaturedCampaigns` actually resolves them — this row is a projection, not a promise, same
+ * framing as the reference mockup's own "REVENUE · PROJECTED" label).
+ */
+export function projectedRevenueBreakdown(clubName: string, state: ClubFinanceState, seasonArchives: readonly SeasonArchiveEntry[]): FinanceLineItem[] {
+  const rows = revenueBreakdownFor(clubName, state, seasonArchives);
+  const active = activeCampaignsOf(state);
+  if (active.length > 0) {
+    const projected = active.reduce((sum, c) => sum + marketingCampaignDef(c.campaignId).expectedReturn * marketingReturnMultiplier(state), 0);
+    rows.push({ label: `Marketing campaigns in progress (${active.length})`, value: Math.round(projected) });
+  }
+  return rows;
+}
+
+/** Forward-looking expense projection for the Overview tab — running costs have no "in progress" analogue to add, so this is just `expenseBreakdownFor` exposed for display. */
+export function projectedExpenseBreakdown(players: readonly Player[], clubName: string, currentYear: number, state: ClubFinanceState): FinanceLineItem[] {
+  return expenseBreakdownFor(players, clubName, currentYear, state);
 }
 
 /**
@@ -126,9 +252,10 @@ export function advanceClubFinances(
   const next: Record<string, ClubFinanceState> = {};
   for (const club of CLUBS) {
     const state = allClubFinance[club.name] ?? defaultClubFinanceState();
-    const revenue = clubRevenueForSeason(club.name, state, seasonArchives);
-    const costs = clubRunningCosts(players, club.name, currentYear, state);
-    next[club.name] = { ...state, budget: Math.max(0, state.budget + revenue - costs) };
+    const { state: resolvedState, payout } = resolveMaturedCampaigns(state, club.name, currentYear);
+    const revenue = clubRevenueForSeason(club.name, resolvedState, seasonArchives) + payout;
+    const costs = clubRunningCosts(players, club.name, currentYear, resolvedState);
+    next[club.name] = { ...resolvedState, budget: Math.max(0, resolvedState.budget + revenue - costs) };
   }
   return next;
 }

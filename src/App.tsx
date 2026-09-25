@@ -11,7 +11,7 @@ import { TradePeriod } from "./components/TradePeriod";
 import { Draft } from "./components/Draft";
 import { PositionSwitch } from "./components/PositionSwitch";
 import { Records } from "./components/Records";
-import { Facilities } from "./components/Facilities";
+import { FootballDept } from "./components/FootballDept";
 import { CareerProfile } from "./components/CareerProfile";
 import { PlayerProfileModal } from "./components/PlayerProfileModal";
 import { ThemeSystemScreen } from "./components/ThemeSystemScreen";
@@ -100,9 +100,10 @@ const SCREEN_LABELS: Record<Screen, string> = {
   positionSwitch: "Position Switch",
   records: "Statistics",
   career: "Career",
-  // Round 121, [[Club Finance, Facilities, and Marketing]] — the brief's own "Football Dept" screen
-  // name, scoped to just its Facilities sub-tab this round (Overview/Coaching & Scouting/Marketing
-  // are separate, not-yet-built work — see the design note's disclosed scope split).
+  // Round 121 built just the Facilities sub-tab under this label; round 122 unified all 4 of the
+  // brief's own sub-tabs (Overview/Assistant Coaches/Facilities/Marketing) into one screen with
+  // internal tab state (`FootballDept.tsx`) — the `Screen` key stays `facilities` (no route churn),
+  // it just now renders the full 4-tab screen rather than Facilities alone.
   facilities: "Football Dept",
   themeSystem: "Theme System",
 };
@@ -264,7 +265,7 @@ export default function App() {
         {screen === "positionSwitch" && <PositionSwitch />}
         {screen === "records" && <Records />}
         {screen === "career" && <CareerProfile />}
-        {screen === "facilities" && <Facilities />}
+        {screen === "facilities" && <FootballDept />}
         {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />

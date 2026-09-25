@@ -1,4 +1,4 @@
-import { Card, SectionLabel, Pips, StatusChip, HeroCard, Watermark } from "./theme/primitives";
+import { Card, SectionLabel, Pips, StatusChip } from "./theme/primitives";
 import { useGameStore } from "../store/useGameStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { facilityLevel, facilityUpgradeCost } from "../engine/clubFinance";
@@ -6,15 +6,14 @@ import { FACILITY_DEFS, defaultClubFinanceState, type FacilityCategory, type Fac
 
 /**
  * Round 121 — [[Club Finance, Facilities, and Marketing]]. The Facilities sub-tab of the Football
- * Department: `myClub`'s discretionary budget plus all 13 facilities, grouped into the same 4
- * categories the design note and `types/clubFinance.ts` use (Training/Recovery/Development/
- * Commercial). Marketing campaigns and the ASP retention lever are deliberately NOT here — see the
- * design note's "Club Finance + Facilities first" split; this screen is Facilities only.
+ * Department: all 13 facilities, grouped into the same 4 categories the design note and
+ * `types/clubFinance.ts` use (Training/Recovery/Development/Commercial).
  *
- * Every facility card honestly discloses whether its effect is actually wired into the engine yet
- * (`FacilityDef.wired`) — a `wired: false` facility still shows a real level, cost, and upgrade
- * button (its money and persisted level are completely real), it just says so in its effect line
- * rather than implying a payoff nothing in the engine currently reads.
+ * Round 122 — this component no longer renders its own budget header. `FootballDept.tsx` now owns a
+ * single shared header (cash to invest, projected result) that persists across all 4 sub-tabs, matching
+ * the reference mockup's own `fd.` header shape — repeating a second budget figure inside this tab
+ * specifically would just be the same number twice on screen. `Facilities()` is unchanged otherwise:
+ * still every real facility card, still the same honest `wired`/`not yet wired` disclosure.
  */
 const CATEGORY_ORDER: FacilityCategory[] = ["Training", "Recovery", "Development", "Commercial"];
 
@@ -30,18 +29,6 @@ export function Facilities() {
 
   return (
     <div className="flex flex-col gap-5">
-      <HeroCard style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-        <Watermark>FAC</Watermark>
-        <div style={{ position: "relative" }}>
-          <SectionLabel>Football Department Budget</SectionLabel>
-          <div style={{ font: "700 40px/1.1 'Barlow Condensed',sans-serif", color: "#fff", marginTop: 4 }}>{money(state.budget)}</div>
-          <div style={{ font: "500 12px Barlow,sans-serif", color: "#aab3c3", marginTop: 4 }}>
-            Discretionary — carries forward each off-season from real revenue minus running costs. Spend it on facility
-            upgrades below; the Marketing campaigns and retention-payment lever come in a later round.
-          </div>
-        </div>
-      </HeroCard>
-
       {CATEGORY_ORDER.map((cat) => (
         <div key={cat} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionLabel>{cat}</SectionLabel>

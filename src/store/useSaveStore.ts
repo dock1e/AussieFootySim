@@ -25,8 +25,9 @@ import { useDraftStore } from "./useDraftStore";
 import { useCombineStore } from "./useCombineStore";
 import { readSaveFromDB, writeSaveToDB, clearSaveInDB } from "./db";
 import { clubHistoryEntryForDraft, clubHistoryEntryForFatherSon, appendClubHistory, appendManyClubHistory, type ClubHistoryEntry } from "../engine/clubHistory";
-import { upgradeFacility as upgradeFacilityPure } from "../engine/clubFinance";
+import { upgradeFacility as upgradeFacilityPure, launchCampaign as launchCampaignPure } from "../engine/clubFinance";
 import { defaultClubFinanceState, type ClubFinanceState, type FacilityId } from "../types/clubFinance";
+import type { MarketingCampaignId } from "../types/marketing";
 
 /**
  * The save-game lifecycle store — the reactive/persistence glue over
@@ -197,6 +198,8 @@ interface SaveStoreState {
 
   /** Spends `myClub`'s discretionary Football Department budget to upgrade one facility by one level. No-op (silently, matching `engine/clubFinance.ts`'s own `upgradeFacility` contract) if the facility is already maxed or `myClub` can't afford the next level. */
   upgradeFacility: (facilityId: FacilityId) => void;
+  /** Round 122 — [[Club Finance, Facilities, and Marketing]]'s Marketing half. Launches one Marketing campaign for `myClub`, deducting its cost immediately. No-op if `engine/clubFinance.ts`'s own `canLaunchCampaign` would say no (unaffordable, no free concurrent slot, or already running). */
+  launchMarketingCampaign: (campaignId: MarketingCampaignId) => void;
 }
 
 /**
@@ -869,6 +872,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const current = clubFinance[myClub] ?? defaultClubFinanceState();
     const next = upgradeFacilityPure(current, facilityId);
     if (next === current) return; // no-op — already maxed, or can't afford the next level
+    set({ clubFinance: { ...clubFinance, [myClub]: next } });
+    void get().saveNow();
+  },
+
+  launchMarketingCampaign: (campaignId) => {
+    const myClub = useGameStore.getState().myClub;
+    const clubFinance = get().clubFinance;
+    const current = clubFinance[myClub] ?? defaultClubFinanceState();
+    const next = launchCampaignPure(current, campaignId, get().year);
+    if (next === current) return; // no-op — unaffordable, no free slot, or already running
     set({ clubFinance: { ...clubFinance, [myClub]: next } });
     void get().saveNow();
   },

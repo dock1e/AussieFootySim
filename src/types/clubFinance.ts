@@ -101,9 +101,21 @@ export const FACILITY_DEFS: readonly FacilityDef[] = [
 
   // --- Commercial: funds Club Finance's own revenue side ---
   { id: "fan", category: "Commercial", name: "Members & Match-Day Experience", description: "More members and bigger home crowds — the club's own base revenue line.", effectLabel: "membership & gate revenue", maxLevel: 4, baseCost: 110_000, costGrowth: 1.65, wired: true },
-  { id: "marketing", category: "Commercial", name: "Marketing Department", description: "Bigger campaign returns, plus extra campaign slots — deferred to the Marketing round, since there are no campaigns yet for it to multiply.", effectLabel: "campaign returns (not yet wired — no campaigns exist yet)", maxLevel: 4, baseCost: 65_000, costGrowth: 1.6, wired: false },
+  { id: "marketing", category: "Commercial", name: "Marketing Department", description: "Bigger campaign returns, plus an extra concurrent campaign slot every 2 levels.", effectLabel: "marketing campaign returns & concurrent slots", maxLevel: 4, baseCost: 65_000, costGrowth: 1.6, wired: true },
   { id: "admin", category: "Commercial", name: "Administration & Data Systems", description: "Lower day-to-day football department running costs.", effectLabel: "running costs", maxLevel: 3, baseCost: 50_000, costGrowth: 1.55, wired: true },
 ];
+
+/**
+ * One in-flight Marketing campaign (round 122, [[Club Finance, Facilities, and Marketing]] part 2) —
+ * see `types/marketing.ts`. A campaign launched during year Y matures and pays out at the END of the
+ * NEXT off-season advance where `currentYear > launchedYear` (i.e. the season after the one it was
+ * launched in), giving a real one-season delay between spending the cost and seeing the return —
+ * `engine/clubFinance.ts`'s `advanceClubFinances` is what resolves and removes these.
+ */
+export interface ActiveMarketingCampaign {
+  campaignId: import("./marketing.ts").MarketingCampaignId;
+  launchedYear: number;
+}
 
 /** One club's Football Department finances — persisted per club (all 18, so AI clubs can invest too, not just `myClub`) in `SaveGameData.clubFinance`. */
 export interface ClubFinanceState {
@@ -111,6 +123,12 @@ export interface ClubFinanceState {
   facilityLevels: Partial<Record<FacilityId, number>>;
   /** The discretionary Football Department budget balance, in real dollars. Never negative — see `engine/clubFinance.ts`'s `advanceClubFinances`. */
   budget: number;
+  /**
+   * Round 122 — in-flight Marketing campaigns. Optional so every pre-round-122 `ClubFinanceState`
+   * (round 121's Facilities-only shape) keeps deserializing fine — every reader treats a missing key
+   * the same as an empty array (see `engine/clubFinance.ts`'s `activeCampaignsOf` helper), never throws.
+   */
+  activeCampaigns?: ActiveMarketingCampaign[];
 }
 
 /**

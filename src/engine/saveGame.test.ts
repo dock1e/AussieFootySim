@@ -210,6 +210,10 @@ describe("serializeSave / deserializeSave", () => {
       // Round 115, [[Club Theme System]] Dashboard rebuild. A real, non-empty pin list (not []),
       // same "prove JSON round-tripping" ethos as `clubHistory`/`developmentCoach` above.
       watchlist: [1, 2],
+      // Round 121, [[Club Finance, Facilities, and Marketing]]. A real, partially-populated record
+      // (not every club present), same "prove JSON round-tripping" ethos as `watchlist`/`clubHistory`
+      // above — plain number/Partial-record data, no Map/Set involved.
+      clubFinance: { Adelaide: { facilityLevels: { gym: 2, vfl: 1 }, budget: 185_000 }, Carlton: { facilityLevels: {}, budget: 250_000 } },
     };
   }
 

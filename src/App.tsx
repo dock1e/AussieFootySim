@@ -11,6 +11,7 @@ import { TradePeriod } from "./components/TradePeriod";
 import { Draft } from "./components/Draft";
 import { PositionSwitch } from "./components/PositionSwitch";
 import { Records } from "./components/Records";
+import { Facilities } from "./components/Facilities";
 import { CareerProfile } from "./components/CareerProfile";
 import { PlayerProfileModal } from "./components/PlayerProfileModal";
 import { ThemeSystemScreen } from "./components/ThemeSystemScreen";
@@ -36,6 +37,7 @@ type Screen =
   | "positionSwitch"
   | "records"
   | "career"
+  | "facilities"
   | "themeSystem";
 
 /**
@@ -75,7 +77,7 @@ const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "matchDay", label: "Match Day", screens: ["match"] },
   { key: "coaching", label: "Coaching", screens: ["selection", "positionSwitch"] },
   { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
-  { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts", "career"] },
+  { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts", "career", "facilities"] },
   { key: "records", label: "Statistics", screens: ["records"] },
   ...(import.meta.env.DEV ? [{ key: "themeSystem", label: "Theme System", screens: ["themeSystem"] as Screen[] }] : []),
 ];
@@ -98,6 +100,10 @@ const SCREEN_LABELS: Record<Screen, string> = {
   positionSwitch: "Position Switch",
   records: "Statistics",
   career: "Career",
+  // Round 121, [[Club Finance, Facilities, and Marketing]] — the brief's own "Football Dept" screen
+  // name, scoped to just its Facilities sub-tab this round (Overview/Coaching & Scouting/Marketing
+  // are separate, not-yet-built work — see the design note's disclosed scope split).
+  facilities: "Football Dept",
   themeSystem: "Theme System",
 };
 
@@ -258,6 +264,7 @@ export default function App() {
         {screen === "positionSwitch" && <PositionSwitch />}
         {screen === "records" && <Records />}
         {screen === "career" && <CareerProfile />}
+        {screen === "facilities" && <Facilities />}
         {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />

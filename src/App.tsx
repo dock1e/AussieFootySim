@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Dashboard } from "./components/Dashboard";
-import { SquadList } from "./components/SquadList";
+import { List } from "./components/List";
 import { LiveMatch } from "./components/LiveMatch";
 import { SeasonHub } from "./components/SeasonHub";
 import { SelectionCommittee } from "./components/SelectionCommittee";
@@ -11,13 +11,34 @@ import { TradePeriod } from "./components/TradePeriod";
 import { Draft } from "./components/Draft";
 import { PositionSwitch } from "./components/PositionSwitch";
 import { Records } from "./components/Records";
+import { FootballDept } from "./components/FootballDept";
+import { CareerProfile } from "./components/CareerProfile";
 import { PlayerProfileModal } from "./components/PlayerProfileModal";
+import { ThemeSystemScreen } from "./components/ThemeSystemScreen";
+import { ClubStripe } from "./components/theme/primitives";
+import { clubTokensFor } from "./theme/clubTokens";
+import { clubThemeStyle, pageBackgroundStyle } from "./theme/useClubTheme";
 import { useGameStore } from "./store/useGameStore";
-import { useSeasonStore } from "./store/useSeasonStore";
 import { useSaveStore } from "./store/useSaveStore";
-import { ALL_PLAYERS, getPlayersByClub } from "./data/loadPlayers";
+import { ALL_PLAYERS } from "./data/loadPlayers";
+import { clubByName } from "./types/club";
 
-type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNeeds" | "combine" | "contracts" | "trade" | "draft" | "positionSwitch" | "records";
+type Screen =
+  | "dashboard"
+  | "squad"
+  | "selection"
+  | "season"
+  | "match"
+  | "listNeeds"
+  | "combine"
+  | "contracts"
+  | "trade"
+  | "draft"
+  | "positionSwitch"
+  | "records"
+  | "career"
+  | "facilities"
+  | "themeSystem";
 
 /**
  * Nav consolidation — Aug 2026 round 52, [[UI Consolidation Review]]. Tyler:
@@ -25,16 +46,51 @@ type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNe
  * prefer to consolidate a lot of that information." The previous flat
  * 11-button row (one button per `Screen`) had already wrapped the header
  * once and dropped SaveMenu onto its own low-contrast line — see the comment
- * on the header row below. Groups map onto Tyler's own named categories
- * (Match Day / Coaching Decisions / Future Planning / Player Management).
+ * on the header row below.
+ *
+ * Round 124 — [[Club Theme System]]'s own nav spec (`Club Theme System.dc.html`
+ * line ~2079: `tabs:[dash, live('Match Day'), list('List'), player('Player
+ * Career'), draft('Draft'), staff('Football Dept'), stats, theme]`) has
+ * specified this exact flat 8-tab top-level nav since round 114 first read
+ * the brief — every real screen gets its own top-level tab, no umbrella
+ * groups. Rounds 115-123 retrofitted each screen's own CONTENT to the brief
+ * without ever revisiting the nav's STRUCTURE, so the round-52 grouping
+ * (Coaching / Future Planning / Player Mgmt) stayed in place underneath.
+ * Tyler's own round-124 ask, prompted by a screenshot of the brief's flat nav
+ * next to our grouped one, was explicit: "flatten the whole nav" to match.
+ *
+ * The mechanism is unchanged — a group with one screen navigates straight
+ * there with no sub-tab row; a group with more than one still shows the
+ * existing secondary pill row (see `activeGroup` below, and `FootballDept.tsx`'s
+ * own internal 4-tab shell for the same one-nav-item/multiple-screens pattern
+ * a level down). What changed is which top-level LABEL each screen sits
+ * under: the brief's flat nav only names 8 destinations, but this app has 15
+ * real screens, so the 6 screens the brief doesn't give their own top-level
+ * slot — Selection, Position Switch, List Needs, Talent Scouting, Trade,
+ * Contracts — needed a documented new home rather than an invented 9th tab
+ * the brief never asked for:
+ *   - Selection (pre-match team-sheet prep) joins Match Day's own group,
+ *     ordered second so the top-level "Match Day" button still lands on the
+ *     live match screen by default, with Selection one pill-click away.
+ *   - Position Switch and Contracts join List's own group — round 117's own
+ *     doc comment already treats both as List's natural companions (Position
+ *     Switch is the batch review queue for the single-player Position Fit
+ *     tab List already has; Contracts is the whole-league version of List's
+ *     own per-player Contract tab), so this just gives that existing
+ *     relationship a shared top-level home instead of two separate ones.
+ *   - List Needs, Talent Scouting, and Trade join Draft's own group — these
+ *     three plus the Draft board itself are the one off-season planning
+ *     pipeline the old "Future Planning" umbrella already recognised;
+ *     ordered with `draft` first so the top-level "Draft" button lands on
+ *     the actual board, matching the label.
  *
  * `screen` itself is completely unchanged as the single source of truth for
- * which component renders (see `<main>` below) — only the nav chrome
- * changes, so no screen component or cross-nav callback needed to change for
- * this part of the work. A group with exactly one screen (Dashboard, Match
- * Day) navigates straight there with no sub-tab row; a group with more than
- * one shows a secondary pill row for its own screens (see `activeGroup`
- * below).
+ * which component renders (see `<main>` below), and every cross-nav callback
+ * (`onGoToContracts`, `onGoToPositionSwitch`, etc.) still just calls
+ * `setScreen(...)` — `activeGroup`'s lookup is generic over `screens`, so
+ * jumping straight to a screen now under a different top-level label
+ * highlights the correct new tab automatically, with no callback changes
+ * needed anywhere in the app.
  *
  * `season` is deliberately absent from every group's `screens` list: it's no
  * longer reachable from top-level nav, but the screen/route itself is
@@ -43,13 +99,23 @@ type Screen = "dashboard" | "squad" | "selection" | "season" | "match" | "listNe
  * Season page" link is how you still reach this standalone screen for the
  * deeper multi-round read the embedded card doesn't try to replace.
  */
+/**
+ * Round 114 — Club Theme System: `themeSystem` is the brief's screen 8, "a
+ * dev/QA screen… keep it in dev builds." `import.meta.env.DEV` is Vite's own
+ * build-mode flag (true for `npm run dev`, false for `npm run build`'s
+ * production bundle), so this group — and the only route to the screen —
+ * simply doesn't exist in what ships to GitHub Pages, with no separate
+ * feature-flag plumbing needed.
+ */
 const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "dashboard", label: "Dashboard", screens: ["dashboard"] },
-  { key: "matchDay", label: "Match Day", screens: ["match"] },
-  { key: "coaching", label: "Coaching", screens: ["selection", "positionSwitch"] },
-  { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
-  { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts"] },
+  { key: "matchDay", label: "Match Day", screens: ["match", "selection"] },
+  { key: "list", label: "List", screens: ["squad", "contracts", "positionSwitch"] },
+  { key: "career", label: "Player Career", screens: ["career"] },
+  { key: "draft", label: "Draft", screens: ["draft", "listNeeds", "combine", "trade"] },
+  { key: "facilities", label: "Football Dept", screens: ["facilities"] },
   { key: "records", label: "Statistics", screens: ["records"] },
+  ...(import.meta.env.DEV ? [{ key: "themeSystem", label: "Theme System", screens: ["themeSystem"] as Screen[] }] : []),
 ];
 
 const SCREEN_LABELS: Record<Screen, string> = {
@@ -69,6 +135,13 @@ const SCREEN_LABELS: Record<Screen, string> = {
   draft: "Draft",
   positionSwitch: "Position Switch",
   records: "Statistics",
+  career: "Career",
+  // Round 121 built just the Facilities sub-tab under this label; round 122 unified all 4 of the
+  // brief's own sub-tabs (Overview/Assistant Coaches/Facilities/Marketing) into one screen with
+  // internal tab state (`FootballDept.tsx`) — the `Screen` key stays `facilities` (no route churn),
+  // it just now renders the full 4-tab screen rather than Facilities alone.
+  facilities: "Football Dept",
+  themeSystem: "Theme System",
 };
 
 export default function App() {
@@ -102,7 +175,7 @@ export default function App() {
   // for every other one of its states and on unmount — so this stays a precise, per-state gate rather
   // than the Draft screen's coarser whole-screen one.
   //
-  // Round 114 — Tyler: "when I open the 'Draft' tab the visual UI is wider than other tabs. The width
+  // Round 125 — Tyler: "when I open the 'Draft' tab the visual UI is wider than other tabs. The width
   // should be aligned across our UI for consistency." The cockpit shell used to drop the width cap
   // (`lg:max-w-none`) for Draft too. Now every ordinary screen AND the Draft cockpit share one cap,
   // `max-w-7xl` (1280px — UI Redesign3's own standard content wrap is 1240px; `max-w-6xl` was too
@@ -114,19 +187,17 @@ export default function App() {
   const isCockpitScreen = screen === "draft" || (screen === "match" && matchCockpitActive);
   const isFullWidthCockpit = screen === "match" && matchCockpitActive;
   const myClub = useGameStore((s) => s.myClub);
+  // Round 114 — Club Theme System: the 5 CSS custom properties every themed
+  // component/screen reads via `var(--…)`, set once here from the coached
+  // club's `abbreviation` (confirmed identical to the brief's token-table
+  // ids) and applied to the whole app via the root `<div>`'s style below.
+  // Screens not yet migrated to the token system (everything except the
+  // Theme System QA screen, this round) simply don't reference these vars
+  // yet, so this is additive and changes nothing about how they render.
+  const clubTokens = clubTokensFor(clubByName(myClub)?.abbreviation);
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
-  // Re-reading getPlayersByClub whenever the live pool is swapped wholesale
-  // (a load, a new game, an off-season step) — see useSaveStore.ts's
-  // `poolVersion` doc comment. Not memoized: this is the one call site that
-  // has to stay correct with zero risk of a stale dependency array, and
-  // getPlayersByClub is a cheap filter over <1000 players.
   const poolVersion = useSaveStore((s) => s.poolVersion);
-  const squad = getPlayersByClub(myClub);
-  // Live, round-by-round condition from the active season (see season.ts's
-  // doc comment) — undefined with no season in progress, in which case
-  // SquadList quietly falls back to each player's static condition snapshot.
-  const liveCondition = useSeasonStore((s) => s.season?.condition);
 
   useEffect(() => {
     void initialize();
@@ -145,9 +216,21 @@ export default function App() {
   }
 
   return (
+    // Round 114 — Club Theme System: `clubThemeStyle` sets the 5 CSS custom
+    // properties + tint vars app-wide from here down; `pageBackgroundStyle`'s
+    // subtle low-tint background (~8% at the default 14% card tint) is close
+    // enough to the existing fixed `#0a0e14`-ish Tailwind background that it
+    // doesn't visually clash with the screens below that haven't been
+    // migrated to the token system yet — see clubTokens.ts's own doc comment
+    // for why the two colour systems coexist this round.
     <div
-      className={`mx-auto min-h-screen max-w-7xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-screen lg:flex-col lg:overflow-hidden lg:py-4" : ""} ${isFullWidthCockpit ? "lg:max-w-none" : ""}`}
+      style={{ ...clubThemeStyle(clubTokens), ...pageBackgroundStyle() }}
+      className={isCockpitScreen ? "lg:flex lg:h-screen lg:flex-col lg:overflow-hidden" : ""}
     >
+      <ClubStripe />
+      <div
+        className={`mx-auto w-full max-w-7xl px-4 py-6 ${isCockpitScreen ? "lg:flex lg:h-full lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-hidden lg:py-4" : ""} ${isFullWidthCockpit ? "lg:max-w-none" : ""}`}
+      >
       <header className={`mb-6 ${isCockpitScreen ? "lg:mb-3 lg:shrink-0" : ""}`}>
         {/* Logo + SaveMenu get their own row, deliberately separate from nav
             below — see the regression this fixed: with both in one
@@ -163,38 +246,67 @@ export default function App() {
           <div className="flex items-center gap-2.5">
             <Logo />
             <div className="font-display text-3xl italic tracking-tight">
-              AussieFooty<span className="text-accent">Sim</span>
+              AussieFooty<span style={{ color: "var(--accT)" }}>Sim</span>
             </div>
           </div>
           <SaveMenu />
         </div>
-        <nav>
-          <div className="flex flex-wrap gap-2">
-            {NAV_GROUPS.map((group) => (
-              <button
-                key={group.key}
-                onClick={() => selectGroup(group)}
-                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                  activeGroup.key === group.key ? "bg-primary text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
-                }`}
-              >
-                {group.label}
-              </button>
-            ))}
+        {/* Round 123 — [[Football Department Coach Market]]'s companion nav-styling ask: Tyler's own
+            comparison screenshots flagged this row (and the screen-picker row below it) as "the purple
+            pills" that don't match the Club Theme System reference's flat underline-tab nav (that
+            mockup's own `<nav>` — `border-bottom:2px solid var(--acc)` on the active tab, transparent
+            border + slate text otherwise, no pill background at all). Restyled to that same underline
+            language, driven by the coached club's own `var(--acc)`/`var(--accT)` tokens instead of the
+            hardcoded `bg-primary` purple — so "yours/selected" now reads in the SAME accent colour as
+            every themed screen this app already has (Dashboard, Football Dept, Draft, etc.), not a
+            fixed purple that fights whichever club's colours are actually on screen. The two-tier
+            group+screen structure itself is unchanged (this app has far more screens than the
+            mockup's single flat row ever needed to hold) — only the visual treatment of each tier. */}
+        <nav style={{ borderBottom: "1px solid rgba(255,255,255,.08)" }}>
+          <div className="flex flex-wrap gap-1" style={{ marginBottom: -1 }}>
+            {NAV_GROUPS.map((group) => {
+              const active = activeGroup.key === group.key;
+              return (
+                <button
+                  key={group.key}
+                  onClick={() => selectGroup(group)}
+                  style={{
+                    background: "transparent",
+                    border: 0,
+                    borderBottom: active ? "2px solid var(--acc)" : "2px solid transparent",
+                    color: active ? "#fff" : "#9aa4b5",
+                    padding: "10px 14px",
+                    font: active ? "700 14px Barlow,sans-serif" : "600 14px Barlow,sans-serif",
+                    cursor: "pointer",
+                  }}
+                >
+                  {group.label}
+                </button>
+              );
+            })}
           </div>
           {activeGroup.screens.length > 1 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {activeGroup.screens.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setScreen(s)}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                    screen === s ? "bg-primary/20 text-primary-light" : "bg-base-900 text-slate-400 hover:bg-base-800"
-                  }`}
-                >
-                  {SCREEN_LABELS[s]}
-                </button>
-              ))}
+            <div className="flex flex-wrap gap-1" style={{ padding: "6px 0" }}>
+              {activeGroup.screens.map((s) => {
+                const active = screen === s;
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setScreen(s)}
+                    style={{
+                      background: active ? "color-mix(in oklch, var(--acc) 16%, transparent)" : "transparent",
+                      border: 0,
+                      borderRadius: 6,
+                      color: active ? "var(--accT)" : "#7e889a",
+                      padding: "5px 10px",
+                      font: active ? "700 12px Barlow,sans-serif" : "500 12px Barlow,sans-serif",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {SCREEN_LABELS[s]}
+                  </button>
+                );
+              })}
             </div>
           )}
         </nav>
@@ -208,7 +320,7 @@ export default function App() {
             onGoToSeason={() => setScreen("season")}
           />
         )}
-        {screen === "squad" && <SquadList players={squad} liveCondition={liveCondition} />}
+        {screen === "squad" && <List />}
         {screen === "selection" && <SelectionCommittee />}
         {screen === "season" && <SeasonHub />}
         {screen === "match" && <LiveMatch onCockpitActiveChange={setMatchCockpitActive} />}
@@ -227,8 +339,12 @@ export default function App() {
         {screen === "draft" && <Draft />}
         {screen === "positionSwitch" && <PositionSwitch />}
         {screen === "records" && <Records />}
+        {screen === "career" && <CareerProfile />}
+        {screen === "facilities" && <FootballDept />}
+        {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />
+      </div>
     </div>
   );
 }
@@ -237,22 +353,26 @@ export default function App() {
  * Header wordmark badge — Aug 2026 rebrand (SimAFL -> AussieFootySim, Tyler:
  * "rebrand the logo in the top left... Use supercoach logo as a subtle (no
  * copyright infringement) reference point as I want the platform to feel
- * familiar to supercoach players"). A rounded-square green badge with a
- * bold white monogram, next to the wordmark — the same *category* of mark
- * SuperCoach's own logo uses (green badge + bold lettering next to a
- * wordmark, visible in Tyler's own attached screenshots of the SC UI), not
- * a copy of its actual shield artwork, palette, or typeface: original
- * shape, this app's own `good` green (already the palette's green token,
- * see tailwind.config.js) rather than SC's specific shade, and "AFS" —
- * Tyler's own shorthand for AussieFootySim from this same message — rather
- * than "SC". Kept as a small standalone component (not inlined in the
+ * familiar to supercoach players"). Originally a green rounded-square badge;
+ * Round 123 — [[Football Department Coach Market]] — re-skinned to match the
+ * exact badge treatment in the Club Theme System reference mockup itself
+ * (`Club Theme System.dc.html` line ~13: a light `#eef2f8` rounded-square
+ * with dark `#0a0e17` "AFS" lettering, sized 34px, next to an italic wordmark
+ * whose "Sim" half now reads in the coached club's own `var(--accT)` token
+ * rather than a fixed green) — Tyler's own round-123 ask ("rebrand the AFS
+ * logo... to better align to the UI redesign") pointed straight at this
+ * mockup's own header markup as the target, not a fresh design. Still
+ * original artwork (a plain rounded square + monogram, no shield/crest), and
+ * still "AFS" rather than "SC" — same non-infringement reasoning as the
+ * original rebrand, just now pixel-matched to the brief instead of freely
+ * interpreted. Kept as a small standalone component (not inlined in the
  * header) so it's reusable if a favicon/app-icon ever wants the same mark.
  */
 function Logo() {
   return (
-    <svg width="40" height="40" viewBox="0 0 40 40" className="shrink-0" aria-hidden="true">
-      <rect x="1" y="1" width="38" height="38" rx="11" fill="#3fb950" stroke="#2b8a37" strokeWidth="1.5" />
-      <text x="20" y="26" textAnchor="middle" fontFamily="Arial, Helvetica, sans-serif" fontWeight="800" fontSize="14" fill="#ffffff" letterSpacing="0.5">
+    <svg width="34" height="34" viewBox="0 0 34 34" className="shrink-0" aria-hidden="true">
+      <rect x="0" y="0" width="34" height="34" rx="9" fill="#eef2f8" />
+      <text x="17" y="21.5" textAnchor="middle" fontFamily="'Barlow Condensed', Arial, sans-serif" fontWeight="700" fontSize="13" fill="#0a0e17" letterSpacing="0.5">
         AFS
       </text>
     </svg>

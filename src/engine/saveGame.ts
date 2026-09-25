@@ -13,10 +13,15 @@ import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
 import type { DisgruntlementState } from "./disgruntlement.ts";
 import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
-import type { ScoutFocusArea, MatchDayCoachRole } from "../types/coach.ts";
+import type { ScoutFocusArea, MatchDayCoachRole, CoachRole } from "../types/coach.ts";
+import type { CoachContract } from "./coachContracts.ts";
 import { computeSeasonAwards } from "./awards.ts";
 import { computeSeasonGrades, type SeasonGradeEntry } from "./seasonGrading.ts";
 import type { ClubHistoryEntry } from "./clubHistory.ts";
+import { advanceClubFinances, simulateAiFacilityInvestment } from "./clubFinance.ts";
+import { defaultClubFinanceState, type ClubFinanceState } from "../types/clubFinance.ts";
+import { pickBest22 } from "./team.ts";
+import { CLUBS } from "../types/club.ts";
 
 /**
  * The save-game data model — closes ROADMAP.md gap #24/#29: "nothing in
@@ -264,6 +269,47 @@ export interface SaveGameData {
    * recorded yet," not a fabricated backfill).
    */
   clubHistory: Record<number, ClubHistoryEntry[]>;
+  /**
+   * Round 115, [[Club Theme System]] Dashboard rebuild — the coach's own "pin to watchlist" list,
+   * up to 5 PlayerIDs, in pin order. Pinned players get priority in the new Dashboard's Record Watch
+   * feed and get their own rows on Statistics (per the cowork brief's cross-screen-links section) —
+   * this round only wires the pin itself and its Dashboard display; the Statistics-tab row and
+   * Record-Watch-ranking boost are follow-up work for that screen's own migration round. Added
+   * without bumping `SAVE_SCHEMA_VERSION`, same convention as every field above: a pre-round-115 save
+   * just has no pins yet, which `deserializeSave` below defaults to `[]`. Multi-year state, NOT reset
+   * by `runOffSeasonOnSave`, same reasoning as `talentScout`/`lineCoaches`/`clubHistory` — a pin is a
+   * standing coach preference, not something that expires every season.
+   */
+  watchlist: number[];
+  /**
+   * Round 121, [[Club Finance, Facilities, and Marketing]] — one `ClubFinanceState` per club (all 18,
+   * keyed by club name, so AI clubs invest too, not just `myClub` — see `engine/clubFinance.ts`'s own
+   * doc comment on why). Advanced once per off-season in `runOffSeasonOnSave` below (real revenue minus
+   * running costs, plus the AI-investment heuristic for every club except `myClub`), and read live by
+   * `Facilities.tsx` for `myClub`'s own upgrade screen. Added without bumping `SAVE_SCHEMA_VERSION`,
+   * same convention as every field above: a pre-round-121 save just has no `ClubFinanceState` for any
+   * club yet, which `deserializeSave` below defaults to `{}` — `clubFinance[clubName]` reads as
+   * `undefined` everywhere this is consulted, and every call site (`facilityLevel`, `clubRevenueForSeason`,
+   * etc.) already treats a missing/undefined state as "not yet built, budget not yet seeded," falling
+   * back to `defaultClubFinanceState()` rather than throwing.
+   */
+  clubFinance: Record<string, ClubFinanceState>;
+  /**
+   * Round 123 — [[Football Department Coach Market]]. One negotiated `CoachContract` per `CoachRole`
+   * currently filled — see `engine/coachContracts.ts`'s own doc comment for the salary-cap-style
+   * mechanic this backs (`committedStaffSpend` vs `FOOTBALL_DEPT_CEILING`). Deliberately a SEPARATE
+   * field from `talentScout`/`lineCoaches`/`developmentCoach` rather than a reshape of them: those
+   * three remain the single source of truth for "who is assigned to this role" (every existing reader
+   * — `scoutAccuracyFor`, `lineCoachEffectivenessFor`, `developmentMultipliersFor` — keeps working
+   * completely unchanged), while this field is purely the ADDITIONAL negotiated-salary fact that
+   * didn't exist before this round. `useSaveStore.ts`'s new `hireCoach`/`releaseCoachRole` actions
+   * always write both together, so the two can't actually drift apart in practice, but keeping them as
+   * separate fields meant zero risk to every already-working assignment/effect call site. Added
+   * without bumping `SAVE_SCHEMA_VERSION`, same convention as every field above: a pre-round-123 save
+   * just has no committed salaries yet — `deserializeSave` below defaults to `{}`, which every reader
+   * (`committedStaffSpend`) already treats as "nothing committed", never throws.
+   */
+  coachContracts: Partial<Record<CoachRole, CoachContract>>;
 }
 
 /** See `SaveGameData.talentScout`'s own doc comment. */
@@ -294,6 +340,11 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     lineCoaches: {},
     developmentCoach: null,
     clubHistory: {},
+    watchlist: [],
+    // Every club, not just myClub — same "AI clubs get real state too" treatment as draftPickInventory
+    // above; a brand-new save starts every club at the same STARTING_FOOTBALL_DEPT_BUDGET.
+    clubFinance: Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])),
+    coachContracts: {},
   };
 }
 
@@ -349,6 +400,21 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   const finishedSeasonAwards = save.season ? computeSeasonAwards(save.season, save.players) : null;
   const finishedSeasonGrades: Record<number, SeasonGradeEntry> | null = save.season ? computeSeasonGrades(save.season, save.year, save.seasonArchives, save.players) : null;
   const finishedSeasonArchive = save.season ? archiveSeason(save.season, save.year, finishedSeasonAwards ?? undefined, finishedSeasonGrades ?? undefined) : null;
+  // Round 121 — [[Club Finance, Facilities, and Marketing]]. Every club's own best-22, computed from
+  // the CURRENT (pre-aging) player pool — the direct "is this player outside their club's best 22"
+  // signal `facilityDevelopmentContributionFor` needs for the VFL & Development Program bonus below.
+  // Grouped by club name first so `pickBest22` (which wants one club's players at a time) only runs
+  // once per club, not once per player.
+  const playersByClub = new Map<string, Player[]>();
+  for (const p of save.players) {
+    if (!playersByClub.has(p.Team)) playersByClub.set(p.Team, []);
+    playersByClub.get(p.Team)!.push(p);
+  }
+  const isBest22 = new Map<number, boolean>();
+  for (const [clubName, clubPlayers] of playersByClub) {
+    const best22Ids = new Set(pickBest22(clubName, clubPlayers).players.map((p) => p.PlayerID));
+    for (const p of clubPlayers) isBest22.set(p.PlayerID, best22Ids.has(p.PlayerID));
+  }
   // Round 91 — [[Coach-Driven & Performance-Linked Player Development]]. Computed from the season
   // that's about to be archived above (still `save.season` here, not yet discarded below), BEFORE
   // `runOffSeason` ages anyone — see `engine/development.ts`'s own doc comment for the full mechanic
@@ -362,7 +428,15 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     save.developmentCoach,
     save.lineCoaches,
     finishedSeasonAwards,
+    save.clubFinance,
+    isBest22,
   );
+  // Round 121 — advance every club's discretionary budget by this season's real revenue minus running
+  // costs (uses save.players/seasonArchives BEFORE this step's own aging, same timing as
+  // developmentMultipliers above — a club's revenue is earned by the season it actually played), then
+  // let every AI club (not myClub) spend on its own facility upgrade for next season.
+  const advancedClubFinance = advanceClubFinances(save.clubFinance, save.players, save.seasonArchives, save.year);
+  const nextClubFinance = simulateAiFacilityInvestment(advancedClubFinance, save.myClub, save.year);
   return {
     ...save,
     players: runOffSeason(save.players, developmentMultipliers),
@@ -373,6 +447,7 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     tradeWindow: null,
     draftWindow: null,
     seasonArchives: finishedSeasonArchive ? [...save.seasonArchives, finishedSeasonArchive] : save.seasonArchives,
+    clubFinance: nextClubFinance,
     savedAt: new Date().toISOString(),
     // draftPickInventory, clubHistory deliberately NOT reset here — unlike combineWindow/
     // contractWindow/tradeWindow/draftWindow (per-off-season sessions that genuinely restart each
@@ -437,6 +512,12 @@ export interface SerializedSaveGame {
   developmentCoach: number | null;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `developmentCoach`. See `SaveGameData.clubHistory`'s own doc comment. */
   clubHistory: Record<number, ClubHistoryEntry[]>;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `clubHistory`. See `SaveGameData.watchlist`'s own doc comment. */
+  watchlist: number[];
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `watchlist`. See `SaveGameData.clubFinance`'s own doc comment. */
+  clubFinance: Record<string, ClubFinanceState>;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `clubFinance`. See `SaveGameData.coachContracts`'s own doc comment. */
+  coachContracts: Partial<Record<CoachRole, CoachContract>>;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -471,6 +552,9 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     lineCoaches: save.lineCoaches,
     developmentCoach: save.developmentCoach,
     clubHistory: save.clubHistory,
+    watchlist: save.watchlist,
+    clubFinance: save.clubFinance,
+    coachContracts: save.coachContracts,
   };
 }
 
@@ -519,5 +603,11 @@ export function deserializeSave(json: unknown): SaveGameData {
     lineCoaches: s.lineCoaches ?? {},
     developmentCoach: s.developmentCoach ?? null,
     clubHistory: s.clubHistory ?? {},
+    watchlist: s.watchlist ?? [],
+    // Reseeded per-club (not {}) for a pre-round-121 save — see this field's own doc comment on
+    // SaveGameData: a pre-existing save should still get every club started at a real
+    // STARTING_FOOTBALL_DEPT_BUDGET rather than reading as "budget 0, nothing built" forever.
+    clubFinance: s.clubFinance ?? Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])),
+    coachContracts: s.coachContracts ?? {},
   };
 }

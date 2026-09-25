@@ -20,6 +20,7 @@ import {
 import { DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
 import type { AFLStadium, FieldMarkingsConfig } from "../data/stadiums";
 import { clubByName } from "../types/club";
+import { clubTokensFor, type ClubTokens } from "../theme/clubTokens";
 import { fantasyPointsFor } from "../engine/ratings";
 import { PX_PER_METRE, boundaryPath, goalSquare, goalPosts, arcPath, interchangeGatePath, corridorBuffer, BOUNDARY_SAMPLES } from "../engine/groundGeometry";
 import { FANTASY_COLOR, secondsPerTick, formatSecondsSince, type PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
@@ -102,8 +103,9 @@ import { FANTASY_COLOR, secondsPerTick, formatSecondsSince, type PlayerMatchFant
  * venue geometry) is unaffected — this round only touched what a node/bench looks like, never where
  * anything actually IS.
  */
-const HOME_COLOR_FALLBACK = "#ff5a36"; // used only if `clubByName(team.name)` can't resolve a real club (synthetic/test teams) — see resolveClubColor
-const AWAY_COLOR_FALLBACK = "#4b8fe0";
+// Round 116 — [[Club Theme System]] Match Day rebuild: `HOME_COLOR_FALLBACK`/`AWAY_COLOR_FALLBACK`
+// removed — `clubTokensFor(undefined)` already falls back to `DEFAULT_CLUB_TOKENS` internally for a
+// synthetic/test team that can't resolve a real club, so a second fallback here would be redundant.
 /**
  * Node diameters — Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3: "Node size up to
  * 22px diameter (from ~15px)." Supersedes this round's own `DOT_RADIUS_M`/`INVOLVED_DOT_RADIUS_M` (2.6m/
@@ -258,9 +260,14 @@ function applyInvolvementCooldown(
  * Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.3: replaces the old `resolveClubColor`
  * (primary only) — the new node scheme needs a real club's SECONDARY colour too (home's own ring), not
  * just its primary. */
-function resolveClubColors(team: MatchTeam, fallbackPrimary: string): { primary: string; secondary: string } {
-  const club = clubByName(team.name);
-  return { primary: club?.primaryColor ?? fallbackPrimary, secondary: club?.secondaryColor ?? "#ffffff" };
+/**
+ * Round 116 — [[Club Theme System]] Match Day rebuild: replaces `resolveClubColors` (old
+ * `Club.primaryColor`/`secondaryColor` system, round 51). Canvas `fillStyle`/`strokeStyle` can't
+ * resolve `var(--x)` CSS custom properties, so this reads the resolved hex values straight off
+ * `clubTokensFor` at draw time — cheap, same per-frame cost as the call it replaces.
+ */
+function resolveClubTokens(team: MatchTeam): ClubTokens {
+  return clubTokensFor(clubByName(team.name)?.abbreviation);
 }
 
 /** Fill/ring pair for one side's nodes — on-ground dots and bench-stack nodes alike share this exact shape, see `drawNode`. */
@@ -280,10 +287,20 @@ interface NodeColors {
 // playing.
 const AWAY_NODE_FILL = "#f2f4f8";
 
-function nodeColorsFor(side: Side, homeColors: { primary: string; secondary: string }, awayColors: { primary: string; secondary: string }): NodeColors {
-  return side === "home"
-    ? { fill: homeColors.primary, ring: homeColors.secondary, ringWidth: 2 }
-    : { fill: AWAY_NODE_FILL, ring: awayColors.primary, ringWidth: 2.5 };
+/**
+ * Round 116 — [[Club Theme System]] Match Day rebuild: the brief's ground node markup (section 4.2)
+ * is `fill:var(--deep);stroke:var(--acc)` for the coached side and `fill:#f2f4f8;stroke:var(--deep)`
+ * for the opponent, i.e. "yours" vs "theirs" — not literally "home" vs "away" the way round 113's
+ * version had it. This app supports AI-vs-AI spectating with no coached side at all, so `yourSide`
+ * defaults to `"home"` (same `mySide ?? "home"` convention `LiveMatch.tsx` already uses elsewhere)
+ * rather than assuming the brief's "home = you" holds unconditionally.
+ */
+function nodeColorsFor(side: Side, yourSide: Side, homeTokens: ClubTokens, awayTokens: ClubTokens): NodeColors {
+  const isYours = side === yourSide;
+  const tokens = side === "home" ? homeTokens : awayTokens;
+  return isYours
+    ? { fill: tokens.deep, ring: tokens.acc, ringWidth: 2 }
+    : { fill: AWAY_NODE_FILL, ring: tokens.deep, ringWidth: 2.5 };
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -927,6 +944,13 @@ export interface GroundViewProps {
   fantasyMetrics?: Map<number, PlayerMatchFantasyMetrics>;
   /** Converts `ticksSinceOffGround` (ticks) to real seconds for the bench-stack's rotation-time readout — see `secondsPerTick`. Defaults to the engine's own real per-match constant (match.ts's `DEFAULT_TICKS_PER_QUARTER`, not exported, so restated literally here). */
   ticksPerQuarter?: number;
+  /**
+   * Round 116 — [[Club Theme System]] Match Day rebuild: which side's ground nodes get the "yours"
+   * treatment (`var(--deep)` fill / `var(--acc)` ring) vs the opponent's light chip. Defaults to
+   * `"home"` — the brief's own worked example always has the coached club at home — but `LiveMatch.tsx`
+   * passes its real `yourSide` (`mySide ?? "home"`) so AI-vs-AI spectating still resolves sensibly.
+   */
+  yourSide?: Side;
 }
 
 const EMPTY_FANTASY_METRICS: Map<number, PlayerMatchFantasyMetrics> = new Map();
@@ -946,6 +970,7 @@ export function GroundView({
   onHoverPlayer,
   fantasyMetrics = EMPTY_FANTASY_METRICS,
   ticksPerQuarter = 130,
+  yourSide = "home",
 }: GroundViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<DotPosition | null>(null);
@@ -958,6 +983,8 @@ export function GroundView({
   homeRef.current = home;
   const awayRef = useRef(away);
   awayRef.current = away;
+  const yourSideRef = useRef(yourSide);
+  yourSideRef.current = yourSide;
   const venueRef = useRef(venue);
   venueRef.current = venue;
   const eventRef = useRef(event);
@@ -1084,10 +1111,10 @@ export function GroundView({
 
       const ctx = canvasRef.current?.getContext("2d");
       if (ctx) {
-        const homeColors = resolveClubColors(currentHome, HOME_COLOR_FALLBACK);
-        const awayColors = resolveClubColors(currentAway, AWAY_COLOR_FALLBACK);
-        const homeNode = nodeColorsFor("home", homeColors, awayColors);
-        const awayNode = nodeColorsFor("away", homeColors, awayColors);
+        const homeTokens = resolveClubTokens(currentHome);
+        const awayTokens = resolveClubTokens(currentAway);
+        const homeNode = nodeColorsFor("home", yourSideRef.current, homeTokens, awayTokens);
+        const awayNode = nodeColorsFor("away", yourSideRef.current, homeTokens, awayTokens);
         const highlightedId = highlightedPlayerIdRef.current;
 
         // Sep 2026 round 113 — [[Match Day Fantasy Layer Revision 2]] R2.4: bench-stack FP/rotation-time
@@ -1185,10 +1212,10 @@ export function GroundView({
 
   // Sep 2026 round 113 — R2.3: render-scope (not per-frame-ref) colours, purely for `TeamLegend`'s static
   // swatches below — the canvas's own per-frame colours are computed independently inside frame() above.
-  const homeColorsForLegend = resolveClubColors(home, HOME_COLOR_FALLBACK);
-  const awayColorsForLegend = resolveClubColors(away, AWAY_COLOR_FALLBACK);
-  const homeNodeColors = nodeColorsFor("home", homeColorsForLegend, awayColorsForLegend);
-  const awayNodeColors = nodeColorsFor("away", homeColorsForLegend, awayColorsForLegend);
+  const homeTokensForLegend = resolveClubTokens(home);
+  const awayTokensForLegend = resolveClubTokens(away);
+  const homeNodeColors = nodeColorsFor("home", yourSide, homeTokensForLegend, awayTokensForLegend);
+  const awayNodeColors = nodeColorsFor("away", yourSide, homeTokensForLegend, awayTokensForLegend);
 
   // Tyler section 4: "Hover a node -> position code, metres from its
   // attacking goal, and live fantasy points" — replaces the old Disposals/

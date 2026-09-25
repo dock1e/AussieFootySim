@@ -8,6 +8,8 @@ import type { Season } from "./season.ts";
 import { seasonPlayerTotals, allTimePlayerTotals, LEADERBOARD_STAT_FIELDS, type SeasonArchiveEntry, type SeasonPlayerTotals, type LeagueStat } from "./seasonSummary.ts";
 import { combinedRecordFor } from "./records.ts";
 import type { SeasonAwards } from "./awards.ts";
+import { wholeListDevelopmentBonus, fringeDevelopmentBonus } from "./clubFinance.ts";
+import type { ClubFinanceState } from "../types/clubFinance.ts";
 
 /**
  * Coach-Driven & Performance-Linked Player Development — [[Coach-Driven & Performance-Linked Player
@@ -368,9 +370,20 @@ export function eliteTaperFor(currentOVR: number): number {
   return 1 - t * (1 - ELITE_TAPER_FLOOR);
 }
 
-/** Combines both halves and clamps to `[1, MULTIPLIER_CAP]` — the one number `progression.ts`'s `ageOnePlayer` actually consumes. Takes the performance contribution AFTER round 93's scarcity/taper safeguards have already been applied to it (see `developmentMultipliersFor`) — this function itself stays a simple, pure combinator, same as round 91 left it. */
-export function developmentMultiplierFor(coachContribution: number, performanceContribution: number): number {
-  return Math.max(1, Math.min(DEVELOPMENT_TUNING.MULTIPLIER_CAP, 1 + coachContribution + performanceContribution));
+/**
+ * Combines all contributions and clamps to `[1, MULTIPLIER_CAP]` — the one number `progression.ts`'s
+ * `ageOnePlayer` actually consumes. Takes the performance contribution AFTER round 93's scarcity/taper
+ * safeguards have already been applied to it (see `developmentMultipliersFor`).
+ *
+ * Round 121 — [[Club Finance, Facilities, and Marketing]]: `facilityContribution` (default `0`, every
+ * pre-round-121 call site's unmodified behaviour) folds a club's Training/VFL facility investment into
+ * the SAME clamp as coach/performance, rather than being applied as a second multiplier after the
+ * fact — deliberate, so a player already near `MULTIPLIER_CAP` from coaching+performance alone can't
+ * be pushed arbitrarily further past it just because their club also has maxed-out facilities. One
+ * ceiling, three inputs.
+ */
+export function developmentMultiplierFor(coachContribution: number, performanceContribution: number, facilityContribution = 0): number {
+  return Math.max(1, Math.min(DEVELOPMENT_TUNING.MULTIPLIER_CAP, 1 + coachContribution + performanceContribution + facilityContribution));
 }
 
 /**
@@ -383,6 +396,17 @@ export function developmentMultiplierFor(coachContribution: number, performanceC
  * through to `computeSeasonPerformanceSignals` — see that function's own doc comment. Defaults to
  * `null` so every pre-round-94 call site (a verify script, say) keeps compiling and behaving exactly
  * as before, just with every player's `awardsWon` reading all-false.
+ *
+ * Round 121 — [[Club Finance, Facilities, and Marketing]]: two new optional params, both defaulting
+ * to `undefined` so every pre-round-121 call site keeps compiling and behaving identically (every
+ * player's facility contribution reads `0`, today's unmodified shape). When provided, `clubFinance`
+ * (every club's `ClubFinanceState`, keyed by club name — `SaveGameData.clubFinance`) and `isBest22`
+ * (a PlayerID→boolean map, precomputed by the caller via `engine/team.ts`'s `pickBest22` for every
+ * club, since this file has no reason to know about team selection itself) together answer "how much
+ * does THIS player's own club's facility investment help them, given whether they made the best 22
+ * this season" — the Training facilities (`gym`/`skills`) help everyone on the list equally, but the
+ * VFL & Development Program facility ONLY helps a player who's currently OUTSIDE the best 22, per
+ * `clubFinance.ts`'s own `fringeDevelopmentBonus` doc comment.
  */
 export function developmentMultipliersFor(
   players: readonly Player[],
@@ -392,6 +416,8 @@ export function developmentMultipliersFor(
   developmentCoachId: number | null,
   lineCoaches: Partial<Record<MatchDayCoachRole, number>>,
   awards: SeasonAwards | null = null,
+  clubFinance?: Readonly<Record<string, ClubFinanceState>>,
+  isBest22?: ReadonlyMap<number, boolean>,
 ): Map<number, number> {
   const result = new Map<number, number>();
   if (!season) {
@@ -422,7 +448,28 @@ export function developmentMultipliersFor(
     // (multiplication commutes) — written scarcity-then-taper because that's the order Tyler's own
     // concern raised them in conversation.
     const performanceContribution = rawPerformance * (scarcityScales.get(p.PlayerID) ?? 1) * eliteTaperFor(p.OVR);
-    result.set(p.PlayerID, developmentMultiplierFor(coachContribution, performanceContribution));
+    // Round 121 -- facilityContribution reads 0 (today's unmodified behaviour) whenever the caller
+    // doesn't pass clubFinance/isBest22 at all (every pre-round-121 call site), or for a player whose
+    // own club has no ClubFinanceState entry yet (a save from before this round existed).
+    const facilityContribution = clubFinance ? facilityDevelopmentContributionFor(clubFinance[p.Team], isBest22?.get(p.PlayerID)) : 0;
+    result.set(p.PlayerID, developmentMultiplierFor(coachContribution, performanceContribution, facilityContribution));
   }
   return result;
+}
+
+/**
+ * Round 121 -- [[Club Finance, Facilities, and Marketing]]. `state` is `p`'s OWN club's
+ * `ClubFinanceState` (may be `undefined` for a save that predates this round, or a club with no
+ * recorded finance yet -- reads as 0 either way, same "old save degrades to sensible defaults"
+ * convention every other field on `SaveGameData` follows). `wholeListDevelopmentBonus` (Training
+ * facilities) always applies; `fringeDevelopmentBonus` (the VFL & Development Program) applies ONLY
+ * when `inBest22` is explicitly `false` -- `undefined` (caller didn't compute a best-22 map at all)
+ * deliberately does NOT get the fringe bonus, so an incomplete caller under-delivers rather than
+ * over-delivers a bonus tied to a selection status it never actually checked.
+ */
+function facilityDevelopmentContributionFor(state: ClubFinanceState | undefined, inBest22: boolean | undefined): number {
+  if (!state) return 0;
+  let bonus = wholeListDevelopmentBonus(state);
+  if (inBest22 === false) bonus += fringeDevelopmentBonus(state);
+  return bonus;
 }

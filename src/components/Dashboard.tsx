@@ -18,6 +18,8 @@ import { FullTimeResult } from "./FullTimeResult";
 import { ClubScoutingModal } from "./ClubScouting";
 import { isLineupComplete, lineupPlayerIds } from "../engine/selection";
 import { freeAgentsFor } from "../engine/contracts";
+import { Card, HeroCard, Watermark, KpiTile, StatusChip, PinStar, DivergingBar, TrendValue, Segmented } from "./theme/primitives";
+import { recordWatchFeedFor, developmentBoardFor, type RecordWatchEntry, type DevelopmentEntry } from "../engine/dashboardInsights";
 import {
   lastPlayedMatchFor,
   upcomingFixtureFor,
@@ -41,51 +43,22 @@ import { recentForm, type LadderRow, type RoundResult } from "../engine/ladder";
 import type { MatchTeam } from "../engine/team";
 
 /**
- * The coach's landing page — Aug 2026 round 50, [[Dashboard Redesign]].
- * Tyler: "I want this to show things relevant to the AussieFootySim coach...
- * where we are on the ladder... who did we just play, which of our players
- * had great games... who we'll play next (next 3 or 4 games) and their best
- * recent players... a section on actions... key statistic leads for the
- * competition and where our best players are in relation to that."
+ * The coach's landing page. Round 115 rebuilds this onto the Club Theme System (see [[Club Theme
+ * System]]) to match the brief's own reference mockup (`Club Theme System.dc.html`, `isDash` block):
+ * a club hero strip, a "biggest story" hero card + Next Up card, a Watchlist (pin) section, a Record
+ * Watch feed and Development board, then Coming Up + Line Ratings. Two of those — Record Watch and
+ * Development — are genuinely new mechanics with no prior code to reuse; see `engine/dashboardInsights.ts`'s
+ * own doc comment for exactly what's real data vs. a disclosed first-pass heuristic. The Watchlist pin
+ * itself persists via `useSaveStore`'s new `watchlist`/`togglePin` (round 115).
  *
- * The original slice of this file (club picker, list-size/OVR tiles,
- * line-rating bars) predates the season engine entirely — see its own prior
- * doc comment, quoted in [[Dashboard Redesign]]'s "Current state" section —
- * and is kept as-is below the new season-aware sections, still a real,
- * honest "roster depth" reference even though it's no longer the whole page.
+ * Everything Tyler originally asked for in round 50 (ladder position, last-game recap, coach actions,
+ * competition leaders) is deliberately preserved, not dropped, just re-themed with the round-114
+ * primitives and folded in alongside the brief's new sections — the brief's reference mockup doesn't
+ * show these because it's a template, not a literal spec of what to remove.
  *
- * Every new section degrades gracefully to a friendly notice, never a crash
- * or a fake number, when `season` is `null` (no season started yet this
- * save) — same "optional and additive, graceful fallback" convention this
- * project has used since round 8.
- *
- * Expand-to-modal pattern (Aug 2026 round 53, superseding round 52's
- * `ExpandableCard`): Tyler's follow-up on round 52's inline-grow ladder
- * flagged two real problems — a rendering bug (the collapsed 7-row preview
- * stayed on screen above the expanded full table, reading as a *second*
- * ladder appearing rather than the same one growing) and a design
- * preference (he wants expansion to be "like a 'pop up' style expansion
- * where it takes up the centre of the screen and shows much more detail
- * with the extra width real estate," not constrained to whatever half-width
- * column its trigger card sits in). `activeModal` below is the single
- * source of truth for which one modal (if any) is open — Ladder, Last Game,
- * a Competition Leaders stat, or a scouted club — so only one is ever on
- * screen at once, sidestepping both complaints at the same time. Each
- * trigger card keeps its existing compact/collapsed content untouched and
- * adds a small `ExpandHint` affordance; nothing renders twice.
- *
- * Aug 2026 round 54, [[Season Stats and Records]] Option B: `LeaderModal` gained a 5-way
- * view-mode switcher (Total/Average/Last 5/All-Time Total/All-Time Average) and a stat-picker
- * covering all 18 leaderboard-eligible stats (`engine/seasonSummary.ts`'s `ALL_LEAGUE_STATS`),
- * widened from 25 to the top 100 rows Tyler asked for. The 5 stats that note flagged as needing
- * genuinely new engine modelling (Spoils, Intercept Marks, Intercept Possessions, Turnovers, Goal
- * Assists) show in the picker as disabled "coming soon" entries rather than silently missing.
- *
- * Aug 2026 round 55: those 5 gap stats are real now (see match.ts's own round 55 doc comments for
- * the 3 new engine mechanisms behind them) — `ALL_LEAGUE_STATS` grew from 18 to the full 22, and
- * the picker's separate "coming soon" `<optgroup>`/`COMING_SOON_STATS` list is gone outright, not
- * just emptied. Every stat Tyler originally asked for in round 53 is now a real, selectable,
- * ranked leaderboard.
+ * Every new section degrades gracefully to a friendly notice, never a crash or a fake number, when
+ * `season` is `null` (no season started yet this save) — same "optional and additive, graceful
+ * fallback" convention this project has used since round 8.
  */
 
 type ActiveModal =
@@ -109,16 +82,17 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
   const teams = useSeasonStore((s) => s.teams);
   const year = useSaveStore((s) => s.year);
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
+  const watchlist = useSaveStore((s) => s.watchlist);
+  const togglePin = useSaveStore((s) => s.togglePin);
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
-  // Same round-1 default as SeasonHub's own `RoundFixture` instance (see
-  // that file) — independent state, since this is a second, separately
-  // mounted instance of the same component embedded in the Ladder modal.
   const [fixtureRound, setFixtureRound] = useState(1);
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+  const [devSort, setDevSort] = useState<"movers" | "ceiling" | "youngest">("movers");
 
   const players = useMemo(() => getPlayersByClub(myClub), [myClub]);
   const lines = useMemo(() => summariseLines(players, leagueAverageOvr()), [players]);
   const clubAvgOvr = useMemo(() => averageOvr(players), [players]);
+  const eliteCount = players.filter((p) => p.OVR >= 84).length;
 
   const lastMatch = useMemo(() => (season && myClubId !== undefined ? lastPlayedMatchFor(season, myClubId) : null), [season, myClubId]);
   const ourTopPerformers = useMemo(
@@ -133,14 +107,6 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
 
   const prevLadder = useMemo(() => (season ? previousLadder(season) : []), [season]);
 
-  /**
-   * Round 89, ROADMAP item #40 — "ladder card form indicator." Built once here (rather than inside
-   * `CompactLadder`/the modal separately) since both `LadderTable` call sites on this page want the
-   * same per-club last-5 form, and `season.played` -> `RoundResult[]` is the same small remap either
-   * way. `engine/ladder.ts`'s `recentForm` does the actual W/L/D derivation from each played round's
-   * final scores — see that file's own doc comment for why the shape is a local `RoundResult`
-   * rather than `season.ts`'s own `PlayedMatch` (ladder.ts can't import season.ts).
-   */
   const formMap = useMemo(() => {
     if (!season) return new Map<number, ("W" | "L" | "D")[]>();
     const results: RoundResult[] = season.played.map((p) => ({
@@ -155,14 +121,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
 
   const totals = useMemo(() => (season ? seasonPlayerTotals(season) : null), [season]);
 
-  // Reuses the exact same `freeAgentsFor` Contracts.tsx's own "Your Out-of-Contract Players" list
-  // is built from (round 50, real bug caught live: an earlier `expired_year <= year` heuristic
-  // here counted 9 against Contracts' own real 3, since `freeAgencyStatus` only treats a contract
-  // as lapsed — not "Signed" — once `expired_year` has actually passed, not merely reached; see
-  // engine/contracts.ts's own `freeAgencyStatus`) — this way the count shown here can never drift
-  // from what clicking through to Contracts actually shows.
   const contractsOutThisYear = useMemo(() => freeAgentsFor(players, myClub, year).length, [players, myClub, year]);
-
   const lineupSet = myLineup ? isLineupComplete(myLineup) : false;
 
   const emergingTalent = useMemo(() => {
@@ -173,51 +132,113 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
       .slice(0, 3);
   }, [players, myLineup]);
 
+  // Round 115 — Record Watch + Development board, see engine/dashboardInsights.ts.
+  const recordWatch = useMemo(() => recordWatchFeedFor(myClub, seasonArchives, season, year), [myClub, seasonArchives, season, year]);
+  const developmentBoard = useMemo(() => developmentBoardFor(players, myClub, season, devSort), [players, myClub, season, devSort]);
+
+  // Round 115 — "biggest story on your list": the single most compelling, real, already-computed
+  // headline available this round, in priority order (best last-game performance this round, else
+  // the top Record Watch entry, else the top BREAKOUT development entry). A genuine editorial ranking
+  // across story TYPES is a bigger, separate piece of work — this is a disclosed, simple first pass,
+  // same "calibrated not specified" convention as the rest of this round's new mechanics.
+  const heroStory = useMemo(() => {
+    if (ourTopPerformers.length > 0 && lastMatch) {
+      const best = ourTopPerformers[0];
+      return {
+        tag: "TOP PERFORMER",
+        heading: `${playerFullName(best.player)} was best afield last round`,
+        sub: `${best.rating.toFixed(0)} rating, ${best.fantasyPoints.toFixed(0)} fantasy points in Round ${lastMatch.round}.`,
+        chips: [
+          { k: "RATING", v: best.rating.toFixed(0) },
+          { k: "FANTASY PTS", v: best.fantasyPoints.toFixed(0) },
+          { k: "ROUND", v: String(lastMatch.round) },
+          { k: "OVR", v: String(best.player.OVR) },
+        ],
+        big: String(best.player.OVR),
+        player: best.player,
+      };
+    }
+    if (recordWatch.length > 0) {
+      const top = recordWatch[0];
+      return {
+        tag: "RECORD WATCH",
+        heading: `${playerFullName(top.player)} is closing in on the ${top.categoryLabel} all-time list`,
+        sub: top.text,
+        chips: [
+          { k: "RANK", v: `${top.row.rank}` },
+          { k: "VALUE", v: `${Math.round(top.row.value)}` },
+          { k: "OVR", v: String(top.player.OVR) },
+          { k: "AGE", v: String(top.player.Age) },
+        ],
+        big: `${top.row.rank}`,
+        player: top.player,
+      };
+    }
+    const breakout = developmentBoard.find((d) => d.status === "BREAKOUT");
+    if (breakout) {
+      return {
+        tag: "BREAKOUT",
+        heading: `${playerFullName(breakout.player)} is trending well above their own season average`,
+        sub: breakout.action,
+        chips: [
+          { k: "OVR", v: String(breakout.player.OVR) },
+          { k: "CEILING", v: String(breakout.player.POT) },
+          { k: "AGE", v: String(breakout.player.Age) },
+          { k: "VS AVG", v: breakout.vsProjection.toFixed(1) },
+        ],
+        big: String(breakout.player.POT),
+        player: breakout.player,
+      };
+    }
+    return null;
+  }, [ourTopPerformers, lastMatch, recordWatch, developmentBoard]);
+
   const closeModal = () => setActiveModal(null);
 
   return (
-    <div className="space-y-6">
-      {/* Left border in the club's own colour — Aug 2026 branding pass (ROADMAP.md item #13):
-          the one moment on this screen that's most "this is YOUR club," styled the way a real
-          broadcast product colour-codes team identity at a glance. Badge upgraded from a plain
-          colour dot to the real `ClubBadge` round 51, [[Club Branding and Colours]]. */}
-      <div
-        className="card flex flex-wrap items-center justify-between gap-4 border-l-4"
-        style={{ borderLeftColor: club?.primaryColor }}
-      >
-        <div>
-          <div className="text-xs uppercase tracking-wide text-slate-400">Coaching</div>
-          <div className="flex items-center gap-2 font-display text-2xl">
-            <ClubBadge club={club} />
-            {club?.name} <span className="text-slate-400">{club?.nickname}</span>
-          </div>
-          <div className="text-xs text-slate-500">
-            {club?.colours} &middot; {club?.homeState} &middot; founded {club?.founded}
-          </div>
+    <div className="space-y-4">
+      <Card padding="18px 22px" style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+        <div style={{ width: 64, height: 64, flex: "none", borderRadius: 13, background: "var(--deep)", border: "1px solid color-mix(in oklch, var(--acc) 55%, transparent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <ClubBadge club={club} size="lg" />
         </div>
-        <select
-          className="rounded-lg border border-base-600 bg-base-900 px-3 py-2 text-sm"
-          value={myClub}
-          onChange={(e) => setMyClub(e.target.value)}
-        >
-          {CLUBS.map((c) => (
-            <option key={c.ClubID} value={c.name}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-      </div>
+        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+          <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>
+            YOUR CLUB · {year} {season ? `· AFTER ROUND ${season.played.length}` : "· NO SEASON IN PROGRESS"}
+          </div>
+          <h1 style={{ margin: "4px 0 2px", font: "700 34px/1 'Barlow Condensed',sans-serif", color: "#fff" }}>
+            {club?.name} <span style={{ color: "var(--accT)" }}>{club?.nickname}</span>
+          </h1>
+          <select
+            className="rounded-lg border border-base-600 bg-transparent px-2 py-1 text-sm text-slate-200"
+            value={myClub}
+            onChange={(e) => setMyClub(e.target.value)}
+          >
+            {CLUBS.map((c) => (
+              <option key={c.ClubID} value={c.name} style={{ background: "#121826" }}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <KpiTile value={clubAvgOvr.toFixed(1)} label="List avg OVR" />
+          <KpiTile value={eliteCount} label="Elite 84+" tone="accent" />
+          <KpiTile value={players.length} label="List size" />
+        </div>
+      </Card>
 
       {!season || myClubId === undefined ? (
-        <div className="card text-sm text-slate-400">
-          No season in progress yet — start one to see your ladder position, match recaps, upcoming opponents, coach
-          actions, and league stat leaders here.
-          {onGoToSeason && (
-            <button onClick={onGoToSeason} className="ml-2 font-medium text-accent-light hover:underline">
-              Go to Season →
-            </button>
-          )}
-        </div>
+        <Card>
+          <div className="text-sm text-slate-400">
+            No season in progress yet — start one to see your ladder position, match recaps, record watch,
+            development board, upcoming opponents, and league stat leaders here.
+            {onGoToSeason && (
+              <button onClick={onGoToSeason} className="ml-2 font-medium text-accent-light hover:underline" style={{ color: "var(--accT)" }}>
+                Go to Season →
+              </button>
+            )}
+          </div>
+        </Card>
       ) : (
         <>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -226,7 +247,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
                 onClick={() => setActiveModal({ type: "ladder" })}
                 className="mb-1.5 flex w-full items-center justify-between text-left"
               >
-                <div className="text-xs uppercase tracking-wide text-slate-400">Ladder</div>
+                <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5", textTransform: "uppercase" }}>Ladder</div>
                 <ExpandHint label="Full ladder + fixtures" />
               </button>
               <CompactLadder ladder={season.ladder} previousLadder={prevLadder} myClubId={myClubId} recentForm={formMap} />
@@ -251,6 +272,121 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
             </div>
           </div>
 
+          {heroStory && (
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>
+              <HeroCard style={{ flex: "2 1 540px", minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+                <Watermark>{heroStory.big}</Watermark>
+                <div style={{ position: "relative", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ font: "600 10px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "var(--on)", background: "var(--acc)", padding: "3px 7px", borderRadius: 4 }}>
+                    {heroStory.tag}
+                  </span>
+                  <span style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#b3bccb" }}>
+                    ROUND {season.played.length} · BIGGEST STORY ON YOUR LIST
+                  </span>
+                </div>
+                <div style={{ position: "relative" }}>
+                  <h2 style={{ margin: 0, font: "700 34px/1.1 'Barlow Condensed',sans-serif", color: "#fff" }}>{heroStory.heading}</h2>
+                  <div style={{ font: "500 15px/1.45 Barlow,sans-serif", color: "#dfe5ee", marginTop: 8, maxWidth: 580 }}>{heroStory.sub}</div>
+                </div>
+                <div style={{ position: "relative", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 8 }}>
+                  {heroStory.chips.map((c) => (
+                    <div key={c.k} style={{ background: "rgba(0,0,0,.28)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, padding: "10px 12px" }}>
+                      <div style={{ font: "700 26px/1 'Barlow Condensed',sans-serif", color: "#fff" }}>{c.v}</div>
+                      <div style={{ font: "500 9px 'IBM Plex Mono',monospace", letterSpacing: "1px", color: "#aab3c3", marginTop: 4 }}>{c.k}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ position: "relative", display: "flex", gap: 10, flexWrap: "wrap", marginTop: "auto" }}>
+                  <PlayerLink player={heroStory.player} as="span">
+                    <span style={{ background: "var(--acc)", color: "var(--on)", borderRadius: 9, padding: "11px 18px", font: "700 14px Barlow,sans-serif", cursor: "pointer", display: "inline-block" }}>
+                      Open career
+                    </span>
+                  </PlayerLink>
+                  <button
+                    type="button"
+                    onClick={() => togglePin(heroStory.player.PlayerID)}
+                    style={{ background: "transparent", color: watchlist.includes(heroStory.player.PlayerID) ? "var(--accT)" : "#dfe5ee", border: "1px solid rgba(255,255,255,.18)", borderRadius: 9, padding: "11px 16px", font: "600 14px Barlow,sans-serif", cursor: "pointer" }}
+                  >
+                    {watchlist.includes(heroStory.player.PlayerID) ? "★ On your watchlist" : "☆ Pin to watchlist"}
+                  </button>
+                </div>
+              </HeroCard>
+
+              <NextUpCard club={club} upcoming={upcoming} onGoToSeason={onGoToSeason} />
+            </div>
+          )}
+
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+              <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>WATCHLIST · {watchlist.length}/5</div>
+              <div style={{ font: "400 13px Barlow,sans-serif", color: "#9aa4b5" }}>Pinned players get priority in Record Watch.</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(min(100%,210px),1fr))", gap: 10 }}>
+              {watchlist.map((playerId) => {
+                const p = players.find((pl) => pl.PlayerID === playerId) ?? getPlayersByClub(myClub).find((pl) => pl.PlayerID === playerId);
+                if (!p) return null;
+                return (
+                  <div key={playerId} style={{ background: "rgba(0,0,0,.2)", border: "1px solid color-mix(in oklch, var(--acc) 28%, transparent)", borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <PlayerLink player={p}>
+                          <span style={{ font: "700 16px/1.1 'Barlow Condensed',sans-serif", color: "#fff" }}>{playerFullName(p)}</span>
+                        </PlayerLink>
+                        <div style={{ font: "500 11px Barlow,sans-serif", color: "#9aa4b5" }}>{p.archetype} · {p.Age}</div>
+                      </div>
+                      <PinStar pinned onToggle={() => togglePin(playerId)} title="Unpin" />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <div style={{ font: "700 24px/1 'Barlow Condensed',sans-serif", color: "#fff" }}>
+                        {p.OVR} <span style={{ color: "#7e889a", fontSize: 16 }}>→</span> <span style={{ color: "var(--accT)" }}>{p.POT}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {Array.from({ length: Math.max(0, 3 - watchlist.length) }, (_, i) => (
+                <div key={`empty-${i}`} style={{ border: "1px dashed rgba(255,255,255,.14)", borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4, minHeight: 110 }}>
+                  <div style={{ font: "600 14px Barlow,sans-serif", color: "#aab3c3" }}>Empty slot</div>
+                  <div style={{ font: "400 12px/1.4 Barlow,sans-serif", color: "#8f9ab0" }}>Pin a player from anywhere their name appears.</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+                <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>RECORD WATCH · WHOLE LIST</div>
+                <div style={{ font: "500 10px 'IBM Plex Mono',monospace", letterSpacing: "1px", color: "#8f9ab0" }}>RANKED BY SIGNIFICANCE</div>
+              </div>
+              {recordWatch.length === 0 ? (
+                <div className="text-sm text-slate-500">No one on your list is close to an all-time top-25 yet.</div>
+              ) : (
+                recordWatch.map((entry) => <RecordWatchRow key={`${entry.player.PlayerID}-${entry.category}`} entry={entry} />)
+              )}
+            </Card>
+
+            <Card padding="18px 16px 12px">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "0 4px 10px" }}>
+                <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>DEVELOPMENT · {developmentBoard.length} PLAYERS 23 & UNDER</div>
+                <Segmented
+                  options={[
+                    { value: "movers", label: "Movers" },
+                    { value: "ceiling", label: "Ceiling" },
+                    { value: "youngest", label: "Youngest" },
+                  ]}
+                  value={devSort}
+                  onChange={setDevSort}
+                />
+              </div>
+              {developmentBoard.length === 0 ? (
+                <div className="px-1 text-sm text-slate-500">No players 23-or-under (or drafted since 2024) on your list.</div>
+              ) : (
+                developmentBoard.map((entry) => <DevelopmentRow key={entry.player.PlayerID} entry={entry} pinned={watchlist.includes(entry.player.PlayerID)} onTogglePin={() => togglePin(entry.player.PlayerID)} />)
+              )}
+            </Card>
+          </div>
+
           <NextOpponentsCard
             upcoming={upcoming}
             season={season}
@@ -268,27 +404,8 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
         </>
       )}
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <div className="card">
-          <div className="text-xs uppercase tracking-wide text-slate-400">List size</div>
-          <div className="text-2xl font-semibold tabular-nums">{players.length}</div>
-        </div>
-        <div className="card">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Club avg OVR</div>
-          <div className="text-2xl font-semibold tabular-nums">{clubAvgOvr.toFixed(1)}</div>
-        </div>
-        <div className="card">
-          <div className="text-xs uppercase tracking-wide text-slate-400">League avg OVR</div>
-          <div className="text-2xl font-semibold tabular-nums">{leagueAverageOvr().toFixed(1)}</div>
-        </div>
-        <div className="card">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Elite (84+)</div>
-          <div className="text-2xl font-semibold tabular-nums">{players.filter((p) => p.OVR >= 84).length}</div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Line ratings vs league average</div>
+      <Card>
+        <div style={{ marginBottom: 12, font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>LINE RATINGS VS LEAGUE</div>
         <div className="space-y-3">
           {lines.map((line) => {
             const band = gapBand(line.gapToLeague);
@@ -296,26 +413,23 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
             return (
               <div key={line.line}>
                 <div className="mb-1 flex items-center justify-between text-sm">
-                  <span>
-                    {line.line} <span className="text-slate-500">({line.players.length})</span>
+                  <span style={{ font: "600 14px Barlow,sans-serif", color: "#eef2f8" }}>
+                    {line.line} <span style={{ color: "#8f9ab0", fontWeight: 400 }}>({line.players.length})</span>
                   </span>
-                  <span className="flex items-center gap-2 tabular-nums">
+                  <span className="flex items-center gap-2 tabular-nums" style={{ font: "600 13px 'IBM Plex Mono',monospace", color: "#fff" }}>
                     {line.avgOvr.toFixed(1)}
                     <span className={`stat-pill stat-pill-${band.tone}`}>{band.label}</span>
                   </span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-base-700">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,.07)", overflow: "hidden" }}>
+                  <div style={{ height: "100%", borderRadius: 3, background: "var(--acc)", width: `${pct}%` }} />
                 </div>
               </div>
             );
           })}
         </div>
-      </div>
+      </Card>
 
-      {/* Exactly one of these renders at a time, driven by `activeModal` — see this file's own
-          doc comment above for why that single-source-of-truth shape replaced round 52's
-          inline-grow accordion. */}
       {activeModal?.type === "ladder" && season && myClubId !== undefined && (
         <Modal title="Full season" onClose={closeModal}>
           <div className="space-y-4">
@@ -364,15 +478,102 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
   );
 }
 
+function NextUpCard({ club, upcoming, onGoToSeason }: { club: ReturnType<typeof clubByName>; upcoming: FixtureMatch[]; onGoToSeason?: () => void }) {
+  const myClubId = club?.ClubID;
+  const next = upcoming[0];
+  const opponentId = next ? (next.homeClubId === myClubId ? next.awayClubId : next.homeClubId) : undefined;
+  const opponent = opponentId !== undefined ? clubById(opponentId) : undefined;
+  return (
+    <Card style={{ flex: "1 1 300px", minWidth: 0, display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>
+        {next ? `NEXT UP · ROUND ${next.round}` : "NEXT UP"}
+      </div>
+      {next ? (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, flex: 1 }}>
+              <ClubBadge club={club} size="lg" />
+              <div style={{ font: "700 15px Barlow,sans-serif", color: "#fff", textAlign: "center" }}>{club?.name}</div>
+            </div>
+            <div style={{ font: "600 13px 'IBM Plex Mono',monospace", color: "#7e889a" }}>VS</div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, minWidth: 110 }}>
+              <ClubBadge club={opponent} size="lg" />
+              <div style={{ font: "700 15px Barlow,sans-serif", color: "#fff", textAlign: "center" }}>{opponent?.name}</div>
+            </div>
+          </div>
+          <div style={{ font: "400 13px Barlow,sans-serif", color: "#aab3c3", textAlign: "center" }}>
+            {next.homeClubId === myClubId ? "Home" : "Away"}
+          </div>
+        </>
+      ) : (
+        <div className="text-sm text-slate-500">Season's home-and-away fixture is complete — check the Season tab for finals.</div>
+      )}
+      {onGoToSeason && (
+        <button
+          type="button"
+          onClick={onGoToSeason}
+          style={{ marginTop: "auto", background: "var(--acc)", color: "var(--on)", border: 0, borderRadius: 9, padding: "12px 18px", font: "700 15px Barlow,sans-serif", cursor: "pointer" }}
+        >
+          Go to Season
+        </button>
+      )}
+    </Card>
+  );
+}
+
+function RecordWatchRow({ entry }: { entry: RecordWatchEntry }) {
+  const tone = entry.row.rank === 1 ? "accent" : "neutral";
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "11px 0", borderTop: "1px solid rgba(255,255,255,.06)" }}>
+      <StatusChip tone={tone}>#{entry.row.rank}</StatusChip>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ font: "600 14px/1.35 Barlow,sans-serif", color: "#eef2f8" }}>
+          <PlayerLink player={entry.player} as="span">
+            {playerFullName(entry.player)}
+          </PlayerLink>{" "}
+          — {entry.categoryLabel}
+        </div>
+        <div style={{ font: "400 13px/1.4 Barlow,sans-serif", color: "#9aa4b5", marginTop: 2 }}>{entry.text}</div>
+      </div>
+    </div>
+  );
+}
+
+const STATUS_TONE: Record<DevelopmentEntry["status"], "good" | "warn" | "bad" | "neutral"> = {
+  BREAKOUT: "good",
+  "NEEDS GAMES": "warn",
+  STALLING: "bad",
+  "ON TRACK": "neutral",
+};
+
+function DevelopmentRow({ entry, pinned, onTogglePin }: { entry: DevelopmentEntry; pinned: boolean; onTogglePin: () => void }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 34px 110px 50px 92px 24px", gap: 10, alignItems: "center", padding: "9px 4px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+        <span style={{ display: "flex", gap: 6, alignItems: "baseline", minWidth: 0 }}>
+          <PlayerLink player={entry.player} as="span">
+            <span style={{ font: "600 14px Barlow,sans-serif", color: "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{playerFullName(entry.player)}</span>
+          </PlayerLink>
+          <span style={{ font: "500 10px 'IBM Plex Mono',monospace", color: "#8f9ab0", whiteSpace: "nowrap" }}>{entry.player.Age}</span>
+        </span>
+        <span style={{ font: "500 12px Barlow,sans-serif", color: "#aab3c3", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.action}</span>
+      </span>
+      <span style={{ textAlign: "right", font: "600 14px 'IBM Plex Mono',monospace", color: "#fff" }}>{entry.player.OVR}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <DivergingBar value={entry.vsProjection} max={8} />
+        <TrendValue value={entry.vsProjection} decimals={0} />
+      </span>
+      <span style={{ textAlign: "right", font: "600 14px 'IBM Plex Mono',monospace", color: "var(--accT)", whiteSpace: "nowrap" }}>{entry.player.POT}</span>
+      <span><StatusChip tone={STATUS_TONE[entry.status]}>{entry.status}</StatusChip></span>
+      <span><PinStar pinned={pinned} onToggle={onTogglePin} /></span>
+    </div>
+  );
+}
+
 /**
- * A trimmed ladder view for the Dashboard — the 3 rows above and below
- * `myClubId`'s own position (clamped to the table's edges), rather than the
- * full 18-row `LadderTable` SeasonHub already shows in full. Tyler asked for
- * "where we are on the ladder," which is best answered by nearby context
- * (who's just above/below), not a repeat of the whole competition table this
- * page would otherwise duplicate. This is the compact preview shown next to
- * the "Expand" trigger that opens the full ladder in a modal (see round 53,
- * this file's own top-level doc comment).
+ * A trimmed ladder view for the Dashboard — the 3 rows above and below `myClubId`'s own position
+ * (clamped to the table's edges), rather than the full 18-row `LadderTable` SeasonHub already shows
+ * in full. See this file's own round-53/89 history for why this stays a compact preview.
  */
 function CompactLadder({
   ladder,
@@ -383,21 +584,12 @@ function CompactLadder({
   ladder: LadderRow[];
   previousLadder: LadderRow[];
   myClubId: number;
-  /** Round 89, ROADMAP item #40 — forwarded straight to `LadderTable`'s own optional Form column, see this file's top-level `formMap`. */
   recentForm?: Map<number, ("W" | "L" | "D")[]>;
 }) {
   const myIndex = ladder.findIndex((r) => r.clubId === myClubId);
   const start = Math.max(0, Math.min(myIndex - 3, ladder.length - 7));
   const end = Math.min(ladder.length, start + 7);
-  // Real bug caught live this round: rank numbers, the finals marker, and the movement arrow all
-  // need each row's TRUE league-wide index — passing a pre-sliced array reset that index to 0 at
-  // the top of the slice (Melbourne, actually 9th, rendered as "4" with an inflated movement
-  // figure). Fixed by handing `LadderTable` the FULL ladder plus which club IDs to actually
-  // render (`windowClubIds`), so `i` in its own row map always reflects the true rank — see that
-  // component's own doc comment.
   const windowClubIds = new Set(ladder.slice(Math.max(0, start), end).map((r) => r.clubId));
-  // `prev` is never windowed either — movement needs each club's full league-wide rank at both
-  // points in time, not just its rank within this trimmed view.
   const prevFull = prev.length ? prev : ladder;
   return (
     <LadderTable
@@ -424,10 +616,10 @@ function LastGameCard({
 }) {
   if (!match) {
     return (
-      <div className="card">
+      <Card>
         <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Last game</div>
         <div className="text-sm text-slate-500">No games played yet this season.</div>
-      </div>
+      </Card>
     );
   }
   const weAreHome = match.homeClubId === myClubId;
@@ -439,9 +631,9 @@ function LastGameCard({
   const tone = ourPoints > theirPoints ? "text-good" : ourPoints < theirPoints ? "text-bad" : "text-slate-400";
 
   return (
-    <div className="card">
+    <Card>
       <button onClick={onExpand} className="mb-1 flex w-full items-center justify-between text-left">
-        <div className="text-xs uppercase tracking-wide text-slate-400">Last game &middot; Round {match.round}</div>
+        <div className="text-xs uppercase tracking-wide text-slate-400">Last game · Round {match.round}</div>
         <ExpandHint label="Full stats" />
       </button>
       <div className="mb-2 flex items-baseline justify-between">
@@ -464,17 +656,16 @@ function LastGameCard({
                 <PlayerLink player={p.player} />
               </span>
               <span className="tabular-nums text-slate-400">
-                {p.rating.toFixed(0)} RTG &middot; {p.fantasyPoints.toFixed(0)} FP
+                {p.rating.toFixed(0)} RTG · {p.fantasyPoints.toFixed(0)} FP
               </span>
             </div>
           ))}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
-/** Opens the same `FullTimeResult` screen used everywhere else a match result is shown (SeasonHub's fixture browser, the live match flow) — reused, not rebuilt, so this is genuinely "the full statistics and write-up," not a cut-down summary. */
 function LastGameModal({ match, teams, onClose }: { match: PlayedMatch; teams: Map<number, MatchTeam>; onClose: () => void }) {
   const home = teams.get(match.homeClubId);
   const away = teams.get(match.awayClubId);
@@ -514,8 +705,8 @@ function NextOpponentsCard({
   const myClubId = clubByName(myClub)?.ClubID;
 
   return (
-    <div className="card">
-      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">Coming up</div>
+    <Card>
+      <div style={{ marginBottom: 12, font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>COMING UP</div>
       {upcoming.length === 0 ? (
         <div className="text-sm text-slate-500">
           Season's home-and-away fixture is complete — check the Season tab for finals.
@@ -531,11 +722,12 @@ function NextOpponentsCard({
               <button
                 key={`${fx.round}-${opponentId}`}
                 onClick={() => onScoutClub(opponentId)}
-                className="rounded-lg bg-base-800 p-3 text-left hover:bg-base-700"
+                className="rounded-lg p-3 text-left"
+                style={{ background: "rgba(0,0,0,.2)", border: "1px solid rgba(255,255,255,.06)" }}
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="text-xs text-slate-500">
-                    Round {fx.round} &middot; {fx.homeClubId === myClubId ? "Home" : "Away"}
+                    Round {fx.round} · {fx.homeClubId === myClubId ? "Home" : "Away"}
                   </div>
                   <ExpandHint label="Scout" />
                 </div>
@@ -548,14 +740,10 @@ function NextOpponentsCard({
                     <div className="text-slate-500">Their best recent form</div>
                     {opponentTop.map((p) => (
                       <div key={p.player.PlayerID} className="truncate">
-                        {/* Round 95, Tyler: "launch the player profile from anywhere the player name is
-                            displayed." Nested inside this card's own onScoutClub button, so as="span" +
-                            PlayerLink's built-in stopPropagation keeps a name click from also opening
-                            club scouting. */}
                         <PlayerLink player={p.player} as="span">
                           {playerFullName(p.player)}
                         </PlayerLink>{" "}
-                        &middot; {p.rating.toFixed(0)} RTG
+                        · {p.rating.toFixed(0)} RTG
                       </div>
                     ))}
                   </div>
@@ -567,7 +755,7 @@ function NextOpponentsCard({
           })}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -590,29 +778,27 @@ function ActionsCard({
   onGoToContracts?: () => void;
   onOpenLastGame?: () => void;
 }) {
-  // Sep 2026 round 90, [[Coaches Votes and MVP Award]], backlog #30 — replaces the old "Worth
-  // acknowledging" line (which only ever repeated `LastGameCard`'s own "Best afield for us" list
-  // right above this card, so nothing is lost by dropping it) with an actionable prompt whenever
-  // the user's own club played a match that still has an un-submitted ballot waiting on them.
-  // `lastMatch.coachesVotes` is undefined for a match simulated before this feature existed — no
-  // prompt in that case either, same "missing = feature didn't exist yet" convention used elsewhere.
   const mySide: "home" | "away" | null = lastMatch ? (lastMatch.homeClubId === myClubId ? "home" : lastMatch.awayClubId === myClubId ? "away" : null) : null;
   const myBallotIsUser = mySide === "home" ? lastMatch?.coachesVotes?.homeBallotIsUser : mySide === "away" ? lastMatch?.coachesVotes?.awayBallotIsUser : undefined;
   const needsVote = !!lastMatch?.coachesVotes && mySide !== null && !myBallotIsUser;
   const opponentId = lastMatch ? (mySide === "home" ? lastMatch.awayClubId : lastMatch.homeClubId) : undefined;
 
   return (
-    <div className="card">
+    <Card>
       <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Coach actions</div>
 
       {needsVote && lastMatch && (
-        <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-base-800 p-2.5 text-sm">
+        <div className="mb-3 flex items-center justify-between gap-2 rounded-lg p-2.5 text-sm" style={{ background: "rgba(0,0,0,.2)" }}>
           <span>
-            <span className="font-medium text-accent-light">Coaches votes: </span>
+            <span className="font-medium" style={{ color: "var(--accT)" }}>Coaches votes: </span>
             Submit your 5-4-3-2-1 for Round {lastMatch.round} vs {clubById(opponentId ?? -1)?.name ?? "your last opponent"}.
           </span>
           {onOpenLastGame && (
-            <button onClick={onOpenLastGame} className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
+            <button
+              onClick={onOpenLastGame}
+              className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold"
+              style={{ background: "var(--acc)", color: "var(--on)" }}
+            >
               Submit votes
             </button>
           )}
@@ -631,12 +817,8 @@ function ActionsCard({
           />
         )}
         {emergingTalent.length > 0 && (
-          <div className="rounded-lg bg-base-800 p-2.5 text-sm">
+          <div className="rounded-lg p-2.5 text-sm" style={{ background: "rgba(0,0,0,.2)" }}>
             <span className="font-medium">Emerging talent to watch: </span>
-            {/* Round 95, Tyler: "launch the player profile from anywhere the player name is displayed."
-                Was a single `.join(", ")`-ed string — rebuilt as per-player elements (still comma-separated)
-                so each name is individually a PlayerLink; nothing else in this card is clickable, so a
-                plain default PlayerLink (no stopPropagation/as="span" needed) is enough here. */}
             {emergingTalent.map((p, i) => (
               <span key={p.PlayerID}>
                 <PlayerLink player={p}>{playerFullName(p)}</PlayerLink> ({p.Age}, {p.POT} POT)
@@ -649,25 +831,16 @@ function ActionsCard({
           <div className="text-sm text-slate-500">Nothing urgent on your list right now.</div>
         )}
       </div>
-
-      <div className="mt-3 flex flex-wrap gap-1.5 border-t border-base-700 pt-3">
-        <span className="text-xs text-slate-500">Coming soon:</span>
-        {["Injury management", "Media commitments", "Player happiness alerts"].map((label) => (
-          <span key={label} className="rounded-full bg-base-800 px-2 py-0.5 text-xs text-slate-500">
-            {label}
-          </span>
-        ))}
-      </div>
-    </div>
+    </Card>
   );
 }
 
 function ActionRow({ label, onClick, cta }: { label: string; onClick?: () => void; cta: string }) {
   return (
-    <div className="flex items-center justify-between gap-2 rounded-lg bg-base-800 p-2.5 text-sm">
+    <div className="flex items-center justify-between gap-2 rounded-lg p-2.5 text-sm" style={{ background: "rgba(0,0,0,.2)" }}>
       <span>{label}</span>
       {onClick && (
-        <button onClick={onClick} className="shrink-0 font-medium text-accent-light hover:underline">
+        <button onClick={onClick} className="shrink-0 font-medium hover:underline" style={{ color: "var(--accT)" }}>
           {cta} →
         </button>
       )}
@@ -682,11 +855,7 @@ const LEAGUE_STATS: { key: LeagueStat; label: string }[] = [
   { key: "fantasyPoints", label: "Fantasy Points" },
 ];
 
-// How many rows the Dashboard's own quick-glance card shows before you have to expand — kept
-// small deliberately, the expanded modal is where the real depth lives (see `LEADER_MODAL_LIMIT`
-// below).
 const LEADER_CARD_LIMIT = 5;
-/** Aug 2026 round 54 — [[Season Stats and Records]] Option B: "top 100 players (expandable)," widened from round 53's 25. `Modal`'s own outer wrapper already scrolls (see its own doc comment), so 100 simple rows needs no pagination or virtualisation at this scale. */
 const LEADER_MODAL_LIMIT = 100;
 
 function LeagueLeadersCard({
@@ -699,13 +868,10 @@ function LeagueLeadersCard({
   onExpandStat: (stat: LeagueStat, label: string) => void;
 }) {
   return (
-    <div className="card">
+    <Card>
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wide text-slate-400">Competition leaders this season</div>
-        {/* Aug 2026 round 54 — [[Season Stats and Records]]: the 4 tiles below stay a curated
-            quick-glance set, but every one of the 18 tracked stats (plus Total/Average/Last 5/
-            All-Time views) is reachable from here via the modal's own stat-picker. */}
-        <button onClick={() => onExpandStat("fantasyPoints", "Fantasy Points")} className="text-xs font-medium text-accent-light hover:underline">
+        <div style={{ font: "500 11px 'IBM Plex Mono',monospace", letterSpacing: "1.5px", color: "#9aa4b5" }}>Competition leaders this season</div>
+        <button onClick={() => onExpandStat("fantasyPoints", "Fantasy Points")} className="text-xs font-medium hover:underline" style={{ color: "var(--accT)" }}>
           Browse all stats →
         </button>
       </div>
@@ -727,7 +893,8 @@ function LeagueLeadersCard({
                   top.map((r, i) => (
                     <div
                       key={r.player.PlayerID}
-                      className={`flex items-center justify-between gap-2 ${r.player.Team === myClub ? "font-semibold text-accent-light" : "text-slate-300"}`}
+                      className="flex items-center justify-between gap-2"
+                      style={r.player.Team === myClub ? { color: "var(--accT)", fontWeight: 600 } : { color: "#c3ccdd" }}
                     >
                       <span className="truncate">
                         <span className="mr-1 text-slate-500 tabular-nums">{i + 1}</span>
@@ -740,7 +907,6 @@ function LeagueLeadersCard({
               </div>
               {ourBest && (
                 <div className="mt-1.5 text-xs text-slate-500">
-                  {/* Round 95, Tyler: "launch the player profile from anywhere the player name is displayed." */}
                   Our best: <PlayerLink player={ourBest.player}>{playerFullName(ourBest.player)}</PlayerLink>, {Math.round(ourBest.value)} ({ourBest.rank}
                   {ordinalSuffix(ourBest.rank)})
                 </div>
@@ -749,7 +915,7 @@ function LeagueLeadersCard({
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -763,17 +929,6 @@ const VIEW_MODES: { key: LeaderViewMode; label: string; isAverage: boolean }[] =
   { key: "allTimeAverage", label: "Average (All Time)", isAverage: true },
 ];
 
-/**
- * The expanded view of one Competition Leaders column — Aug 2026 round 54,
- * [[Season Stats and Records]] Option B. `stat`/`label` seed the initial
- * view (whichever tile or "Browse all stats" link opened this), but both
- * are freely changeable here via the stat-picker, and `viewMode` switches
- * between Tyler's 5 requested windows. Takes `season`/`seasonArchives`
- * rather than a single pre-computed `totals` map (unlike round 53) since
- * which map is actually needed now depends on `viewMode` — computed locally
- * via `useMemo` so switching views doesn't touch the compact card's own
- * season-totals-only computation in the parent.
- */
 function LeaderModal({
   stat: initialStat,
   label: initialLabel,
@@ -818,9 +973,8 @@ function LeaderModal({
           <button
             key={v.key}
             onClick={() => setViewMode(v.key)}
-            className={`rounded-full px-3 py-1 text-xs font-medium ${
-              viewMode === v.key ? "bg-accent text-white" : "bg-base-800 text-slate-400 hover:bg-base-700"
-            }`}
+            className="rounded-full px-3 py-1 text-xs font-medium"
+            style={viewMode === v.key ? { background: "var(--acc)", color: "var(--on)" } : { background: "rgba(0,0,0,.2)", color: "#9aa4b5" }}
           >
             {v.label}
           </button>
@@ -850,9 +1004,8 @@ function LeaderModal({
           top.map((r, i) => (
             <div
               key={r.player.PlayerID}
-              className={`flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 ${
-                r.player.Team === myClub ? "bg-accent/10 font-semibold text-accent-light" : "odd:bg-base-800/50"
-              }`}
+              className="flex items-center justify-between gap-2 rounded-lg px-3 py-1.5"
+              style={r.player.Team === myClub ? { background: "color-mix(in oklch, var(--acc) 12%, transparent)", color: "var(--accT)", fontWeight: 600 } : {}}
             >
               <span className="flex min-w-0 items-center gap-2">
                 <span className="w-6 text-slate-500 tabular-nums">{i + 1}</span>

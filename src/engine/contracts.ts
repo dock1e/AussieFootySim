@@ -5,6 +5,8 @@ import type { Player } from "../types/player.ts";
 import { playerFullName } from "../types/player.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
 import { clubHistoryEntryForDelisting, clubHistoryEntryForFreeAgency, type ClubHistoryUpdate } from "./clubHistory.ts";
+import { wellbeingReSignBonus } from "./clubFinance.ts";
+import type { ClubFinanceState } from "../types/clubFinance.ts";
 
 /**
  * Contracts, salary cap & free agency — Phase 4 Slice 3 (ROADMAP.md).
@@ -65,6 +67,18 @@ export const RE_SIGN_PROBABILITY: Record<Exclude<FreeAgencyStatus, "Signed">, nu
   OOC: 0.55,
   UFA: 0.25,
 };
+
+/**
+ * Round 121: [[Club Finance, Facilities, and Marketing]]'s Player Wellbeing & Education facility —
+ * `wellbeingBonus` is `wellbeingReSignBonus(clubFinance)` from `engine/clubFinance.ts` (0 if the club
+ * has no Wellbeing facility, or no `ClubFinanceState` at all — a pre-round-121 save default). Added
+ * directly to the base probability and clamped to 0.97 so it can nudge, never guarantee, a re-sign —
+ * the Marketing round's off-cap ASP lever is the intended headline retention tool, this is a smaller,
+ * complementary one, per the design note's ¶65 "why this doesn't paint anyone into a dead end".
+ */
+export function effectiveReSignProbability(status: Exclude<FreeAgencyStatus, "Signed">, wellbeingBonus = 0): number {
+  return Math.min(0.97, RE_SIGN_PROBABILITY[status] + wellbeingBonus);
+}
 
 // ---------------------------------------------------------------------------
 // Salary cap
@@ -425,6 +439,7 @@ export function simulateLeagueContracts(
   currentYear: number,
   day: number,
   seed: number,
+  clubFinance?: Readonly<Record<string, ClubFinanceState>>,
 ): { players: Player[]; activity: LeagueActivityEntry[]; historyEntries: ClubHistoryUpdate[] } {
   const rng = mulberry32(seed);
   const activity: LeagueActivityEntry[] = [];
@@ -436,7 +451,8 @@ export function simulateLeagueContracts(
     if (status === "Signed") return p;
 
     const name = playerFullName(p);
-    const stays = rng() < RE_SIGN_PROBABILITY[status];
+    const wellbeingBonus = clubFinance?.[p.Team] ? wellbeingReSignBonus(clubFinance[p.Team]) : 0;
+    const stays = rng() < effectiveReSignProbability(status, wellbeingBonus);
 
     if (stays) {
       const years = 2 + Math.floor(rng() * 3); // 2-4 years, a reasonable AI re-sign length

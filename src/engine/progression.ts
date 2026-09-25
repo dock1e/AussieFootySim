@@ -176,30 +176,43 @@ export function ageOnePlayer(p: Player, developmentMultiplier = 1): Player {
   return next;
 }
 
-/** The exact OVR formula from Schema.md's `OVR` row: a raw composite (mean of the 20 RATED_ATTRIBUTES, each weighted x3 if it's one of the player's archetype's ARCHETYPE_PRIMARY_ATTRIBUTES, x1 otherwise), z-scored against the full population passed in, rescaled to `50 + z*13`, clipped to `[28, 99]`. */
-export function recomputeOVR(players: readonly Player[]): Player[] {
-  function rawComposite(p: Player): number {
-    const primary = new Set(ARCHETYPE_PRIMARY_ATTRIBUTES[p.archetype as Archetype]);
-    let weightedSum = 0;
-    let weightTotal = 0;
-    for (const attr of RATED_ATTRIBUTES) {
-      const weight = primary.has(attr) ? 3 : 1;
-      weightedSum += p[attr] * weight;
-      weightTotal += weight;
-    }
-    return weightedSum / weightTotal;
+/**
+ * The raw (pre-z-score) side of Schema.md's `OVR` formula: mean of the 20 `RATED_ATTRIBUTES`, each
+ * weighted x3 if it's one of the player's archetype's `ARCHETYPE_PRIMARY_ATTRIBUTES`, x1 otherwise.
+ * Extracted as its own export (round 118, [[Club Theme System]] Player Career screen) so a forward
+ * OVR projection can re-run this exact formula against a hypothetically-aged player without
+ * duplicating it — `recomputeOVR` below is now just this function plus the population z-score step.
+ */
+export function ovrRawComposite(p: Player): number {
+  const primary = new Set(ARCHETYPE_PRIMARY_ATTRIBUTES[p.archetype as Archetype]);
+  let weightedSum = 0;
+  let weightTotal = 0;
+  for (const attr of RATED_ATTRIBUTES) {
+    const weight = primary.has(attr) ? 3 : 1;
+    weightedSum += p[attr] * weight;
+    weightTotal += weight;
   }
+  return weightedSum / weightTotal;
+}
 
-  const composites = players.map(rawComposite);
+/** `{mean, stdDev}` of `ovrRawComposite` across a population — the z-score denominator `recomputeOVR` needs. Extracted (round 118) so it can be computed ONCE against today's real population and then reused, frozen, to convert a projected future raw composite into an OVR-shaped number without re-running the full league through `ageOnePlayer` too — see `careerProjection.ts`'s own doc comment for why that's a disclosed approximation. */
+export function populationOvrStats(players: readonly Player[]): { mean: number; stdDev: number } {
+  const composites = players.map(ovrRawComposite);
   const mean = composites.reduce((a, b) => a + b, 0) / composites.length;
   const variance = composites.reduce((a, c) => a + (c - mean) ** 2, 0) / composites.length;
-  const stdDev = Math.sqrt(variance);
+  return { mean, stdDev: Math.sqrt(variance) };
+}
 
-  return players.map((p, i) => {
-    const z = stdDev === 0 ? 0 : (composites[i] - mean) / stdDev;
-    const ovr = Math.max(28, Math.min(99, Math.round(50 + z * 13)));
-    return { ...p, OVR: ovr };
-  });
+/** `rawComposite` -> OVR, given a (population) `{mean, stdDev}` — the exact `50 + z*13`, clipped `[28,99]` rescale, split out of `recomputeOVR` so it can be reused against a frozen population baseline. */
+export function ovrFromRawComposite(rawComposite: number, stats: { mean: number; stdDev: number }): number {
+  const z = stats.stdDev === 0 ? 0 : (rawComposite - stats.mean) / stats.stdDev;
+  return Math.max(28, Math.min(99, Math.round(50 + z * 13)));
+}
+
+/** The exact OVR formula from Schema.md's `OVR` row: a raw composite (mean of the 20 RATED_ATTRIBUTES, each weighted x3 if it's one of the player's archetype's ARCHETYPE_PRIMARY_ATTRIBUTES, x1 otherwise), z-scored against the full population passed in, rescaled to `50 + z*13`, clipped to `[28, 99]`. */
+export function recomputeOVR(players: readonly Player[]): Player[] {
+  const stats = populationOvrStats(players);
+  return players.map((p) => ({ ...p, OVR: ovrFromRawComposite(ovrRawComposite(p), stats) }));
 }
 
 /**

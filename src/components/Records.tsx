@@ -11,7 +11,8 @@ import { ALL_LEAGUE_STATS } from "../engine/seasonSummary";
 import { ARCHETYPES, type Archetype } from "../types/archetype";
 import { CLUBS, clubByName } from "../types/club";
 import type { Player } from "../types/player";
-import { clubVars, themeRootVars, SURFACE, MEANING, MEDALS } from "../theme/clubTheme";
+import { clubTokensFor, MEANING_TOKENS as MEANING } from "../theme/clubTokens";
+import { clubThemeStyle } from "../theme/useClubTheme";
 
 /**
 /**
@@ -109,9 +110,9 @@ import { clubVars, themeRootVars, SURFACE, MEANING, MEDALS } from "../theme/club
  * `SEASON_WRITEUP_TEMPLATES` pool is now 40 (and picked up a genuine grammar-bug fix for the rank-1
  * case along the way — see that file's own doc comment).
  *
- * Round 114 — UI Redesign3 (`Club Theme System.dc.html` "Statistics" screen, brief §4.7 / layout
+ * Round 125 — UI Redesign3 (supersedes Round 120's colour-only re-theme) (`Club Theme System.dc.html` "Statistics" screen, brief §4.7 / layout
  * pattern B). Rebuilt as ONE leaders table under a single filter bar (Search · Scope · Stat group ·
- * Position · Team · Reset), themed by the coached club's five tokens (`theme/clubTheme.ts`):
+ * Position · Team · Reset), themed by the coached club's five tokens (set app-wide by App.tsx from `theme/clubTokens.ts`):
  *   - This Season: every player who has played, every category at once (`seasonStatsTable`), sticky
  *     Rank + Player columns with horizontal scroll, click-to-sort headers (click again to flip), a
  *     Total/Average switch, and position-percentile BENCHMARKING shading (Elite top 10% / Above avg
@@ -124,8 +125,8 @@ import { clubVars, themeRootVars, SURFACE, MEANING, MEDALS } from "../theme/club
  *     Statistic select, same table chrome, medal-coloured ranks 1-3, ACTIVE / AFS tags, an
  *     "In this save" column carrying Round 60's real + save split, and an Active-only toggle.
  *   - A "your club" strip ranks your best players in the sorted column among ALL players (the
- *     reference's watchlist strip; there's no watchlist store yet, so it uses its own documented
- *     "YOUR BEST-RANKED PLAYER" fallback, widened to three).
+ *     reference's watchlist strip, fed by the Dashboard watchlist; with no pins it uses the reference's
+ *     own "YOUR BEST-RANKED PLAYER" fallback, widened to three).
  *   - Clicking a season row opens a side drawer with every stat's value, league rank and tier, plus
  *     the full player profile link. All-time rows open the profile directly.
  * Position filter: the reference's four position groups (MID/FWD/DEF/RUC, mapped from archetype),
@@ -237,6 +238,22 @@ const MONO = "'IBM Plex Mono', ui-monospace, monospace";
 const COND = "'Barlow Condensed', sans-serif";
 const BARLOW = "Barlow, system-ui, sans-serif";
 
+/** Brief §2.3 surfaces — every value reads the club vars App.tsx sets on the app root. */
+const SURFACE = {
+  card: "color-mix(in oklch, var(--deep) var(--tc), #10151f)",
+  hero: "color-mix(in oklch, var(--deep) calc(var(--tc) * 2.4), #10151f)",
+  panel: "color-mix(in oklch, var(--deep) calc(var(--tc) * 1.6), #0d121b)",
+  inset: "rgba(0,0,0,.25)",
+  border: "rgba(255,255,255,.07)",
+  divider: "rgba(255,255,255,.05)",
+} as const;
+const MEDALS = [MEANING.gold, MEANING.silver, MEANING.bronze] as const;
+
+/** Another club's five vars, scoped to a wrapper — the only place a non-coached club's colours appear. */
+function clubVars(name: string | undefined): CSSProperties {
+  return clubThemeStyle(clubTokensFor(name ? clubByName(name)?.abbreviation : undefined));
+}
+
 const cardStyle: CSSProperties = { background: SURFACE.card, border: `1px solid ${SURFACE.border}`, borderRadius: 16 };
 const fieldLabel: CSSProperties = { font: `500 9px ${MONO}`, letterSpacing: "1.2px", color: "#8f9ab0" };
 const fieldInput: CSSProperties = {
@@ -322,6 +339,7 @@ export function Records() {
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
   const year = useSaveStore((s) => s.year);
   const myClub = useGameStore((s) => s.myClub);
+  const watchlist = useSaveStore((s) => s.watchlist);
 
   const [scope, setScope] = useState<Scope>(season ? "season" : "allTime");
   const [group, setGroup] = useState<GroupKey>("all");
@@ -429,9 +447,12 @@ export function Records() {
 
   // ---------- Your-club strip ----------
   const statName = CATEGORY_LABEL[isSeason ? seasonSortKey : sortKey];
-  const yourRows = isSeason
-    ? leagueRanked.filter((x) => x.row.club === myClub).slice(0, 3)
-    : [];
+  // Reference watchlist strip: your pinned players (Dashboard watchlist, max 5) ranked among ALL
+  // players in the sorted column; with nothing pinned (or no pinned player has played yet), falls
+  // back to your club's three best-ranked players.
+  const pinnedRows = isSeason ? watchlist.map((id) => leagueRanked.find((x) => x.row.id === id)).filter((x): x is { row: SeasonRowVM; rank: number } => !!x) : [];
+  const usingWatchlist = pinnedRows.length > 0;
+  const yourRows = usingWatchlist ? pinnedRows : isSeason ? leagueRanked.filter((x) => x.row.club === myClub).slice(0, 3) : [];
   const leagueOf = leagueRanked.length;
 
   function resetFilters() {
@@ -524,7 +545,7 @@ export function Records() {
   }
 
   return (
-    <div style={{ ...themeRootVars(myClub), fontFamily: BARLOW, color: "#e9edf4" }} className="flex flex-col gap-3.5">
+    <div style={{ fontFamily: BARLOW, color: "#e9edf4" }} className="flex flex-col gap-3.5">
       <div>
         <div style={{ font: `500 11px ${MONO}`, letterSpacing: "1.5px", color: "#9aa4b5" }}>STATISTICS · REAL VFL/AFL HISTORY + YOUR SAVE</div>
         <h1 style={{ margin: "4px 0 0", font: `700 44px/1 ${COND}`, color: "#fff" }}>Stats leaders</h1>
@@ -668,7 +689,7 @@ export function Records() {
         <section style={{ background: SURFACE.hero, border: "1px solid color-mix(in oklch, var(--acc) 35%, transparent)", borderRadius: 14, padding: "8px 8px 6px" }}>
           <div className="flex justify-between gap-2.5" style={{ padding: "6px 10px", font: `600 10px ${MONO}`, letterSpacing: "1.5px", color: "var(--accT)" }}>
             <span>
-              YOUR BEST-RANKED · {statName.toUpperCase()}
+              {usingWatchlist ? "YOUR WATCHLIST" : "YOUR BEST-RANKED"} · {statName.toUpperCase()}
             </span>
             <span style={{ color: "#8f9ab0", fontWeight: 500 }}>RANK AMONG ALL PLAYERS</span>
           </div>
@@ -1012,7 +1033,7 @@ function StatDrawer({
  * Single-Game High section needs to be relevant to the stat that we're currently looking at").
  * Goals/Disposals keep their richer `afltablesBigLists.ts` source (exact date, venue, K/H breakdown,
  * top 50 deep); every other single-game-eligible category uses `afltablesGameHighs.ts` (year +
- * opponent only, top 20 deep). Renders nothing for a category with no single-game source. Round 114:
+ * opponent only, top 20 deep). Renders nothing for a category with no single-game source. Round 125:
  * restyled to the Redesign3 card/row chrome; data and logic unchanged.
  */
 function SingleGameHighsCard({ category, label }: { category: RecordCategory; label: string }) {

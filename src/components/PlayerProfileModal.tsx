@@ -586,7 +586,12 @@ function ToggleGroup<T extends string>({ value, onChange, labels }: { value: T; 
   );
 }
 
-interface YearRow {
+/**
+ * Round 118 — [[Club Theme System]] Player Career screen exports this file's own real season-history
+ * logic (`yearRowsFor`, `sumYearRows`) rather than forking a second copy — the exact "one source of
+ * truth" reasoning `PlayerProfileContent` was exported for in round 103, applied one level deeper.
+ */
+export interface YearRow {
   year: number;
   totals: SeasonPlayerTotals;
   /** True for a row sourced from `realSeasonHistory.ts` (real-world afltables data), false for this save's own simulated seasons. Drives `CareerTable`'s small "AFL" tag. */
@@ -598,7 +603,7 @@ interface YearRow {
 }
 
 /** Sums a set of `YearRow`s (real and/or sim) into one combined totals object — the CAREER row's own value, always a fresh sum of exactly the rows displayed above it rather than a separately-maintained total that could drift out of sync. `undefined` for an empty list, matching `allTimePlayerTotals`'s existing "no entry = no games" convention. */
-function sumYearRows(playerId: number, rows: YearRow[]): SeasonPlayerTotals | undefined {
+export function sumYearRows(playerId: number, rows: YearRow[]): SeasonPlayerTotals | undefined {
   if (rows.length === 0) return undefined;
   const totals = { playerId, gamesPlayed: 0, fantasyPoints: 0 } as SeasonPlayerTotals;
   for (const key of LEADERBOARD_STAT_FIELDS) totals[key] = 0;
@@ -736,7 +741,7 @@ const DRAFT_PICK_TONE: Record<DraftTier, string> = {
  * all, matching `engine/awards.ts`'s own "completed seasons only" scope. A real pre-save row gets
  * neither field (no sim match data exists for those years).
  */
-function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], season: Season | null, year: number, liveGrade?: Grade): YearRow[] {
+export function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], season: Season | null, year: number, liveGrade?: Grade): YearRow[] {
   const rows: YearRow[] = [];
   for (const real of realSeasonHistoryFor(player.realFullName ?? playerFullName(player))) {
     if (real.year >= CURRENT_SEASON_YEAR || real.games === 0) continue;

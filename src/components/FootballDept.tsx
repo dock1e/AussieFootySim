@@ -23,7 +23,7 @@ import { Marketing } from "./Marketing";
  * — deliberately out of scope for this round too, since Tyler's ask this round named only these 4
  * sub-tabs. It lives inside `Contracts.tsx`'s negotiation flow when it eventually gets built, not here.
  */
-type FootballDeptTab = "overview" | "coaching" | "facilities" | "marketing";
+export type FootballDeptTab = "overview" | "coaching" | "facilities" | "marketing";
 
 const TABS: { value: FootballDeptTab; label: string }[] = [
   { value: "overview", label: "Overview" },
@@ -36,8 +36,8 @@ function money(n: number): string {
   return `$${Math.round(n).toLocaleString("en-AU")}`;
 }
 
-export function FootballDept() {
-  const [tab, setTab] = useState<FootballDeptTab>("overview");
+export function FootballDept({ initialTab = "overview" }: { initialTab?: FootballDeptTab }) {
+  const [tab, setTab] = useState<FootballDeptTab>(initialTab);
   const myClub = useGameStore((s) => s.myClub);
   const clubFinance = useSaveStore((s) => s.clubFinance);
   const currentYear = useSaveStore((s) => s.year);

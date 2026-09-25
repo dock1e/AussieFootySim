@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ALL_PLAYERS, loadPool, resetPoolToGenerated } from "../data/loadPlayers";
-import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData, type DraftWindow, type CombineWindow, type TalentScoutAssignment } from "../engine/saveGame";
+import { useCareerStore } from "./useCareerStore";
+import { newSaveGame, runOffSeasonOnSave, serializeSave, deserializeSave, SAVE_SCHEMA_VERSION, type SaveGameData, type CoachSave, type BoardSave, type NarrativeSave, type DayOneSave, type DraftWindow, type CombineWindow, type TalentScoutAssignment } from "../engine/saveGame";
 import type { ScoutFocusArea, MatchDayCoachRole, CoachRole } from "../types/coach";
 import { committedStaffSpend, type CoachContract } from "../engine/coachContracts";
 import { FOOTBALL_DEPT_CEILING } from "../engine/contracts";
@@ -56,6 +57,16 @@ import type { MarketingCampaignId } from "../types/marketing";
  * backup path alongside the automatic one.
  */
 
+/** New Game Onboarding — the career a new game starts with (see useCareerStore). */
+export interface NewGameOptions {
+  saveId?: string;
+  coach?: CoachSave;
+  board?: BoardSave;
+  narrative?: NarrativeSave;
+  dayOne?: DayOneSave;
+  startSeason?: boolean;
+}
+
 interface SaveStoreState {
   status: "loading" | "ready";
   /** False until something has actually been saved at least once — a brand-new session with nothing in IndexedDB yet reads as false, but the app is fully usable regardless (exactly today's pre-persistence behaviour); the first auto-save flips this true. */
@@ -90,7 +101,7 @@ interface SaveStoreState {
   /** Snapshots the live pool + all 4 stores and writes it to IndexedDB. Usually not called directly — auto-save handles this — but exposed for the explicit affordances (and right after newGame/runOffSeason/importJSON). */
   saveNow: () => Promise<void>;
   /** Resets the pool to the freshly-generated baseline, clears season/lineups/plans, sets the coached club, and saves. */
-  newGame: (myClub: string) => Promise<void>;
+  newGame: (myClub: string, opts?: NewGameOptions) => Promise<void>;
   /** Runs one real off-season step (engine/progression.ts's runOffSeason via saveGame.ts's runOffSeasonOnSave): ages + recomputes OVR for every player, advances `year`, clears the current season. */
   runOffSeason: () => Promise<void>;
   /** A pretty-printed JSON string of the current save — Engine.md's "JSON export/import for backup/sharing". */
@@ -369,6 +380,11 @@ function snapshotSave(
     eligibility: useSelectionStore.getState().eligibility,
     covers: useSelectionStore.getState().covers,
     lastWeek: useSelectionStore.getState().lastWeek,
+    saveId: useCareerStore.getState().saveId ?? undefined,
+    coach: useCareerStore.getState().coach ?? undefined,
+    board: useCareerStore.getState().board ?? undefined,
+    narrative: useCareerStore.getState().narrative,
+    dayOne: useCareerStore.getState().dayOne ?? undefined,
     teamPlans: useTeamPlanStore.getState().plans,
     combineWindow: useCombineStore.getState().window,
     contractWindow: useContractStore.getState().window,
@@ -394,6 +410,7 @@ function hydrateStoresFrom(save: SaveGameData): void {
   useSelectionStore.getState().restoreCovers(save.covers ?? {});
   useSelectionStore.getState().restoreLastWeek(save.lastWeek ?? {});
   useTeamPlanStore.getState().restorePlans(save.teamPlans);
+  useCareerStore.getState().restore(save);
   useCombineStore.getState().restoreWindow(save.combineWindow);
   useContractStore.getState().restoreWindow(save.contractWindow);
   useTradeStore.getState().restoreWindow(save.tradeWindow);
@@ -468,6 +485,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       useTradeStore.subscribe(scheduleAutoSave);
       useDraftStore.subscribe(scheduleAutoSave);
       useCombineStore.subscribe(scheduleAutoSave);
+      useCareerStore.subscribe(scheduleAutoSave);
     }
   },
 
@@ -477,10 +495,14 @@ await writeSaveToDB(serializeSave(save));
     set({ hasSave: true, lastSavedAt: Date.now() });
   },
 
-  newGame: async (myClub) => {
+  newGame: async (myClub, opts) => {
     resetPoolToGenerated();
-    const save = newSaveGame(myClub, ALL_PLAYERS);
+    // The phrase bank's history carries over, so a new game doesn't open with the last one's lines.
+    const narrative = opts?.narrative ?? useCareerStore.getState().narrative;
+    const save: SaveGameData = { ...newSaveGame(myClub, ALL_PLAYERS), saveId: opts?.saveId, coach: opts?.coach, board: opts?.board, narrative, dayOne: opts?.dayOne };
     hydrateStoresFrom(save);
+    // New Game Onboarding: the season (and so the Round 1 fixture) exists from Day one.
+    if (opts?.startSeason) useSeasonStore.getState().startNewSeason();
     set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory, watchlist: save.watchlist, clubFinance: save.clubFinance, coachContracts: save.coachContracts });
     await clearSaveInDB();
     await get().saveNow();

@@ -145,6 +145,34 @@ export interface DraftWindow {
   revealed: Record<number, string[]>;
 }
 
+/**
+ * New Game Onboarding — the coach and the job they took. `clubId` is the club signed with (the
+ * Dashboard can no longer switch clubs; a different club means a new game).
+ */
+export interface CoachSave {
+  name: string;
+  clubId: number;
+  contractYears: number;
+}
+
+export interface BoardSave {
+  expectation: string;
+  /** 1 (none) to 5 (plenty). */
+  patience: number;
+}
+
+/** The phrase bank's per-slot pick history (ids, newest last, capped at 50 per slot) — see narrative/phraseEngine.ts. Carried into the next new game so a new save doesn't repeat the last one's lines. */
+export interface NarrativeSave {
+  history: Record<string, string[]>;
+}
+
+/** The Day one dashboard for one pre-season: checklist ticks and the phrase ids it shows (picked once, so a reload shows the same text). */
+export interface DayOneSave {
+  year: number;
+  done: Record<string, boolean>;
+  picks: Record<string, string>;
+}
+
 export interface SaveGameData {
   schemaVersion: number;
   /** The club the user is coaching this save — mirrors useGameStore's `myClub`. */
@@ -180,6 +208,12 @@ export interface SaveGameData {
   covers?: Record<string, Record<number, Cover | null>>;
   /** Round 130 — the team and style that last took the field, per club ("Last week's team", "Changes vs last week"). */
   lastWeek?: Record<string, LastWeekPlan>;
+  /** New Game Onboarding — seeds the phrase bank (same save, same text). Absent on saves made before onboarding existed. */
+  saveId?: string;
+  coach?: CoachSave;
+  board?: BoardSave;
+  narrative?: NarrativeSave;
+  dayOne?: DayOneSave;
   /** Keyed by club name — mirrors useTeamPlanStore's `plans`. */
   teamPlans: Record<string, TeamPlan>;
   /** Null if the coach hasn't run this year's National Combine yet — mirrors useCombineStore's `window`. See CombineWindow's own doc comment. */
@@ -510,6 +544,12 @@ export interface SerializedSaveGame {
   eligibility: Record<string, Record<number, Position[]>>;
   covers?: Record<string, Record<number, Cover | null>>;
   lastWeek?: Record<string, LastWeekPlan>;
+  /** New Game Onboarding — seeds the phrase bank (same save, same text). Absent on saves made before onboarding existed. */
+  saveId?: string;
+  coach?: CoachSave;
+  board?: BoardSave;
+  narrative?: NarrativeSave;
+  dayOne?: DayOneSave;
   teamPlans: Record<string, SerializedTeamPlan>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`/`players`. */
   combineWindow: CombineWindow | null;
@@ -562,6 +602,11 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     eligibility: save.eligibility,
     covers: save.covers,
     lastWeek: save.lastWeek,
+    saveId: save.saveId,
+    coach: save.coach,
+    board: save.board,
+    narrative: save.narrative,
+    dayOne: save.dayOne,
     teamPlans: Object.fromEntries(Object.entries(save.teamPlans).map(([club, plan]) => [club, serializeTeamPlan(plan)])),
     combineWindow: save.combineWindow,
     contractWindow: save.contractWindow,
@@ -614,6 +659,11 @@ export function deserializeSave(json: unknown): SaveGameData {
     eligibility: s.eligibility ?? {},
     covers: s.covers,
     lastWeek: s.lastWeek,
+    saveId: s.saveId,
+    coach: s.coach,
+    board: s.board,
+    narrative: s.narrative,
+    dayOne: s.dayOne,
     teamPlans: Object.fromEntries(Object.entries(s.teamPlans ?? {}).map(([club, plan]) => [club, deserializeTeamPlan(plan)])),
     combineWindow: s.combineWindow ?? null,
     contractWindow: s.contractWindow ?? null,

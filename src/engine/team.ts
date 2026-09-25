@@ -1,4 +1,5 @@
 import type { Player } from "../types/player.ts";
+import type { MatchEvent } from "./match.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
 
@@ -192,4 +193,32 @@ export function cloneMatchTeam(t: MatchTeam): MatchTeam {
     onGround: t.onGround ? new Set(t.onGround) : undefined,
     interchangeEligibility: t.interchangeEligibility ? new Map(t.interchangeEligibility) : undefined,
   };
+}
+
+/**
+ * Round 129 — the team as it stood at event `uptoIndex`: `kickoff` (an untouched copy taken before the
+ * match started) with every interchange logged up to and including that event applied. The live
+ * screen needs this because each quarter is simulated ahead of playback and interchanges mutate the
+ * real `MatchTeam` in place, so mid-playback it already shows who's on at the end of the quarter.
+ */
+export function teamAtEvent(kickoff: MatchTeam, side: "home" | "away", events: readonly MatchEvent[], uptoIndex: number): MatchTeam {
+  const t = cloneMatchTeam(kickoff);
+  const last = Math.min(uptoIndex, events.length - 1);
+  for (let i = 0; i <= last; i++) {
+    const x = events[i].interchange;
+    if (!x || x.side !== side) continue;
+    t.onGround?.delete(x.outgoingId);
+    t.onGround?.add(x.incomingId);
+    t.positions?.set(x.outgoingId, "INT");
+    t.positions?.set(x.incomingId, x.position);
+  }
+  return t;
+}
+
+/** How many interchange events are in `events[0..uptoIndex]` — a cheap key for memoising `teamAtEvent`. */
+export function interchangesUpTo(events: readonly MatchEvent[], uptoIndex: number): number {
+  let n = 0;
+  const last = Math.min(uptoIndex, events.length - 1);
+  for (let i = 0; i <= last; i++) if (events[i].interchange) n += 1;
+  return n;
 }

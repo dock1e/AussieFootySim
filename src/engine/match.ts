@@ -299,6 +299,14 @@ export interface MatchEvent {
    */
   isPressured?: boolean;
   /**
+   * Round 129 — set on an interchange event (automatic or manual), so a viewer replaying the log can
+   * tell who was on the ground at any tick. A match is simulated a quarter ahead of playback and
+   * interchanges change `MatchTeam.onGround`/`positions` in place, so the team objects alone only
+   * describe the end of the simulated stretch, not the moment on screen. Undefined on every other
+   * event and on older saves.
+   */
+  interchange?: { side: Side; outgoingId: number; incomingId: number; position: Position };
+  /**
    * Sep 2026 round 111 — which real kind of stoppage this STOPPAGE/CLEARANCE
    * event actually is: a genuine centre bounce (always `MIDFIELD` zone), or a
    * boundary throw-in (any zone, including `MIDFIELD` — a throw-in can
@@ -2124,8 +2132,15 @@ function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuc
   const awayPlan = ctx.awayPlan;
 
   const repRating: (p: Player) => number = useSecondaryRuck ? (p) => p.height : ruckRating;
-  const homeRuck = bestByRating(home, repRating);
-  const awayRuck = bestByRating(away, repRating);
+  // Round 129 (Tyler: "Gawn and Witts should run and jump at each other"): at a centre bounce the
+  // side's nominated ruck — whoever is on the ground at R — goes up, rather than whoever happens to
+  // rate highest on `ruckRating` (Gold Coast's Ben King out-rated Jarrod Witts and was taking the
+  // opening bounce from the forward pocket). A side with nobody at R (no position data, or R benched
+  // with no replacement) keeps the best-rated fallback. Throw-ins are unchanged.
+  const nominatedRuck = (team: MatchTeam, players: Player[]) =>
+    stoppageType === "centreBounce" ? players.find((p) => team.positions?.get(p.PlayerID) === "R") : undefined;
+  const homeRuck = nominatedRuck(ctx.home, home) ?? bestByRating(home, repRating);
+  const awayRuck = nominatedRuck(ctx.away, away) ?? bestByRating(away, repRating);
   const homeRuckMult = useSecondaryRuck
     ? conditionMultiplierFor(ctx, "home", homeRuck) * lineCoachRuckHitoutFactor(ctx, "home", homeRuck)
     : ruckHitoutMultiplier(tacticFor(homePlan, homeRuck, ctx.home.positions)) *
@@ -4633,6 +4648,10 @@ function performInterchangeSwap(ctx: Ctx, team: MatchTeam, outgoing: Player, inc
   // players aren't "together near the ball", see nudgeInvolvedPositions'
   // own doc comment for why that nudge is deliberately opt-out here.
   log(ctx, state.zone, state.possession, state.phase, description, [outgoing.PlayerID, incoming.PlayerID], [], true);
+  if (ctx.recordEvents) {
+    const side: Side = team === ctx.home ? "home" : "away";
+    ctx.events[ctx.events.length - 1].interchange = { side, outgoingId: outgoing.PlayerID, incomingId: incoming.PlayerID, position };
+  }
 }
 
 /** Every `FITNESS_CHECK_INTERVAL_TICKS`, considers one automatic swap per side — see this section's own top doc comment for the full mechanism. */

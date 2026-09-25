@@ -3,7 +3,7 @@ import { CLUBS, clubByName } from "../types/club";
 import type { Player } from "../types/player";
 import type { Position } from "../types/archetype";
 import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
-import { cloneMatchTeam, type MatchTeam } from "../engine/team";
+import { cloneMatchTeam, interchangesUpTo, teamAtEvent, type MatchTeam } from "../engine/team";
 import { autoFillLineup, emptyLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
 import {
   startMatch,
@@ -79,6 +79,9 @@ interface ActiveMatch {
   round: number | null;
   /** An untouched copy of the coach's own team as it took the field — interchanges mutate `home`/`away`. */
   myTeamAtBounce: MatchTeam;
+  /** Both teams as they took the field, replayed forward to the tick on screen (`teamAtEvent`). */
+  homeAtBounce: MatchTeam;
+  awayAtBounce: MatchTeam;
 }
 
 /**
@@ -206,6 +209,20 @@ export function LiveMatch({
 
   const playback = useMatchPlayback(result, homeIds, awayIds);
 
+  // Round 129 — who is on the ground at the tick on screen. A quarter is simulated ahead of playback
+  // and interchanges mutate `homeTeam`/`awayTeam` in place, so those describe the end of the quarter;
+  // the board, ground and bench rails read these replayed views instead. Only rebuilt when another
+  // interchange is revealed, so the objects stay stable between ticks.
+  const swapsSeen = active && result ? interchangesUpTo(result.events, playback.currentIndex) : 0;
+  const homeView = useMemo(
+    () => (active && result ? teamAtEvent(active.homeAtBounce, "home", result.events, playback.currentIndex) : homeTeam),
+    [active, result, swapsSeen, homeTeam], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const awayView = useMemo(
+    () => (active && result ? teamAtEvent(active.awayAtBounce, "away", result.events, playback.currentIndex) : awayTeam),
+    [active, result, swapsSeen, awayTeam], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const mySide: "home" | "away" = homeTeam.name === myClub ? "home" : "away";
 
   /** The coach's own line-coach assignments as `role -> ovr/99`; the opponent always plays the flat baseline. */
@@ -243,7 +260,15 @@ export function LiveMatch({
       stadium: flowVenue,
     });
     simulateQuarter(match, 1);
-    setActive({ home, away, venue: flowVenue, round: nextRow?.round ?? null, myTeamAtBounce: cloneMatchTeam(flowMine) });
+    setActive({
+      home,
+      away,
+      venue: flowVenue,
+      round: nextRow?.round ?? null,
+      myTeamAtBounce: cloneMatchTeam(flowMine),
+      homeAtBounce: cloneMatchTeam(iAmHome ? flowMine : flowOpp),
+      awayAtBounce: cloneMatchTeam(iAmHome ? flowOpp : flowMine),
+    });
     setMatchInProgress(match);
     setQuartersSimulated(1);
     setPendingCoachsCall(null);
@@ -595,8 +620,8 @@ export function LiveMatch({
   // to home/away when spectating an AI-vs-AI match with no `mySide`.
   const yourSide: Side = mySide;
   const theirSide: Side = yourSide === "home" ? "away" : "home";
-  const yourTeam = yourSide === "home" ? homeTeam : awayTeam;
-  const theirTeam = theirSide === "home" ? homeTeam : awayTeam;
+  const yourTeam = yourSide === "home" ? homeView : awayView;
+  const theirTeam = theirSide === "home" ? homeView : awayView;
   const yourIds = yourSide === "home" ? homeIds : awayIds;
   const theirIds = theirSide === "home" ? homeIds : awayIds;
 
@@ -705,8 +730,8 @@ export function LiveMatch({
               style={{ flex: "2.4 1 560px", minWidth: 0, background: "color-mix(in oklch, var(--deep) 25%, #0b1410)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 14, overflow: "hidden", display: "flex", flexDirection: "column" }}
             >
               <GroundView
-                home={homeTeam}
-                away={awayTeam}
+                home={homeView}
+                away={awayView}
                 venue={venue}
                 event={playback.currentEvent}
                 nextEvent={result.events[playback.currentIndex + 1] ?? null}
@@ -740,8 +765,8 @@ export function LiveMatch({
           side={selectedPlayer.side}
           line={playback.liveBoxScore[selectedPlayer.player.PlayerID]}
           events={revealedEvents}
-          position={(selectedPlayer.side === "home" ? homeTeam : awayTeam).positions?.get(selectedPlayer.player.PlayerID)}
-          onGround={(selectedPlayer.side === "home" ? homeTeam : awayTeam).onGround?.has(selectedPlayer.player.PlayerID)}
+          position={(selectedPlayer.side === "home" ? homeView : awayView).positions?.get(selectedPlayer.player.PlayerID)}
+          onGround={(selectedPlayer.side === "home" ? homeView : awayView).onGround?.has(selectedPlayer.player.PlayerID)}
           fitness={fitnessOf(selectedPlayer.side, selectedPlayer.player.PlayerID)}
           fantasyMetrics={fantasyMetrics.get(selectedPlayer.player.PlayerID)}
           seasonAvgFp={seasonAvgFpOf(selectedPlayer.player.PlayerID)}

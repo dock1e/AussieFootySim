@@ -200,38 +200,67 @@ export default function App() {
           <div className="flex items-center gap-2.5">
             <Logo />
             <div className="font-display text-3xl italic tracking-tight">
-              AussieFooty<span className="text-accent">Sim</span>
+              AussieFooty<span style={{ color: "var(--accT)" }}>Sim</span>
             </div>
           </div>
           <SaveMenu />
         </div>
-        <nav>
-          <div className="flex flex-wrap gap-2">
-            {NAV_GROUPS.map((group) => (
-              <button
-                key={group.key}
-                onClick={() => selectGroup(group)}
-                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                  activeGroup.key === group.key ? "bg-primary text-white" : "bg-base-800 text-slate-300 hover:bg-base-700"
-                }`}
-              >
-                {group.label}
-              </button>
-            ))}
+        {/* Round 123 — [[Football Department Coach Market]]'s companion nav-styling ask: Tyler's own
+            comparison screenshots flagged this row (and the screen-picker row below it) as "the purple
+            pills" that don't match the Club Theme System reference's flat underline-tab nav (that
+            mockup's own `<nav>` — `border-bottom:2px solid var(--acc)` on the active tab, transparent
+            border + slate text otherwise, no pill background at all). Restyled to that same underline
+            language, driven by the coached club's own `var(--acc)`/`var(--accT)` tokens instead of the
+            hardcoded `bg-primary` purple — so "yours/selected" now reads in the SAME accent colour as
+            every themed screen this app already has (Dashboard, Football Dept, Draft, etc.), not a
+            fixed purple that fights whichever club's colours are actually on screen. The two-tier
+            group+screen structure itself is unchanged (this app has far more screens than the
+            mockup's single flat row ever needed to hold) — only the visual treatment of each tier. */}
+        <nav style={{ borderBottom: "1px solid rgba(255,255,255,.08)" }}>
+          <div className="flex flex-wrap gap-1" style={{ marginBottom: -1 }}>
+            {NAV_GROUPS.map((group) => {
+              const active = activeGroup.key === group.key;
+              return (
+                <button
+                  key={group.key}
+                  onClick={() => selectGroup(group)}
+                  style={{
+                    background: "transparent",
+                    border: 0,
+                    borderBottom: active ? "2px solid var(--acc)" : "2px solid transparent",
+                    color: active ? "#fff" : "#9aa4b5",
+                    padding: "10px 14px",
+                    font: active ? "700 14px Barlow,sans-serif" : "600 14px Barlow,sans-serif",
+                    cursor: "pointer",
+                  }}
+                >
+                  {group.label}
+                </button>
+              );
+            })}
           </div>
           {activeGroup.screens.length > 1 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {activeGroup.screens.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setScreen(s)}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                    screen === s ? "bg-primary/20 text-primary-light" : "bg-base-900 text-slate-400 hover:bg-base-800"
-                  }`}
-                >
-                  {SCREEN_LABELS[s]}
-                </button>
-              ))}
+            <div className="flex flex-wrap gap-1" style={{ padding: "6px 0" }}>
+              {activeGroup.screens.map((s) => {
+                const active = screen === s;
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setScreen(s)}
+                    style={{
+                      background: active ? "color-mix(in oklch, var(--acc) 16%, transparent)" : "transparent",
+                      border: 0,
+                      borderRadius: 6,
+                      color: active ? "var(--accT)" : "#7e889a",
+                      padding: "5px 10px",
+                      font: active ? "700 12px Barlow,sans-serif" : "500 12px Barlow,sans-serif",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {SCREEN_LABELS[s]}
+                  </button>
+                );
+              })}
             </div>
           )}
         </nav>
@@ -278,22 +307,26 @@ export default function App() {
  * Header wordmark badge — Aug 2026 rebrand (SimAFL -> AussieFootySim, Tyler:
  * "rebrand the logo in the top left... Use supercoach logo as a subtle (no
  * copyright infringement) reference point as I want the platform to feel
- * familiar to supercoach players"). A rounded-square green badge with a
- * bold white monogram, next to the wordmark — the same *category* of mark
- * SuperCoach's own logo uses (green badge + bold lettering next to a
- * wordmark, visible in Tyler's own attached screenshots of the SC UI), not
- * a copy of its actual shield artwork, palette, or typeface: original
- * shape, this app's own `good` green (already the palette's green token,
- * see tailwind.config.js) rather than SC's specific shade, and "AFS" —
- * Tyler's own shorthand for AussieFootySim from this same message — rather
- * than "SC". Kept as a small standalone component (not inlined in the
+ * familiar to supercoach players"). Originally a green rounded-square badge;
+ * Round 123 — [[Football Department Coach Market]] — re-skinned to match the
+ * exact badge treatment in the Club Theme System reference mockup itself
+ * (`Club Theme System.dc.html` line ~13: a light `#eef2f8` rounded-square
+ * with dark `#0a0e17` "AFS" lettering, sized 34px, next to an italic wordmark
+ * whose "Sim" half now reads in the coached club's own `var(--accT)` token
+ * rather than a fixed green) — Tyler's own round-123 ask ("rebrand the AFS
+ * logo... to better align to the UI redesign") pointed straight at this
+ * mockup's own header markup as the target, not a fresh design. Still
+ * original artwork (a plain rounded square + monogram, no shield/crest), and
+ * still "AFS" rather than "SC" — same non-infringement reasoning as the
+ * original rebrand, just now pixel-matched to the brief instead of freely
+ * interpreted. Kept as a small standalone component (not inlined in the
  * header) so it's reusable if a favicon/app-icon ever wants the same mark.
  */
 function Logo() {
   return (
-    <svg width="40" height="40" viewBox="0 0 40 40" className="shrink-0" aria-hidden="true">
-      <rect x="1" y="1" width="38" height="38" rx="11" fill="#3fb950" stroke="#2b8a37" strokeWidth="1.5" />
-      <text x="20" y="26" textAnchor="middle" fontFamily="Arial, Helvetica, sans-serif" fontWeight="800" fontSize="14" fill="#ffffff" letterSpacing="0.5">
+    <svg width="34" height="34" viewBox="0 0 34 34" className="shrink-0" aria-hidden="true">
+      <rect x="0" y="0" width="34" height="34" rx="9" fill="#eef2f8" />
+      <text x="17" y="21.5" textAnchor="middle" fontFamily="'Barlow Condensed', Arial, sans-serif" fontWeight="700" fontSize="13" fill="#0a0e17" letterSpacing="0.5">
         AFS
       </text>
     </svg>

@@ -214,6 +214,9 @@ describe("serializeSave / deserializeSave", () => {
       // (not every club present), same "prove JSON round-tripping" ethos as `watchlist`/`clubHistory`
       // above — plain number/Partial-record data, no Map/Set involved.
       clubFinance: { Adelaide: { facilityLevels: { gym: 2, vfl: 1 }, budget: 185_000 }, Carlton: { facilityLevels: {}, budget: 250_000 } },
+      // Round 123 — [[Football Department Coach Market]]. Same "plain data, no Map/Set" round-trip
+      // fixture treatment as clubFinance above.
+      coachContracts: { "Talent Scout": { coachId: 1, salaryPerYear: 68_000 } },
     };
   }
 

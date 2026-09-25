@@ -13,7 +13,8 @@ import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
 import type { DisgruntlementState } from "./disgruntlement.ts";
 import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
 import { CURRENT_SEASON_YEAR } from "../config.ts";
-import type { ScoutFocusArea, MatchDayCoachRole } from "../types/coach.ts";
+import type { ScoutFocusArea, MatchDayCoachRole, CoachRole } from "../types/coach.ts";
+import type { CoachContract } from "./coachContracts.ts";
 import { computeSeasonAwards } from "./awards.ts";
 import { computeSeasonGrades, type SeasonGradeEntry } from "./seasonGrading.ts";
 import type { ClubHistoryEntry } from "./clubHistory.ts";
@@ -293,6 +294,22 @@ export interface SaveGameData {
    * back to `defaultClubFinanceState()` rather than throwing.
    */
   clubFinance: Record<string, ClubFinanceState>;
+  /**
+   * Round 123 — [[Football Department Coach Market]]. One negotiated `CoachContract` per `CoachRole`
+   * currently filled — see `engine/coachContracts.ts`'s own doc comment for the salary-cap-style
+   * mechanic this backs (`committedStaffSpend` vs `FOOTBALL_DEPT_CEILING`). Deliberately a SEPARATE
+   * field from `talentScout`/`lineCoaches`/`developmentCoach` rather than a reshape of them: those
+   * three remain the single source of truth for "who is assigned to this role" (every existing reader
+   * — `scoutAccuracyFor`, `lineCoachEffectivenessFor`, `developmentMultipliersFor` — keeps working
+   * completely unchanged), while this field is purely the ADDITIONAL negotiated-salary fact that
+   * didn't exist before this round. `useSaveStore.ts`'s new `hireCoach`/`releaseCoachRole` actions
+   * always write both together, so the two can't actually drift apart in practice, but keeping them as
+   * separate fields meant zero risk to every already-working assignment/effect call site. Added
+   * without bumping `SAVE_SCHEMA_VERSION`, same convention as every field above: a pre-round-123 save
+   * just has no committed salaries yet — `deserializeSave` below defaults to `{}`, which every reader
+   * (`committedStaffSpend`) already treats as "nothing committed", never throws.
+   */
+  coachContracts: Partial<Record<CoachRole, CoachContract>>;
 }
 
 /** See `SaveGameData.talentScout`'s own doc comment. */
@@ -327,6 +344,7 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     // Every club, not just myClub — same "AI clubs get real state too" treatment as draftPickInventory
     // above; a brand-new save starts every club at the same STARTING_FOOTBALL_DEPT_BUDGET.
     clubFinance: Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])),
+    coachContracts: {},
   };
 }
 
@@ -498,6 +516,8 @@ export interface SerializedSaveGame {
   watchlist: number[];
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `watchlist`. See `SaveGameData.clubFinance`'s own doc comment. */
   clubFinance: Record<string, ClubFinanceState>;
+  /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `clubFinance`. See `SaveGameData.coachContracts`'s own doc comment. */
+  coachContracts: Partial<Record<CoachRole, CoachContract>>;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -534,6 +554,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     clubHistory: save.clubHistory,
     watchlist: save.watchlist,
     clubFinance: save.clubFinance,
+    coachContracts: save.coachContracts,
   };
 }
 
@@ -587,5 +608,6 @@ export function deserializeSave(json: unknown): SaveGameData {
     // SaveGameData: a pre-existing save should still get every club started at a real
     // STARTING_FOOTBALL_DEPT_BUDGET rather than reading as "budget 0, nothing built" forever.
     clubFinance: s.clubFinance ?? Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])),
+    coachContracts: s.coachContracts ?? {},
   };
 }

@@ -1,4 +1,7 @@
 import { useEffect } from "react";
+import { ClubStripe } from "./theme/primitives";
+
+const THEMED_SURFACE = "color-mix(in oklch, var(--deep) calc(var(--tc) * 1.6), #0f141e)";
 
 /**
  * Generic centered overlay — Aug 2026 round 53, Tyler's direct follow-up on
@@ -20,7 +23,12 @@ import { useEffect } from "react";
  * Last Game, Competition Leaders, and Coming Up → club scouting all open one
  * of these now rather than growing in place.
  */
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+/**
+ * Round 126 — Cowork fix pass 1, item 7: `themed` opts a modal into the Club Theme System house style
+ * (brief §2.3/2.6): detail-panel surface, `--acc` 25% border, club stripe along the top edge, and a
+ * Barlow Condensed 700 title (not italic). Opt-in so every other modal renders exactly as before.
+ */
+export function Modal({ title, onClose, children, themed = false }: { title: string; onClose: () => void; children: React.ReactNode; themed?: boolean }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -43,11 +51,16 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       onClick={onClose}
     >
       <div
-        className="w-full max-w-6xl rounded-card border border-base-600 bg-base-900 shadow-2xl"
+        className={themed ? "w-full max-w-6xl shadow-2xl" : "w-full max-w-6xl rounded-card border border-base-600 bg-base-900 shadow-2xl"}
+        style={themed ? { background: THEMED_SURFACE, border: "1px solid color-mix(in oklch, var(--acc) 25%, rgba(255,255,255,.07))", borderRadius: 16, overflow: "clip" } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-card border-b border-base-700 bg-base-900 px-5 py-3.5">
-          <div className="font-display text-xl italic">{title}</div>
+        {themed && <ClubStripe />}
+        <div
+          className={themed ? "sticky top-0 z-10 flex items-center justify-between px-5 py-3.5" : "sticky top-0 z-10 flex items-center justify-between rounded-t-card border-b border-base-700 bg-base-900 px-5 py-3.5"}
+          style={themed ? { background: THEMED_SURFACE, borderBottom: "1px solid rgba(255,255,255,.07)" } : undefined}
+        >
+          {themed ? <div style={{ font: "700 30px/1.05 'Barlow Condensed',sans-serif", color: "#fff" }}>{title}</div> : <div className="font-display text-xl italic">{title}</div>}
           <button
             onClick={onClose}
             className="rounded-lg bg-base-800 px-2.5 py-1.5 text-sm text-slate-400 hover:bg-base-700 hover:text-white"

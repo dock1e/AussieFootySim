@@ -3,17 +3,65 @@
 @tailwind utilities;
 
 @layer base {
+  /* Round 126 — Cowork fix pass 1. Dark native controls (item 6): form controls, scrollbars and
+     select popups render in the dark scheme. Stable scrollbar gutter (item 5): short pages (Draft,
+     empty states) and long pages (List) keep an identical content width, so switching tabs never
+     shifts anything sideways. */
+  :root {
+    color-scheme: dark;
+  }
+  html {
+    scrollbar-gutter: stable;
+    overflow-y: scroll;
+    background: #080b12;
+  }
   html,
   body,
   #root {
     height: 100%;
   }
   body {
+    background: #080b12; /* overscroll never shows white (item 1) */
     font-feature-settings: "tnum" 1; /* tabular numbers for stat columns */
+  }
+  select option {
+    background: #121826;
+    color: #e9edf4;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--acc) 60%, transparent);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 
 @layer components {
+  /* Round 126 — fix pass 1, item 5: ONE shell for every tab (no per-tab width or padding). */
+  .app-shell {
+    width: 100%;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 16px 20px 64px;
+  }
+  .app-root {
+    min-height: 100vh;
+  }
   .card {
     @apply rounded-card border border-base-600 bg-base-800 p-4;
   }
@@ -67,6 +115,104 @@
     -ms-overflow-style: none;
   }
   .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Round 126 — Cowork fix pass 1, item 3: boards never scroll sideways. The List board's columns are
+   defined here (# · Player · Age · OVR · POT · Ends · Salary · Status) and respond to the BOARD's own
+   width via a container query, not the viewport: Age drops first, then Salary. */
+.board-container {
+  container-type: inline-size;
+}
+.list-grid {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px;
+  grid-template-columns: 30px minmax(120px, 1fr) 34px 38px 38px 44px 60px 84px;
+}
+@container (max-width: 560px) {
+  .list-grid {
+    grid-template-columns: 30px minmax(120px, 1fr) 38px 38px 44px 60px 84px;
+  }
+  .list-grid .col-age {
+    display: none;
+  }
+}
+@container (max-width: 490px) {
+  .list-grid {
+    grid-template-columns: 30px minmax(110px, 1fr) 38px 38px 44px 84px;
+  }
+  .list-grid .col-sal {
+    display: none;
+  }
+}
+
+/* Draft board (fix pass 1, items 3 + 8): # · Pred · Prospect · State · Archetype · OVR · Pot · Tier · Conf.
+   The prospect name gets minmax(170px,1fr); Archetype shrinks (and truncates) first. */
+.draft-grid {
+  display: grid;
+  grid-template-columns: 36px 74px minmax(170px, 1fr) 48px minmax(60px, 96px) 76px 50px 84px 58px;
+}
+@container (max-width: 640px) {
+  .draft-grid {
+    grid-template-columns: 30px 64px minmax(150px, 1fr) minmax(56px, 96px) 70px 44px 84px 58px;
+  }
+  .draft-grid .col-state {
+    display: none;
+  }
+}
+@container (max-width: 540px) {
+  .draft-grid {
+    grid-template-columns: 30px 64px minmax(140px, 1fr) minmax(50px, 90px) 70px 44px 58px;
+  }
+  .draft-grid .col-tier {
+    display: none;
+  }
+}
+
+/* Round 126 — Cowork fix pass 1, item 7: house-style section headers and tables in the player modal. */
+.afs-section-label {
+  font: 600 11px "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #8f9ab0;
+}
+.afs-table {
+  font-variant-numeric: tabular-nums;
+}
+.afs-table thead th {
+  font: 600 10px "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #8f9ab0;
+}
+.afs-table tbody td {
+  color: #c3ccdd;
+}
+.afs-table tbody td:first-child {
+  color: #eef2f8;
+}
+.afs-table tbody tr {
+  border-color: rgba(255, 255, 255, 0.05);
+}
+/* Narrowest boards (phone, or Draft's centre column at lg's 1024px): keep only what reads the row. */
+@container (max-width: 440px) {
+  .draft-grid {
+    grid-template-columns: 28px 56px minmax(110px, 1fr) 64px 56px;
+  }
+  .draft-grid .col-arch,
+  .draft-grid .col-pot {
+    display: none;
+  }
+}
+@container (max-width: 420px) {
+  .list-grid {
+    grid-template-columns: 26px minmax(100px, 1fr) 36px 44px 84px;
+    gap: 6px;
+    padding: 0 8px;
+  }
+  .list-grid .col-pot {
     display: none;
   }
 }

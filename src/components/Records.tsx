@@ -355,6 +355,7 @@ export function Records() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const isSeason = scope === "season";
+  const sideScroll = isSeason && group === "all";
   const avgMode = isSeason && statMode === "avg";
   const q = query.trim().toLowerCase();
 
@@ -488,7 +489,7 @@ export function Records() {
     return {
       padding: "0 10px",
       height: 38,
-      minWidth: 58,
+      minWidth: sideScroll ? 58 : 0,
       width: "100%",
       font: `600 12px ${MONO}`,
       letterSpacing: ".5px",
@@ -525,7 +526,7 @@ export function Records() {
       height: 40,
       borderBottom: `1px solid ${SURFACE.divider}`,
       borderRight: "1px solid rgba(255,255,255,.06)",
-      minWidth: 210,
+      minWidth: sideScroll ? 210 : 0,
     };
   }
   const stickyBgFor = (mine: boolean) => (mine ? `color-mix(in oklch, var(--acc) 16%, ${SURFACE.card})` : SURFACE.card);
@@ -797,11 +798,13 @@ export function Records() {
           </div>
         )}
 
-        <div className="overflow-x-auto" style={{ borderTop: `1px solid ${SURFACE.border}` }}>
+        {/* Round 126 — Cowork fix pass 1, item 3: only the season "All stats" table (26 columns) may
+            scroll sideways; every narrower group and the all-time table fit the card width instead. */}
+        <div style={{ overflowX: sideScroll ? "auto" : "hidden", borderTop: `1px solid ${SURFACE.border}` }}>
           {isSeason && !season ? (
             <div style={{ padding: "24px 18px", font: `400 14px ${BARLOW}`, color: "#aab3c3" }}>No season in progress — start a season to see this season's leaders.</div>
           ) : isSeason ? (
-            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 270 + cols.length * 66 }}>
+            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: sideScroll ? 270 + cols.length * 66 : undefined }}>
               <thead>
                 <tr>
                   <th style={thSticky1}>RANK</th>
@@ -844,7 +847,7 @@ export function Records() {
               </tbody>
             </table>
           ) : (
-            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 520 }}>
+            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
               <thead>
                 <tr>
                   <th style={thSticky1}>RANK</th>

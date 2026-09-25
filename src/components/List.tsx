@@ -20,6 +20,7 @@ import type { Player, RatedAttribute } from "../types/player";
 import { playerFullName } from "../types/player";
 import { money } from "./PlayerDetailModal";
 import { PlayerLink } from "./PlayerLink";
+import { STATUS } from "../theme/clubTokens";
 import { Card, DetailPanel, SectionLabel, StatusChip, KpiTile, BarSolidGhost, Segmented, type StatusTone } from "./theme/primitives";
 
 /**
@@ -76,7 +77,8 @@ const ATTR_LABEL: Record<RatedAttribute, string> = {
 
 const LINE_SHORT: Record<Line, string> = { Midfield: "MID", Forwards: "FWD", Defence: "DEF", Ruck: "RUC" };
 
-const STATUS_TONE: Record<FreeAgencyStatus, StatusTone> = { Signed: "good", RFA: "warn", OOC: "warn", UFA: "bad" };
+// Round 126 — fix pass 1, item 2: "Signed" is neutral grey (STATUS.signed), matching the row chip.
+const STATUS_TONE: Record<FreeAgencyStatus, StatusTone> = { Signed: "neutral", RFA: "warn", OOC: "warn", UFA: "bad" };
 
 type StatusFilter = FreeAgencyStatus | "All";
 type LineFilter = Line | "All";
@@ -174,8 +176,9 @@ export function List() {
             </div>
           </div>
           <KpiTile value={squad.length} label="List spots · 24-46 permitted" />
-          <KpiTile value={finalYrCount} label={`Out of contract · end of ${currentYear}`} tone={finalYrCount > 0 ? "accent" : "neutral"} />
-          <KpiTile value={nextYrCount} label={`Expires ${currentYear + 1} · final year`} />
+          {/* Round 126 — fix pass 1, item 2: contract status is semantic (coral / amber), never the club accent. */}
+          <KpiTile value={finalYrCount} label={`Out of contract · end of ${currentYear}`} color={STATUS.ooc} />
+          <KpiTile value={nextYrCount} label={`Expires ${currentYear + 1} · final year`} color={STATUS.final} />
           <KpiTile value={avgAge} label="Avg age · whole list" />
         </div>
       </Card>
@@ -208,7 +211,7 @@ export function List() {
                 <div key={y.yr} style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr) 20px", gap: 8, alignItems: "center" }}>
                   <span style={{ font: "600 11px 'IBM Plex Mono',monospace", color: "#aab3c3" }}>{y.yr}</span>
                   <span style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,.06)", overflow: "hidden", display: "block" }}>
-                    <span style={{ display: "block", height: "100%", width: `${(y.n / maxEnding) * 100}%`, background: "var(--acc)" }} />
+                    <span style={{ display: "block", height: "100%", width: `${(y.n / maxEnding) * 100}%`, background: y.yr === currentYear ? STATUS.ooc : y.yr === currentYear + 1 ? STATUS.final : "var(--acc)" }} />
                   </span>
                   <span style={{ font: "600 12px 'IBM Plex Mono',monospace", color: "#fff", textAlign: "right" }}>{y.n}</span>
                 </div>
@@ -226,37 +229,36 @@ export function List() {
             </div>
             <span style={{ font: "500 12px Barlow,sans-serif", color: "#8f9ab0" }}>Click a column to sort · click a player to manage</span>
           </div>
-          <div style={{ overflow: "auto", maxHeight: 680, borderTop: "1px solid rgba(255,255,255,.07)" }}>
-            <div style={{ minWidth: 700 }}>
+          {/* Round 126 — fix pass 1, item 3: vertical scroll only, never sideways. Columns come from the
+              `.list-grid` container-query classes in index.css, which drop Age then Salary as the board
+              narrows instead of forcing a min-width. */}
+          <div className="board-container" style={{ overflowX: "hidden", overflowY: "auto", maxHeight: 680, borderTop: "1px solid rgba(255,255,255,.07)" }}>
+            <div>
               <div
+                className="list-grid"
                 style={{
                   position: "sticky",
                   top: 0,
                   zIndex: 1,
-                  display: "grid",
-                  gap: 8,
                   alignItems: "center",
-                  padding: "0 12px",
                   height: 34,
                   background: "color-mix(in oklch, var(--deep) var(--tc), #10151f)",
                   borderBottom: "1px solid rgba(255,255,255,.1)",
                   font: "600 10px 'IBM Plex Mono',monospace",
                   letterSpacing: ".8px",
                   color: "#8f9ab0",
-                  gridTemplateColumns: "36px minmax(170px,1fr) 40px 44px 44px 52px 64px 100px",
                 }}
               >
                 <HeadCell label="#" sortKey="jumperNumber" current={squadSortKey} dir={squadSortDir} onSort={setSquadSort} />
                 <HeadCell label="PLAYER" sortKey="lname" current={squadSortKey} dir={squadSortDir} onSort={setSquadSort} />
-                <span style={{ textAlign: "center" }}>AGE</span>
+                <span className="col-age" style={{ textAlign: "center" }}>AGE</span>
                 <HeadCell label="OVR" sortKey="OVR" current={squadSortKey} dir={squadSortDir} onSort={setSquadSort} align="center" />
-                <HeadCell label="POT" sortKey="POT" current={squadSortKey} dir={squadSortDir} onSort={setSquadSort} align="center" />
+                <HeadCell className="col-pot" label="POT" sortKey="POT" current={squadSortKey} dir={squadSortDir} onSort={setSquadSort} align="center" />
                 <span style={{ textAlign: "center" }}>ENDS</span>
-                <span style={{ textAlign: "center" }}>SAL</span>
+                <span className="col-sal" style={{ textAlign: "center" }}>SAL</span>
                 <span style={{ textAlign: "center" }}>STATUS</span>
               </div>
               {sorted.map((p) => {
-                const status = freeAgencyStatus(p, currentYear);
                 const isSelected = p.PlayerID === selectedId;
                 const line = ARCHETYPE_LINE[p.archetype as Archetype];
                 const switched = p.archetype_reason?.startsWith("Position Switch:");
@@ -264,39 +266,36 @@ export function List() {
                 return (
                   <div
                     key={p.PlayerID}
+                    className="list-grid"
                     onClick={() => {
                       setSelectedId(p.PlayerID);
                       setPanelTab("contract");
                     }}
                     style={{
-                      display: "grid",
-                      gap: 8,
                       alignItems: "center",
-                      padding: "0 12px",
                       height: 40,
                       cursor: "pointer",
-                      gridTemplateColumns: "36px minmax(170px,1fr) 40px 44px 44px 52px 64px 100px",
                       background: isSelected ? "color-mix(in oklch, var(--acc) 18%, transparent)" : "transparent",
                       boxShadow: isSelected ? "inset 3px 0 0 var(--acc)" : undefined,
                       borderBottom: "1px solid rgba(255,255,255,.05)",
                     }}
                   >
                     <span style={{ font: "600 12px 'IBM Plex Mono',monospace", color: "var(--accT)" }}>{p.jumperNumber}</span>
-                    <span style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
-                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0, overflow: "hidden" }}>
+                      <span style={{ minWidth: 0, flex: "0 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         <PlayerLink player={p} as="span" className="!text-inherit" />
                       </span>
-                      <span style={{ font: "500 11px Barlow,sans-serif", color: "#8f9ab0", whiteSpace: "nowrap" }}>{LINE_SHORT[line]}</span>
+                      <span style={{ flex: "none", font: "500 11px Barlow,sans-serif", color: "#8f9ab0", whiteSpace: "nowrap" }}>{LINE_SHORT[line]}</span>
                       {switched && <span style={{ font: "600 11px Barlow,sans-serif", color: "var(--accT)" }} title="Position-switched">⇄</span>}
                       {rookie && <span style={{ font: "600 9px 'IBM Plex Mono',monospace", letterSpacing: ".7px", color: "#8f9ab0" }}>RK</span>}
                     </span>
-                    <span style={{ textAlign: "center", font: "500 12px 'IBM Plex Mono',monospace", color: "#aab3c3" }}>{p.Age}</span>
+                    <span className="col-age" style={{ textAlign: "center", font: "500 12px 'IBM Plex Mono',monospace", color: "#aab3c3" }}>{p.Age}</span>
                     <span style={{ textAlign: "center", font: "600 13px 'IBM Plex Mono',monospace", color: "#fff" }}>{p.OVR}</span>
-                    <span style={{ textAlign: "center", font: "600 13px 'IBM Plex Mono',monospace", color: "var(--accT)" }}>{p.POT}</span>
+                    <span className="col-pot" style={{ textAlign: "center", font: "600 13px 'IBM Plex Mono',monospace", color: "var(--accT)" }}>{p.POT}</span>
                     <span style={{ textAlign: "center", font: "500 12px 'IBM Plex Mono',monospace", color: "#c3ccdd" }}>{p.expired_year}</span>
-                    <span style={{ textAlign: "center", font: "500 12px 'IBM Plex Mono',monospace", color: "#c3ccdd" }}>{money(p.totalValue)}</span>
+                    <span className="col-sal" style={{ textAlign: "center", font: "500 12px 'IBM Plex Mono',monospace", color: "#c3ccdd" }}>{money(p.totalValue)}</span>
                     <span style={{ display: "flex", justifyContent: "center" }}>
-                      <StatusChip tone={STATUS_TONE[status]}>{status}</StatusChip>
+                      <ContractChip expiresYear={p.expired_year} currentYear={currentYear} />
                     </span>
                   </div>
                 );
@@ -375,7 +374,9 @@ function HeadCell({
   dir,
   onSort,
   align,
+  className,
 }: {
+  className?: string;
   label: string;
   sortKey: SquadSortKey;
   current: SquadSortKey;
@@ -386,6 +387,7 @@ function HeadCell({
   const active = sortKey === current;
   return (
     <button
+      className={className}
       onClick={() => onSort(sortKey)}
       style={{
         border: 0,
@@ -475,6 +477,20 @@ function PlayerDetail({
         Open career profile
       </button>
     </div>
+  );
+}
+
+/**
+ * Round 126 — fix pass 1, item 2/3: the row's contract chip. Short labels that fit the 84px Status
+ * column (the year itself is already in Ends); semantic colours from `STATUS`, never the accent.
+ */
+function ContractChip({ expiresYear, currentYear }: { expiresYear: number; currentYear: number }) {
+  const [label, color] =
+    expiresYear <= currentYear ? ["Out of contract", STATUS.ooc] : expiresYear === currentYear + 1 ? ["Final year", STATUS.final] : ["Signed", STATUS.signed];
+  return (
+    <StatusChip color={color} style={{ justifyContent: "center", textAlign: "center", lineHeight: 1.15, borderRadius: 8, maxWidth: 84, whiteSpace: "normal" }}>
+      {label}
+    </StatusChip>
   );
 }
 

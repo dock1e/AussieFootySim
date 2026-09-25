@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useGameStore } from "../store/useGameStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { useSeasonStore } from "../store/useSeasonStore";
@@ -118,7 +118,7 @@ export function CareerProfile() {
               }}
             >
               {ALL_LEAGUE_STATS.map((s) => (
-                <option key={s.key} value={s.key} style={{ color: "#000" }}>
+                <option key={s.key} value={s.key}>
                   {s.label}
                 </option>
               ))}
@@ -158,8 +158,20 @@ function PlayerSelector({
   onTogglePin: (id: number) => void;
 }) {
   const sorted = [...squad].sort((a, b) => b.OVR - a.OVR);
+  // Edge fades only on a side that actually has more chips to scroll to.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fades, setFades] = useState({ left: false, right: false });
+  function updateFades() {
+    const el = scrollRef.current;
+    if (!el) return;
+    setFades({ left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 });
+  }
+  useEffect(updateFades, [squad.length]);
   return (
-    <Card padding="10px 14px" style={{ overflow: "auto" }}>
+    // Round 126 — Cowork fix pass 1, item 6: the chip scroller hides its native scrollbar and fades
+    // 24px into the card colour at each edge, so it reads as a themed strip rather than a white OS track.
+    <Card padding="0" style={{ position: "relative", overflow: "hidden" }}>
+      <div ref={scrollRef} onScroll={updateFades} className="scrollbar-none" style={{ overflowX: "auto", padding: "10px 14px" }}>
       <div className="flex items-center gap-2" style={{ minWidth: "max-content" }}>
         {sorted.map((p) => {
           const active = p.PlayerID === selected.PlayerID;
@@ -197,6 +209,9 @@ function PlayerSelector({
           );
         })}
       </div>
+      </div>
+      <div aria-hidden style={{ opacity: fades.left ? 1 : 0, position: "absolute", top: 0, bottom: 0, left: 0, width: 24, pointerEvents: "none", background: "linear-gradient(90deg, color-mix(in oklch, var(--deep) var(--tc), #10151f), transparent)" }} />
+      <div aria-hidden style={{ opacity: fades.right ? 1 : 0, position: "absolute", top: 0, bottom: 0, right: 0, width: 24, pointerEvents: "none", background: "linear-gradient(270deg, color-mix(in oklch, var(--deep) var(--tc), #10151f), transparent)" }} />
     </Card>
   );
 }

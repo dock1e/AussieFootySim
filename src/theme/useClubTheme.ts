@@ -29,7 +29,11 @@ export function clubThemeStyle(tokens: ClubTokens, tintCard: number = DEFAULT_TI
 /** Page background recipe — brief section 2.2. Apply to the outermost app wrapper. */
 export function pageBackgroundStyle(): CSSProperties {
   return {
-    background: "color-mix(in oklch, var(--deep) var(--tb), #080b12)",
+    // Round 126 — mixed in oklab, not the reference's oklch: Chromium's oklch mix of a colourless
+    // `--deep` (Collingwood's #1c1c1c) into #080b12 resolves to a missing hue with non-zero chroma,
+    // which renders as a maroon tint. oklab has no hue to lose, and is visually identical for every
+    // other club at this 8% strength.
+    background: "color-mix(in oklab, var(--deep) var(--tb), #080b12)",
     minHeight: "100vh",
   };
 }

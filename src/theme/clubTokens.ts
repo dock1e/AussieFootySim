@@ -79,3 +79,16 @@ export const DEFAULT_TINT_CARD = 14;
 export function pageTintFor(cardTint: number): number {
   return Math.round(cardTint * 0.6);
 }
+
+/**
+ * Round 126 — Cowork fix pass 1, item 2: contract/status semantics. These colours carry meaning
+ * (out of contract, final year, signed, rise, fall) and therefore NEVER use the club accent —
+ * otherwise a red club's "out of contract" would read as "yours", and a rise could read as bad.
+ */
+export const STATUS = {
+  ooc: "#ffa37a",
+  final: "#f0c04a",
+  signed: "#8f9ab0",
+  rise: "#4fd69a",
+  fall: "#ffa37a",
+} as const;

@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import type { Player } from "../types/player";
 import { playerFullName } from "../types/player";
-import { CLUBS, clubByName, clubById } from "../types/club";
+import { clubByName, clubById } from "../types/club";
 import { useGameStore } from "../store/useGameStore";
+import { DayOne, type DayOneTarget } from "./onboarding/DayOne";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { useSelectionStore } from "../store/useSelectionStore";
@@ -74,10 +75,12 @@ interface DashboardProps {
   onGoToSelection?: () => void;
   onGoToContracts?: () => void;
   onGoToSeason?: () => void;
+  /** New Game Onboarding — the Day one dashboard's links (shown until Round 1 is played). */
+  onDayOne?: (target: DayOneTarget) => void;
 }
 
-export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: DashboardProps) {
-  const { myClub, setMyClub } = useGameStore();
+export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDayOne }: DashboardProps) {
+  const myClub = useGameStore((s) => s.myClub);
   const club = clubByName(myClub);
   const myClubId = club?.ClubID;
   const season = useSeasonStore((s) => s.season);
@@ -199,6 +202,12 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
 
   const closeModal = () => setActiveModal(null);
 
+  // New Game Onboarding: until Round 1 is played, the Dashboard is the Day one screen (it replaces the
+  // old "No season in progress" empty state).
+  if (myClubId !== undefined && (!season || season.played.length === 0)) {
+    return <DayOne myClub={myClub} onGo={(t) => onDayOne?.(t)} />;
+  }
+
   return (
     <div className="space-y-4">
       <Card padding="18px 22px" style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
@@ -213,17 +222,6 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason }: Da
           <h1 style={{ margin: "4px 0 2px", font: "700 34px/1 'Barlow Condensed',sans-serif", color: "#fff" }}>
             {club?.name} <span style={{ color: "var(--accT)" }}>{club?.nickname}</span>
           </h1>
-          <select
-            className="rounded-lg border border-base-600 bg-transparent px-2 py-1 text-sm text-slate-200"
-            value={myClub}
-            onChange={(e) => setMyClub(e.target.value)}
-          >
-            {CLUBS.map((c) => (
-              <option key={c.ClubID} value={c.name} style={{ background: "#121826" }}>
-                {c.name}
-              </option>
-            ))}
-          </select>
         </div>
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
           <KpiTile value={clubAvgOvr.toFixed(1)} label="List avg OVR" />

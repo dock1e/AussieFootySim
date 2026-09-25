@@ -15,6 +15,11 @@ import { FootballDept } from "./components/FootballDept";
 import { CareerProfile } from "./components/CareerProfile";
 import { PlayerProfileModal } from "./components/PlayerProfileModal";
 import { ThemeSystemScreen } from "./components/ThemeSystemScreen";
+import { Onboarding } from "./components/onboarding/Onboarding";
+import type { DayOneTarget } from "./components/onboarding/DayOne";
+import type { FootballDeptTab } from "./components/FootballDept";
+import { ensureCareer } from "./narrative/career";
+import { useSeasonStore } from "./store/useSeasonStore";
 import { ClubStripe } from "./components/theme/primitives";
 import { clubTokensFor } from "./theme/clubTokens";
 import { clubThemeStyle, pageBackgroundStyle, topWashStyle } from "./theme/useClubTheme";
@@ -154,6 +159,7 @@ export default function App() {
     // you were last on (e.g. Combine within Future Planning) rather than
     // resetting to that group's first screen every click.
     setMatchEntryStep(undefined);
+    setDeptTab(undefined);
     setScreen((prev) => (group.screens.includes(prev) ? prev : group.screens[0]));
   }
   // Round 99 — the Draft screen's new "three-column cockpit" layout (Draft.tsx's own doc comment)
@@ -197,6 +203,30 @@ export default function App() {
   const status = useSaveStore((s) => s.status);
   const initialize = useSaveStore((s) => s.initialize);
   const poolVersion = useSaveStore((s) => s.poolVersion);
+  const hasSave = useSaveStore((s) => s.hasSave);
+  const year = useSaveStore((s) => s.year);
+  const seasonArchives = useSaveStore((s) => s.seasonArchives);
+  /** New Game Onboarding: open from the New Game button; also shown on first load with no save. */
+  const [newGameFlow, setNewGameFlow] = useState(false);
+  const [deptTab, setDeptTab] = useState<FootballDeptTab | undefined>(undefined);
+  const showOnboarding = status === "ready" && (newGameFlow || !hasSave);
+
+  // A save from before onboarding existed gets the default coach at its current club.
+  useEffect(() => {
+    if (status === "ready" && hasSave) ensureCareer(myClub, year, seasonArchives);
+  }, [status, hasSave, myClub, year, seasonArchives]);
+
+  function goDayOne(target: DayOneTarget) {
+    setDeptTab(undefined);
+    if (target === "list") return setScreen("squad");
+    if (target === "dept") {
+      setDeptTab("coaching");
+      return setScreen("facilities");
+    }
+    if (target === "start" && !useSeasonStore.getState().season) useSeasonStore.getState().startNewSeason();
+    setMatchEntryStep(target === "plan" ? 3 : target === "scout" ? 2 : 0);
+    setScreen("match");
+  }
 
   useEffect(() => {
     void initialize();
@@ -211,6 +241,19 @@ export default function App() {
       <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
         Loading save…
       </div>
+    );
+  }
+
+  if (showOnboarding) {
+    return (
+      <Onboarding
+        onDone={() => {
+          setNewGameFlow(false);
+          setMatchEntryStep(undefined);
+          setScreen("dashboard");
+        }}
+        onCancel={hasSave ? () => setNewGameFlow(false) : undefined}
+      />
     );
   }
 
@@ -248,7 +291,7 @@ export default function App() {
               AussieFooty<span style={{ color: "var(--accT)" }}>Sim</span>
             </div>
           </div>
-          <SaveMenu />
+          <SaveMenu onNewGame={() => setNewGameFlow(true)} />
         </div>
         {/* Round 123 — [[Football Department Coach Market]]'s companion nav-styling ask: Tyler's own
             comparison screenshots flagged this row (and the screen-picker row below it) as "the purple
@@ -320,6 +363,7 @@ export default function App() {
             }}
             onGoToContracts={() => setScreen("contracts")}
             onGoToSeason={() => setScreen("season")}
+            onDayOne={goDayOne}
           />
         )}
         {screen === "squad" && <List />}
@@ -341,7 +385,7 @@ export default function App() {
         {screen === "positionSwitch" && <PositionSwitch />}
         {screen === "records" && <Records />}
         {screen === "career" && <CareerProfile />}
-        {screen === "facilities" && <FootballDept />}
+        {screen === "facilities" && <FootballDept key={deptTab ?? "overview"} initialTab={deptTab} />}
         {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />
@@ -401,10 +445,9 @@ function Logo() {
  * more likely real cause of "the save button disappeared" — both fixed
  * together.
  */
-function SaveMenu() {
+function SaveMenu({ onNewGame }: { onNewGame: () => void }) {
   const year = useSaveStore((s) => s.year);
   const lastSavedAt = useSaveStore((s) => s.lastSavedAt);
-  const newGame = useSaveStore((s) => s.newGame);
   const exportJSON = useSaveStore((s) => s.exportJSON);
   const importJSON = useSaveStore((s) => s.importJSON);
   const myClub = useGameStore((s) => s.myClub);
@@ -432,10 +475,12 @@ function SaveMenu() {
   }
 
   function handleNewGame() {
-    if (!window.confirm(`Start a fresh ${myClub} save? This discards your current progress (aged players, season, lineups, plans).`)) {
+    // New Game Onboarding: a new game means a new job, so it opens the offers rather than restarting at
+    // the same club. Nothing is discarded until a club is signed.
+    if (!window.confirm(`Start a new game? Your ${myClub} save is replaced once you sign with a club.`)) {
       return;
     }
-    void newGame(myClub);
+    onNewGame();
   }
 
   return (

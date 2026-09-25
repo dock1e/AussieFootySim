@@ -1,0 +1,117 @@
+import { anyLines, byStatus, clubLines, type Phrase } from "./types";
+
+/** Unveiling screen H2. Speaker: the media. Under 14 words. */
+export const unveilHeadline: Phrase[] = [
+  ...anyLines("unveilHeadline", [
+    "{coach} named senior coach of the {club} {nick}",
+    "{club} land the most wanted coach in the game",
+    "It's official: {coach} takes the {nick} job",
+    "{coachLast} picks the {nick} over seventeen other offers",
+    "Footy's hottest young mind signs with {club}",
+  ]),
+  ...byStatus("unveilHeadline", "contender", ["Flag favourites hand the keys to {coach}", "{club} bet their premiership window on {coachLast}", "Win-now {nick} turn to {coachLast}"]),
+  ...byStatus("unveilHeadline", "rising", ["{club}'s kids get the coach they wanted", "Young {nick} lock in {coachLast} for the climb", "The future arrives early at {club}"]),
+  ...byStatus("unveilHeadline", "middle", ["{club} gamble on {coachLast} to end the drift", "No more middle: {nick} hire {coachLast}", "{club} go bold with {coach}"]),
+  ...byStatus("unveilHeadline", "sleepingGiant", ["Sleeping giant stirs: {club} sign {coach}", "{club} members finally get their man", "The biggest job in footy goes to {coachLast}"]),
+  ...byStatus("unveilHeadline", "reset", ["{club} press reset with {coachLast}", "{coachLast} tasked with turning {club} around", "New coach, new plan at {club}"]),
+  ...byStatus("unveilHeadline", "rebuild", ["{coachLast} signs long deal to rebuild {club}", "{club} hand {coach} the keys and the patience", "Ground zero: {coachLast} starts the {nick} rebuild"]),
+  ...clubLines("unveilHeadline", {
+    ADEL: ["Crows swoop: {coach} heads to West Lakes"],
+    BL: ["Lions keep the dynasty rolling with {coachLast}"],
+    CARL: ["Blue Heaven? Carlton unveil {coach}"],
+    COLL: ["Magpies make {coachLast} their man"],
+    ESS: ["Bombers go all in on {coach}"],
+    FRE: ["Freo sails with {coachLast} at the helm"],
+    GEEL: ["The Cats reload with {coachLast}"],
+    GCFC: ["Suns rise again with {coachLast}"],
+    GWS: ["Giants trust {coachLast} to take them over the top"],
+    HAW: ["Hawks swoop on footy's brightest young mind"],
+    MELB: ["Demons turn to {coachLast} for the next chapter"],
+    NMFC: ["Roos go long with {coachLast}"],
+    PORT: ["Power surge: {coach} lands at Alberton"],
+    RICH: ["Tigers roar again: {coachLast} to lead Richmond"],
+    STK: ["Saints marching in with {coachLast}"],
+    SYD: ["Swans land {coachLast} in a harbour-side coup"],
+    WCE: ["Eagles fly {coachLast} west"],
+    WB: ["Dogs unleash {coachLast} at the Kennel"],
+  }),
+];
+
+/** Unveiling screen paragraph. Speaker: the media, a short report of the press conference. */
+export const unveilBody: Phrase[] = [
+  ...anyLines("unveilBody", [
+    "{years}-year deal. The president called it the most important appointment in club history. Your first message to the members: the plan starts tomorrow.",
+    "The room was packed. {captain} sat in the front row. You spoke about pressure, ball movement and trust, and the members lapped it up.",
+  ]),
+  ...byStatus("unveilBody", "contender", [
+    "A {years}-year deal at a club that expects silverware. {star} was at the presser. You promised nothing but a better way to play.",
+    "The board wants a flag, and fast. You told the room the list was ready and the system would be too, by Round 1.",
+    "Two questions from the press, both about September. You smiled and talked about the first training session instead.",
+    "The {nick} finished {finish} last year. Everyone in the room expects better. So, it seems, do you.",
+    "You arrived with a laptop full of stoppage data and left with the keys to a contender.",
+    "{captain} called you the missing piece. The president called you the final piece. You called it day one.",
+    "Short deal, big expectations. You said you wouldn't have taken the job if it were any other way.",
+    "The window is open and the board wants it used. You spoke about the fourth quarter, and nothing else.",
+  ]),
+  ...byStatus("unveilBody", "rising", [
+    "{years} years to take a young side all the way. {topYoungster} was in the front row, grinning.",
+    "The kids turned up in club polos to watch. You told them the fun starts on Monday.",
+    "The {nick} climbed to {finish} last year. You spoke about the next step like it had already happened.",
+    "You named the young core one by one. The room noticed you'd done your homework.",
+    "A rising side gets a rising coach. Nobody on the board could stop smiling.",
+    "Asked about expectations, you said the list would set them, not the media.",
+    "Your first line to the players: we will be the fittest team in the competition by Round 1.",
+    "The members' forum filled in four minutes. They want to see what you'll do with this group.",
+  ]),
+  ...byStatus("unveilBody", "middle", [
+    "Your job: lift a side stuck around {finish}. You spoke about identity more than wins.",
+    "The president wants September. You said September is built in January, and the room agreed.",
+    "No big promises, just a clear plan. The players at the back of the room were nodding.",
+    "{captain} said the group needed a new voice. By the end of the presser, it had one.",
+    "You told the media the list was better than its ladder spot. They wrote it down.",
+    "The board has backed you for {years} {years|year|years}. You spoke about using every one of them well.",
+    "Asked about your game style, you said: fast, brave and hard to play against.",
+    "One question about pressure numbers and you talked for five minutes. Nobody minded.",
+  ]),
+  ...byStatus("unveilBody", "sleepingGiant", [
+    "The biggest press conference of the pre-season. Cameras everywhere. You kept it simple: work first, noise later.",
+    "The members have waited a long time. You told them you wouldn't make them wait much longer.",
+    "A giant club with a {finish} finish. You spoke about fixing habits before fixing the ladder.",
+    "The president called it a new era. You called it a lot of hard work, and meant it.",
+    "{star} was in the front row. You shook his hand and said the club would be built around effort.",
+    "The club song played as you walked in. You said it would be played a lot more this year.",
+    "Every radio station in the state carried the presser live. You barely looked up from your notes.",
+    "Waking the giant will take time. You said you'd start with the first quarter.",
+  ]),
+  ...byStatus("unveilBody", "reset", [
+    "Signed for {years} years to turn it around fast. You said the list was good enough to surprise people.",
+    "The board admitted last year was a failure. You said it was a starting point.",
+    "You spoke about clarity: every player will know their role by the first practice match.",
+    "After a {finish} finish, the room wanted a quick fix. You offered a clear plan instead.",
+    "{captain} sat beside you and said the group was ready to work. You said good, because it would.",
+    "You were asked if this was a rebuild. You said no, and nobody argued.",
+    "Your first message: the list has talent, it just needs a system. The players looked relieved.",
+    "The president said you were the only name on the list. You said you'd make that look smart.",
+  ]),
+  ...byStatus("unveilBody", "rebuild", [
+    "{years} years, full backing, a clean slate. {topYoungster} was in the front row. Your first message: the plan starts tomorrow.",
+    "A long deal and a young list. You spoke about habits, not results, and the board loved it.",
+    "Last year's {finish} finish didn't come up much. You said growth was the point this year, not the ladder.",
+    "Several young players were in the room. You told them they'd get games and get coached hard.",
+    "Asked when the club would play finals, you said: when the kids are ready, and not a week before.",
+    "A five-year project, according to the president. You said it would be a good one.",
+    "Draft picks, development and patience: that was the message. Then you went to watch the rookies train.",
+    "No promises of wins, just a promise of improvement. The members seemed to like that best.",
+  ]),
+];
+
+/** The board's brief: offers panel, unveiling and Day one. Short, and consistent with the expectation. */
+export const boardBrief: Phrase[] = [
+  ...anyLines("boardBrief", ["{expectation}. That's the bar the board has set.", "The board's target is simple: {expectation}.", "Target for the year: {expectation}. The board will judge you on it."]),
+  ...byStatus("boardBrief", "contender", ["{expectation}, or it's a step back.", "Stay in the window. {expectation} is the minimum.", "A deep September run. The board says {expectation}."]),
+  ...byStatus("boardBrief", "rising", ["Turn a young side into a finals side. {expectation}.", "Keep climbing. The board wants {expectation}.", "Push for September while the kids grow."]),
+  ...byStatus("boardBrief", "middle", ["Convert talent into a finals team. {expectation}.", "Break out of the middle. {expectation}.", "Give the side an identity, then {expectation}."]),
+  ...byStatus("boardBrief", "sleepingGiant", ["Give the members something to believe in. {expectation}.", "Wake the giant. {expectation}, then keep going.", "Big club, big crowd, {expectation}. No excuses."]),
+  ...byStatus("boardBrief", "reset", ["Reset on the run. Stay competitive.", "Top eight push while the list resets.", "Turn it around quickly. Finals are the goal."]),
+  ...byStatus("boardBrief", "rebuild", ["Develop the young core. Wins will come.", "Rebuild the list, rebuild the culture.", "Grow the kids. Be competitive by year three."]),
+];

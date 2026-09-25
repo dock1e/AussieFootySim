@@ -41,6 +41,11 @@ export function loadPool(players: readonly Player[]): void {
   ALL_PLAYERS.push(...players);
 }
 
+/** The untouched New Game baseline (read-only) — what a new save's clubs look like before anything happens to them. */
+export function generatedPlayers(): readonly Player[] {
+  return GENERATED_PLAYERS;
+}
+
 /** Restores the live pool to the freshly-generated baseline — "New Game"/"discard save". */
 export function resetPoolToGenerated(): void {
   loadPool(GENERATED_PLAYERS);

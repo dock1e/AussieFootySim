@@ -46,16 +46,51 @@ type Screen =
  * prefer to consolidate a lot of that information." The previous flat
  * 11-button row (one button per `Screen`) had already wrapped the header
  * once and dropped SaveMenu onto its own low-contrast line — see the comment
- * on the header row below. Groups map onto Tyler's own named categories
- * (Match Day / Coaching Decisions / Future Planning / Player Management).
+ * on the header row below.
+ *
+ * Round 124 — [[Club Theme System]]'s own nav spec (`Club Theme System.dc.html`
+ * line ~2079: `tabs:[dash, live('Match Day'), list('List'), player('Player
+ * Career'), draft('Draft'), staff('Football Dept'), stats, theme]`) has
+ * specified this exact flat 8-tab top-level nav since round 114 first read
+ * the brief — every real screen gets its own top-level tab, no umbrella
+ * groups. Rounds 115-123 retrofitted each screen's own CONTENT to the brief
+ * without ever revisiting the nav's STRUCTURE, so the round-52 grouping
+ * (Coaching / Future Planning / Player Mgmt) stayed in place underneath.
+ * Tyler's own round-124 ask, prompted by a screenshot of the brief's flat nav
+ * next to our grouped one, was explicit: "flatten the whole nav" to match.
+ *
+ * The mechanism is unchanged — a group with one screen navigates straight
+ * there with no sub-tab row; a group with more than one still shows the
+ * existing secondary pill row (see `activeGroup` below, and `FootballDept.tsx`'s
+ * own internal 4-tab shell for the same one-nav-item/multiple-screens pattern
+ * a level down). What changed is which top-level LABEL each screen sits
+ * under: the brief's flat nav only names 8 destinations, but this app has 15
+ * real screens, so the 6 screens the brief doesn't give their own top-level
+ * slot — Selection, Position Switch, List Needs, Talent Scouting, Trade,
+ * Contracts — needed a documented new home rather than an invented 9th tab
+ * the brief never asked for:
+ *   - Selection (pre-match team-sheet prep) joins Match Day's own group,
+ *     ordered second so the top-level "Match Day" button still lands on the
+ *     live match screen by default, with Selection one pill-click away.
+ *   - Position Switch and Contracts join List's own group — round 117's own
+ *     doc comment already treats both as List's natural companions (Position
+ *     Switch is the batch review queue for the single-player Position Fit
+ *     tab List already has; Contracts is the whole-league version of List's
+ *     own per-player Contract tab), so this just gives that existing
+ *     relationship a shared top-level home instead of two separate ones.
+ *   - List Needs, Talent Scouting, and Trade join Draft's own group — these
+ *     three plus the Draft board itself are the one off-season planning
+ *     pipeline the old "Future Planning" umbrella already recognised;
+ *     ordered with `draft` first so the top-level "Draft" button lands on
+ *     the actual board, matching the label.
  *
  * `screen` itself is completely unchanged as the single source of truth for
- * which component renders (see `<main>` below) — only the nav chrome
- * changes, so no screen component or cross-nav callback needed to change for
- * this part of the work. A group with exactly one screen (Dashboard, Match
- * Day) navigates straight there with no sub-tab row; a group with more than
- * one shows a secondary pill row for its own screens (see `activeGroup`
- * below).
+ * which component renders (see `<main>` below), and every cross-nav callback
+ * (`onGoToContracts`, `onGoToPositionSwitch`, etc.) still just calls
+ * `setScreen(...)` — `activeGroup`'s lookup is generic over `screens`, so
+ * jumping straight to a screen now under a different top-level label
+ * highlights the correct new tab automatically, with no callback changes
+ * needed anywhere in the app.
  *
  * `season` is deliberately absent from every group's `screens` list: it's no
  * longer reachable from top-level nav, but the screen/route itself is
@@ -74,10 +109,11 @@ type Screen =
  */
 const NAV_GROUPS: { key: string; label: string; screens: Screen[] }[] = [
   { key: "dashboard", label: "Dashboard", screens: ["dashboard"] },
-  { key: "matchDay", label: "Match Day", screens: ["match"] },
-  { key: "coaching", label: "Coaching", screens: ["selection", "positionSwitch"] },
-  { key: "futurePlanning", label: "Future Planning", screens: ["listNeeds", "combine", "trade", "draft"] },
-  { key: "playerMgmt", label: "Player Mgmt", screens: ["squad", "contracts", "career", "facilities"] },
+  { key: "matchDay", label: "Match Day", screens: ["match", "selection"] },
+  { key: "list", label: "List", screens: ["squad", "contracts", "positionSwitch"] },
+  { key: "career", label: "Player Career", screens: ["career"] },
+  { key: "draft", label: "Draft", screens: ["draft", "listNeeds", "combine", "trade"] },
+  { key: "facilities", label: "Football Dept", screens: ["facilities"] },
   { key: "records", label: "Statistics", screens: ["records"] },
   ...(import.meta.env.DEV ? [{ key: "themeSystem", label: "Theme System", screens: ["themeSystem"] as Screen[] }] : []),
 ];

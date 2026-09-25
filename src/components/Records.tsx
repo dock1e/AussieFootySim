@@ -1,17 +1,20 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { useSaveStore } from "../store/useSaveStore";
-import { ClubBadgeByName } from "./ClubBadge";
-import { PlayerLink } from "./PlayerLink";
-import { combinedRecordFor, seasonGroupTable, type RecordRow, type SeasonStatRow } from "../engine/records";
+import { useGameStore } from "../store/useGameStore";
+import { usePlayerProfileStore } from "../store/usePlayerProfileStore";
+import { combinedRecordFor, seasonStatsTable, type RecordRow } from "../engine/records";
 import { hasRealWorldData, type RecordCategory } from "../data/realWorldRecords";
 import { SINGLE_GAME_GOALS, SINGLE_GAME_DISPOSALS } from "../data/afltablesBigLists";
 import { gameHighsFor } from "../data/afltablesGameHighs";
 import { ALL_LEAGUE_STATS } from "../engine/seasonSummary";
 import { ARCHETYPES, type Archetype } from "../types/archetype";
-import { CLUBS } from "../types/club";
-import { MEANING_TOKENS } from "../theme/clubTokens";
+import { CLUBS, clubByName } from "../types/club";
+import type { Player } from "../types/player";
+import { clubTokensFor, MEANING_TOKENS as MEANING } from "../theme/clubTokens";
+import { clubThemeStyle } from "../theme/useClubTheme";
 
+/**
 /**
  * The Statistics tab (renamed from "Records" this round) — Aug 2026. Originally built for two
  * categories (career Goals, Games Played), widened to all 24 the following round, and reorganized
@@ -107,104 +110,90 @@ import { MEANING_TOKENS } from "../theme/clubTokens";
  * `SEASON_WRITEUP_TEMPLATES` pool is now 40 (and picked up a genuine grammar-bug fix for the rank-1
  * case along the way — see that file's own doc comment).
  *
- * **Round 120** — [[Club Theme System]] re-theme. Every interactive "selected/active" surface (group
- * pills, All-Time category pills, the All-Time/This-Season mode toggle, the This-Season table's active
- * sort column, the "AFS"/"AussieFootySim record" tags) moves from the app's flat global `accent`
- * Tailwind token to `var(--acc)`/`var(--accT)`/`var(--on)`, so it reads as this club's colour rather
- * than a fixed orange — same "accent means yours" rule 2 every other re-themed screen already follows.
- * The gold/silver/bronze All-Time tiering (`tierRowClasses`/`tierRankClasses`) moves from literal
- * Tailwind `amber-400`/`slate-300`/`orange-700` to `MEANING_TOKENS.gold`/`.silver`/`.bronze` — brief
- * rule 5 ("meaning never depends on club colour"), and those exact 3 tokens already exist in
- * `theme/clubTokens.ts` for precisely this. The "Active" real-player badge moves from a literal
- * `emerald` to `MEANING_TOKENS.rise` for the same reason. No mechanic, filter, sort, or data-source
- * logic changes — this file's real work (the real+sim merge, the This-Season sortable multi-column
- * table, Single-Game Highs, the 5-group taxonomy) is untouched. One disclosed gap, not built this
- * round: the brief's own `isStats` markup expects a "pinned players get their own rows, ranked among
- * all players" section at the top of this screen (cross-referenced from the Dashboard brief's own
- * watchlist note) — no such per-pinned-player-rank lookup exists anywhere in this codebase yet
- * (`engine/dashboardInsights.ts`'s Record Watch feed ranks by significance across the WHOLE league, not
- * a specific pinned player's own rank in the CURRENTLY SELECTED stat/category/mode), and building it is
- * real new engine work, not a re-theme — flagged as a follow-up rather than faked with a placeholder.
+ * Round 125 — UI Redesign3 (supersedes Round 120's colour-only re-theme) (`Club Theme System.dc.html` "Statistics" screen, brief §4.7 / layout
+ * pattern B). Rebuilt as ONE leaders table under a single filter bar (Search · Scope · Stat group ·
+ * Position · Team · Reset), themed by the coached club's five tokens (set app-wide by App.tsx from `theme/clubTokens.ts`):
+ *   - This Season: every player who has played, every category at once (`seasonStatsTable`), sticky
+ *     Rank + Player columns with horizontal scroll, click-to-sort headers (click again to flip), a
+ *     Total/Average switch, and position-percentile BENCHMARKING shading (Elite top 10% / Above avg
+ *     next 25% / Average / Below avg bottom third, vs same position group, always on per-game
+ *     averages so a player's tier doesn't depend on games played). Turnovers and Frees Against are
+ *     benchmarked lower-is-better; Behinds, Games and Finals aren't shaded (no "good" direction).
+ *     The deferred Round 61 item 9 (benchmarking) lands here in the reference's own simple form.
+ *   - All-Time Career: still one category at a time, for the same missing-data reason Round 62 gave
+ *     (real legends are independently ranked per category) — the Stat group select becomes a single
+ *     Statistic select, same table chrome, medal-coloured ranks 1-3, ACTIVE / AFS tags, an
+ *     "In this save" column carrying Round 60's real + save split, and an Active-only toggle.
+ *   - A "your club" strip ranks your best players in the sorted column among ALL players (the
+ *     reference's watchlist strip, fed by the Dashboard watchlist; with no pins it uses the reference's
+ *     own "YOUR BEST-RANKED PLAYER" fallback, widened to three).
+ *   - Clicking a season row opens a side drawer with every stat's value, league rank and tier, plus
+ *     the full player profile link. All-time rows open the profile directly.
+ * Position filter: the reference's four position groups (MID/FWD/DEF/RUC, mapped from archetype),
+ * with the 14 archetypes still available underneath for the finer cut. Single-Game Highs keeps
+ * following the sorted column, restyled to match.
  */
 
-type StatGroup = "General" | "Disposal Leaders" | "Scoring Leaders" | "Stoppage Kings" | "Defensive Leaders";
+type Scope = "season" | "allTime";
+type StatMode = "avg" | "tot";
+type PosGroup = "MID" | "FWD" | "DEF" | "RUC";
+type Tier = "elite" | "above" | "avg" | "below";
+type GroupKey = "all" | "general" | "disposal" | "scoring" | "stoppage" | "defence";
 
-const GROUP_ORDER: StatGroup[] = ["General", "Disposal Leaders", "Scoring Leaders", "Stoppage Kings", "Defensive Leaders"];
-
-/** Every one of the 24 categories' group, per Tyler's own round-58 list (see this file's own doc comment for the 3-stat judgment call and the 3 placeholders, handled separately via `PLACEHOLDER_STATS`). */
-const CATEGORY_GROUP: Record<RecordCategory, StatGroup> = {
-  gamesPlayed: "General",
-  finalsAppearances: "General",
-  fantasyPoints: "General",
-  // Sep 2026 round 90, [[Coaches Votes and MVP Award]] — a whole-of-game "best afield" award, not a
-  // raw counting stat, so General fits it the same way it fits Fantasy Points.
-  coachesVotes: "General",
-  disposals: "Disposal Leaders",
-  kicks: "Disposal Leaders",
-  handballs: "Disposal Leaders",
-  turnovers: "Disposal Leaders",
-  contestedPoss: "Disposal Leaders",
-  uncontestedPoss: "Disposal Leaders",
-  marks: "Disposal Leaders",
-  freeKicksFor: "Disposal Leaders",
-  freeKicksAgainst: "Disposal Leaders",
-  goals: "Scoring Leaders",
-  behinds: "Scoring Leaders",
-  shotsAtGoal: "Scoring Leaders",
-  goalAssists: "Scoring Leaders",
-  markLeadWins: "Scoring Leaders",
-  marksInside50: "Scoring Leaders",
-  clearances: "Stoppage Kings",
-  hitouts: "Stoppage Kings",
-  hitoutsToAdvantage: "Stoppage Kings",
-  tackles: "Defensive Leaders",
-  spoils: "Defensive Leaders",
-  interceptMarks: "Defensive Leaders",
-  interceptPossessions: "Defensive Leaders",
+const POS_GROUP_OF: Record<Archetype, PosGroup> = {
+  "Inside Mid": "MID",
+  "Outside Mid": "MID",
+  "Hybrid Mid Forward": "MID",
+  "Pressure Forward": "FWD",
+  "Small Forward": "FWD",
+  "Medium Forward": "FWD",
+  "Key Forward": "FWD",
+  Ruck: "RUC",
+  "Hybrid Key Forward Ruck": "RUC",
+  "Medium Defender": "DEF",
+  "Intercept Defender": "DEF",
+  "Half Back Flanker": "DEF",
+  "Back Pocket": "DEF",
+  "Key Defender": "DEF",
 };
 
-interface PlaceholderStat {
-  key: string;
-  label: string;
+function posGroupOf(player: Player | undefined): PosGroup | undefined {
+  return player ? POS_GROUP_OF[player.archetype as Archetype] : undefined;
 }
 
-/** The 3 "(Placeholder)" stats from Tyler's own list — no data model yet, rendered as non-interactive "coming soon" chips in the General group only. Not a `RecordCategory` — these never touch `combinedRecordFor`/`seasonOnlyRecord`. */
-const PLACEHOLDER_STATS: PlaceholderStat[] = [
-  { key: "consecutiveGames", label: "Consecutive Games Played" },
-  { key: "gamesMissedInjury", label: "Most Games Missed (Injury)" },
-  { key: "gamesMissedSuspension", label: "Most Games Missed (Suspension)" },
+const POS_GROUP_LABEL: Record<PosGroup, string> = { MID: "Midfielders", FWD: "Forwards", DEF: "Defenders", RUC: "Rucks" };
+const POS_GROUP_PLURAL: Record<PosGroup, string> = { MID: "midfielders", FWD: "forwards", DEF: "defenders", RUC: "rucks" };
+
+/** Stat groups for the season table's Stat group select — Tyler's round-58 groups, every group led by Games so the denominator is always on screen. */
+const GROUPS: { key: Exclude<GroupKey, "all">; label: string; cats: RecordCategory[] }[] = [
+  { key: "disposal", label: "Disposals", cats: ["disposals", "kicks", "handballs", "marks", "contestedPoss", "uncontestedPoss", "turnovers", "freeKicksFor", "freeKicksAgainst"] },
+  { key: "scoring", label: "Scoring", cats: ["goals", "behinds", "shotsAtGoal", "goalAssists", "marksInside50", "markLeadWins"] },
+  { key: "stoppage", label: "Stoppages", cats: ["clearances", "hitouts", "hitoutsToAdvantage"] },
+  { key: "defence", label: "Defence", cats: ["tackles", "spoils", "interceptMarks", "interceptPossessions"] },
+  { key: "general", label: "General", cats: ["fantasyPoints", "coachesVotes", "finalsAppearances"] },
 ];
 
-const CATEGORY_UNIT: Record<RecordCategory, string> = {
-  fantasyPoints: "points",
-  coachesVotes: "votes",
-  goals: "goals",
-  disposals: "disposals",
-  gamesPlayed: "games",
-  finalsAppearances: "finals",
-  behinds: "behinds",
-  shotsAtGoal: "shots at goal",
-  goalAssists: "goal assists",
-  contestedPoss: "contested poss.",
-  uncontestedPoss: "uncontested poss.",
-  kicks: "kicks",
-  handballs: "handballs",
-  freeKicksFor: "frees for",
-  freeKicksAgainst: "frees against",
-  turnovers: "turnovers",
-  marks: "marks",
-  marksInside50: "marks inside 50",
-  markLeadWins: "marks on the lead",
-  interceptMarks: "intercept marks",
-  clearances: "clearances",
-  hitouts: "hitouts",
-  hitoutsToAdvantage: "hitouts to advantage",
-  tackles: "tackles",
-  spoils: "spoils",
-  interceptPossessions: "intercept poss.",
-};
+const ALL_COLS: RecordCategory[] = ["gamesPlayed", ...GROUPS.flatMap((g) => g.cats)];
 
-/** Round 62 — short column headers for the This-Season sortable multi-column table (`afl.com.au`-style abbreviations: D/K/H/M/T/CL...). Only ever shown a few at a time (one group's worth), so collisions across groups (e.g. "T" for Tackles vs "TO" for Turnovers, different groups) are fine — the full name is still one hover away via each header's own `title` tooltip. */
+function colsFor(group: GroupKey): RecordCategory[] {
+  if (group === "all") return ALL_COLS;
+  return ["gamesPlayed", ...GROUPS.find((g) => g.key === group)!.cats];
+}
+
+/** Always shown as a season total — a per-game average of games played (or of finals appearances) is meaningless. */
+const TOTAL_ONLY = new Set<RecordCategory>(["gamesPlayed", "finalsAppearances"]);
+/** Benchmarked lower-is-better. */
+const LOWER_IS_BETTER = new Set<RecordCategory>(["turnovers", "freeKicksAgainst"]);
+/** No "good" direction, so no benchmark shading. */
+const UNBENCHMARKED = new Set<RecordCategory>(["gamesPlayed", "finalsAppearances", "behinds"]);
+
+const TIER_BG: Record<Tier, string> = { elite: "rgba(79,214,154,.30)", above: "rgba(79,214,154,.12)", avg: "transparent", below: "rgba(255,163,122,.13)" };
+const TIER_LABEL: Record<Tier, string> = { elite: "Elite", above: "Above avg", avg: "Average", below: "Below avg" };
+
+/** The 3 "(Placeholder)" stats from Tyler's own round-58 list — no data model yet, listed as disabled options in the All-Time Statistic select. */
+const PLACEHOLDER_STATS = ["Consecutive Games Played", "Most Games Missed (Injury)", "Most Games Missed (Suspension)"];
+
+/** Short column headers (afl.com.au-style). Full names live in each header's tooltip. */
 const CATEGORY_SHORT: Record<RecordCategory, string> = {
   gamesPlayed: "GM",
   finalsAppearances: "FIN",
@@ -221,11 +210,11 @@ const CATEGORY_SHORT: Record<RecordCategory, string> = {
   freeKicksAgainst: "FA",
   goals: "G",
   behinds: "B",
-  shotsAtGoal: "SG",
+  shotsAtGoal: "SOG",
   goalAssists: "GA",
   markLeadWins: "MOL",
-  marksInside50: "MI5",
-  clearances: "CL",
+  marksInside50: "MI50",
+  clearances: "CLR",
   hitouts: "HO",
   hitoutsToAdvantage: "HOA",
   tackles: "T",
@@ -234,509 +223,867 @@ const CATEGORY_SHORT: Record<RecordCategory, string> = {
   interceptPossessions: "IP",
 };
 
-/** Reuses the Dashboard's own `ALL_LEAGUE_STATS` labels (plus one extra for `gamesPlayed`, which isn't a `LeagueStat`) so a stat's name can never drift between the two surfaces. */
+/** Reuses the Dashboard's own `ALL_LEAGUE_STATS` labels (plus `gamesPlayed`/`finalsAppearances`, which aren't `LeagueStat`s) so a stat's name can never drift between the two surfaces. */
 const CATEGORY_LABEL = {
   gamesPlayed: "Games Played",
   finalsAppearances: "Finals Appearances",
   ...Object.fromEntries(ALL_LEAGUE_STATS.map((s) => [s.key, s.label])),
 } as Record<RecordCategory, string>;
 
-const CATEGORIES: RecordCategory[] = ["gamesPlayed", "finalsAppearances", ...ALL_LEAGUE_STATS.map((s) => s.key)];
-
-/**
- * Round 60, Tyler: "If I play a game with Scott Pendlebury, will the number of disposals he
- * achieves in my simulated game be added to the 11,169 disposals? If not, it should." `row.value` on
- * a merged continuing-career row is already the true total (real + this save) — this only builds the
- * small disclosure caption showing the split, so the merge reads as transparent rather than an opaque
- * blended number. `null` for every ordinary row (no `simContribution`), which is most of them.
- */
-function simContributionCaption(row: RecordRow): string | null {
-  if (!row.simContribution) return null;
-  const base = row.value - row.simContribution;
-  return `${base.toLocaleString()} real + ${row.simContribution.toLocaleString()} this save`;
-}
-
-/**
- * Round 62 — gold #1 / silver #2-3 / bronze #4-5, replacing the old uniform accent highlight.
- * All-Time Career mode only (see this file's own doc comment for why This Season's new sortable
- * table drops the fixed-rank highlight concept entirely). Round 120 — the 3 tier colours now resolve
- * through `MEANING_TOKENS.gold`/`.silver`/`.bronze` (returned as inline styles, since Tailwind can't
- * resolve a CSS custom property inside an arbitrary-value class) instead of literal amber/slate/orange,
- * per the brief's "meaning never depends on club colour" rule — a gold #1 stays gold whichever club's
- * tokens are active.
- */
-function tierRowStyle(rank: number): { borderColor?: string; backgroundColor?: string } {
-  if (rank === 1) return { borderColor: `color-mix(in oklch, ${MEANING_TOKENS.gold} 50%, transparent)`, backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.gold} 10%, transparent)` };
-  if (rank <= 3) return { borderColor: `color-mix(in oklch, ${MEANING_TOKENS.silver} 40%, transparent)`, backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.silver} 10%, transparent)` };
-  if (rank <= 5) return { borderColor: `color-mix(in oklch, ${MEANING_TOKENS.bronze} 50%, transparent)`, backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.bronze} 10%, transparent)` };
-  return {};
-}
-
-function tierRowClasses(rank: number): string {
-  if (rank <= 5) return "border";
-  return "odd:bg-base-800/50 hover:bg-base-800";
-}
-
-function tierRankStyle(rank: number): { color?: string } {
-  if (rank === 1) return { color: MEANING_TOKENS.gold };
-  if (rank <= 3) return { color: MEANING_TOKENS.silver };
-  if (rank <= 5) return { color: MEANING_TOKENS.bronze };
-  return {};
-}
-
-function tierRankClasses(rank: number): string {
-  if (rank === 1) return "text-base font-bold";
-  if (rank <= 5) return "font-semibold";
-  return "text-slate-500";
-}
-
-type Mode = "allTime" | "season";
-
 /** Round 61, Tyler: "Lets paginate the top 100 at 25." */
 const PAGE_SIZE = 25;
+
+// --- Shared inline styles (brief §2.3–2.6); everything club-coloured reads the CSS vars set on the screen root. ---
+const MONO = "'IBM Plex Mono', ui-monospace, monospace";
+const COND = "'Barlow Condensed', sans-serif";
+const BARLOW = "Barlow, system-ui, sans-serif";
+
+/** Brief §2.3 surfaces — every value reads the club vars App.tsx sets on the app root. */
+const SURFACE = {
+  card: "color-mix(in oklch, var(--deep) var(--tc), #10151f)",
+  hero: "color-mix(in oklch, var(--deep) calc(var(--tc) * 2.4), #10151f)",
+  panel: "color-mix(in oklch, var(--deep) calc(var(--tc) * 1.6), #0d121b)",
+  inset: "rgba(0,0,0,.25)",
+  border: "rgba(255,255,255,.07)",
+  divider: "rgba(255,255,255,.05)",
+} as const;
+const MEDALS = [MEANING.gold, MEANING.silver, MEANING.bronze] as const;
+
+/** Another club's five vars, scoped to a wrapper — the only place a non-coached club's colours appear. */
+function clubVars(name: string | undefined): CSSProperties {
+  return clubThemeStyle(clubTokensFor(name ? clubByName(name)?.abbreviation : undefined));
+}
+
+const cardStyle: CSSProperties = { background: SURFACE.card, border: `1px solid ${SURFACE.border}`, borderRadius: 16 };
+const fieldLabel: CSSProperties = { font: `500 9px ${MONO}`, letterSpacing: "1.2px", color: "#8f9ab0" };
+const fieldInput: CSSProperties = {
+  background: SURFACE.inset,
+  border: "1px solid rgba(255,255,255,.12)",
+  borderRadius: 8,
+  color: "#e9edf4",
+  padding: "8px 10px",
+  font: `600 13px ${BARLOW}`,
+  outline: "none",
+};
+const ghostButton: CSSProperties = {
+  background: "transparent",
+  color: "#dfe5ee",
+  border: "1px solid rgba(255,255,255,.14)",
+  borderRadius: 7,
+  padding: "6px 12px",
+  font: `600 12px ${BARLOW}`,
+  cursor: "pointer",
+};
+
+function fmtValue(v: number | null | undefined, decimals: boolean): string {
+  if (v == null) return "—";
+  return decimals ? v.toFixed(1) : Math.round(v).toLocaleString();
+}
+
+/** Monogram chip (brief §2.6), scoped to that club's own tokens — the only place another club's colours appear. */
+function ClubChip({ club, size = 11 }: { club: string | undefined; size?: number }) {
+  const abbr = club ? clubByName(club)?.abbreviation : undefined;
+  if (!abbr) return null;
+  return (
+    <span style={clubVars(club)} title={club} className="inline-flex shrink-0">
+      <span
+        style={{
+          display: "inline-flex",
+          padding: "2px 6px",
+          borderRadius: 5,
+          background: "var(--deep)",
+          border: "1px solid color-mix(in oklch, var(--acc) 50%, transparent)",
+          font: `700 ${size}px ${COND}`,
+          color: "var(--accT)",
+          letterSpacing: ".3px",
+        }}
+      >
+        {abbr}
+      </span>
+    </span>
+  );
+}
+
+/** Toggle (brief §2.6): 30×17-ish track in `--acc` when on, knob in `--on`. */
+function Toggle({ on }: { on: boolean }) {
+  return (
+    <span style={{ width: 32, height: 18, borderRadius: 9, padding: 2, background: on ? "var(--acc)" : "rgba(255,255,255,.12)", display: "flex" }}>
+      <span
+        style={{ width: 14, height: 14, borderRadius: "50%", background: on ? "var(--on)" : "#8f9ab0", transform: on ? "translateX(14px)" : "none", transition: "transform .15s" }}
+      />
+    </span>
+  );
+}
+
+function Field({ label, children, grow }: { label: string; children: React.ReactNode; grow?: boolean }) {
+  return (
+    <label className="flex flex-col" style={{ gap: 5, flex: grow ? "1 1 200px" : undefined }}>
+      <span style={fieldLabel}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+interface SeasonRowVM {
+  id: number;
+  name: string;
+  club: string;
+  player: Player;
+  pos: PosGroup | undefined;
+  gamesPlayed: number;
+  totals: Record<RecordCategory, number>;
+}
 
 export function Records() {
   const season = useSeasonStore((s) => s.season);
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
+  const year = useSaveStore((s) => s.year);
+  const myClub = useGameStore((s) => s.myClub);
+  const watchlist = useSaveStore((s) => s.watchlist);
 
-  const [group, setGroup] = useState<StatGroup>("General");
-  const [category, setCategory] = useState<RecordCategory>("gamesPlayed");
-  const [mode, setMode] = useState<Mode>("season");
-  const [archetypeFilter, setArchetypeFilter] = useState<Archetype | "all">("all");
+  const [scope, setScope] = useState<Scope>(season ? "season" : "allTime");
+  const [group, setGroup] = useState<GroupKey>("all");
+  const [sortKey, setSortKey] = useState<RecordCategory>("disposals");
+  const [sortDir, setSortDir] = useState<1 | -1>(-1);
+  const [statMode, setStatMode] = useState<StatMode>("avg");
+  const [bench, setBench] = useState(true);
+  const [posFilter, setPosFilter] = useState<string>("all");
   const [teamFilter, setTeamFilter] = useState<string>("all");
+  const [query, setQuery] = useState("");
+  const [activeOnly, setActiveOnly] = useState(false);
   const [page, setPage] = useState(0);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  const label = CATEGORY_LABEL[category];
-  const unit = CATEGORY_UNIT[category];
-  const hasReal = hasRealWorldData(category);
-  const isFiltered = archetypeFilter !== "all" || teamFilter !== "all";
+  const isSeason = scope === "season";
+  const avgMode = isSeason && statMode === "avg";
+  const q = query.trim().toLowerCase();
 
-  // --- All-Time Career: unchanged single-category ranked list ---
-  const allRows = useMemo((): RecordRow[] => {
-    if (mode === "season") return [];
-    const topN = isFiltered ? 750 : 100;
-    return combinedRecordFor(category, seasonArchives, season, topN);
-  }, [category, mode, seasonArchives, season, isFiltered]);
+  function matchesPos(player: Player | undefined): boolean {
+    if (posFilter === "all") return true;
+    if (posFilter.startsWith("g:")) return posGroupOf(player) === posFilter.slice(2);
+    return player?.archetype === posFilter.slice(2);
+  }
 
-  const filteredRows = useMemo(
-    () =>
-      allRows.filter((r) => {
-        if (archetypeFilter !== "all" && r.player?.archetype !== archetypeFilter) return false;
-        if (teamFilter !== "all" && r.club !== teamFilter) return false;
-        return true;
-      }),
-    [allRows, archetypeFilter, teamFilter],
+  // ---------- This Season ----------
+  const seasonData = useMemo((): SeasonRowVM[] => {
+    if (!season) return [];
+    return seasonStatsTable(season).map((e) => ({ id: e.player.PlayerID, name: e.name, club: e.club, player: e.player, pos: posGroupOf(e.player), gamesPlayed: e.gamesPlayed, totals: e.totals }));
+  }, [season]);
+
+  const cols = colsFor(group);
+  const seasonSortKey = cols.includes(sortKey) ? sortKey : cols[1];
+
+  function seasonVal(r: SeasonRowVM, k: RecordCategory, avg = avgMode): number {
+    const total = r.totals[k] ?? 0;
+    return avg && !TOTAL_ONLY.has(k) ? total / r.gamesPlayed : total;
+  }
+  const showDecimals = (k: RecordCategory) => avgMode && !TOTAL_ONLY.has(k);
+
+  /** Position-percentile tiers over EVERY season player (not the filtered view), always on per-game averages. */
+  const tiers = useMemo(() => {
+    const out = new Map<RecordCategory, Map<number, Tier>>();
+    for (const k of ALL_COLS) {
+      if (UNBENCHMARKED.has(k)) continue;
+      const m = new Map<number, Tier>();
+      for (const g of ["MID", "FWD", "DEF", "RUC"] as PosGroup[]) {
+        const arr = seasonData.filter((r) => r.pos === g).map((r) => ({ id: r.id, v: (r.totals[k] ?? 0) / r.gamesPlayed }));
+        arr.sort((a, b) => (LOWER_IS_BETTER.has(k) ? a.v - b.v : b.v - a.v));
+        arr.forEach((o, i) => {
+          const pc = i / arr.length;
+          m.set(o.id, pc < 0.1 ? "elite" : pc < 0.35 ? "above" : pc < 0.65 ? "avg" : "below");
+        });
+      }
+      out.set(k, m);
+    }
+    return out;
+  }, [seasonData]);
+  const benchOn = isSeason && bench;
+  const tierOf = (id: number, k: RecordCategory): Tier | undefined => (benchOn ? tiers.get(k)?.get(id) : undefined);
+
+  const seasonCmp = (a: SeasonRowVM, b: SeasonRowVM) => {
+    const d = seasonVal(a, seasonSortKey) - seasonVal(b, seasonSortKey);
+    return sortDir < 0 ? -d : d;
+  };
+
+  /** Sorted with competition ranks (ties share a rank), so the rank column reads true in the current sort. */
+  function withRanks(rows: SeasonRowVM[]): { row: SeasonRowVM; rank: number }[] {
+    const sorted = [...rows].sort(seasonCmp);
+    let prev: number | null = null;
+    let rank = 0;
+    return sorted.map((row, i) => {
+      const v = seasonVal(row, seasonSortKey);
+      if (prev === null || v !== prev) rank = i + 1;
+      prev = v;
+      return { row, rank };
+    });
+  }
+
+  const seasonFiltered = seasonData.filter(
+    (r) => (!q || r.name.toLowerCase().includes(q)) && matchesPos(r.player) && (teamFilter === "all" || r.club === teamFilter),
   );
+  const seasonRanked = isSeason ? withRanks(seasonFiltered) : [];
+  const leagueRanked = isSeason ? withRanks(seasonData) : [];
 
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
-  const pagedRows = filteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
-
-  // --- This Season: Round 62 sortable multi-column table, one per stat group ---
-  const seasonRows = useMemo((): SeasonStatRow[] => {
-    if (mode !== "season" || !season) return [];
-    const cats = CATEGORIES.filter((c) => CATEGORY_GROUP[c] === group);
-    const topN = isFiltered ? 750 : 100;
-    return seasonGroupTable(cats, category, season, topN);
-  }, [mode, season, group, category, isFiltered]);
-
-  const seasonFilteredRows = useMemo(
-    () =>
-      seasonRows.filter((r) => {
-        if (archetypeFilter !== "all" && r.player?.archetype !== archetypeFilter) return false;
-        if (teamFilter !== "all" && r.club !== teamFilter) return false;
-        return true;
-      }),
-    [seasonRows, archetypeFilter, teamFilter],
+  // ---------- All-Time Career ----------
+  const allTimeFiltering = teamFilter !== "all" || posFilter !== "all" || !!q || activeOnly;
+  const allTimeRows = useMemo((): RecordRow[] => {
+    if (isSeason) return [];
+    return combinedRecordFor(sortKey, seasonArchives, season, allTimeFiltering ? 750 : 100);
+  }, [isSeason, sortKey, seasonArchives, season, allTimeFiltering]);
+  const allTimeFiltered = allTimeRows.filter(
+    (r) =>
+      (!q || r.name.toLowerCase().includes(q)) &&
+      matchesPos(r.player) &&
+      (teamFilter === "all" || r.club === teamFilter) &&
+      (!activeOnly || (r.source === "real" ? !!r.real?.stillActive || !!r.player : !!r.player)),
   );
+  const hasReal = hasRealWorldData(sortKey);
 
-  const seasonTotalPages = Math.max(1, Math.ceil(seasonFilteredRows.length / PAGE_SIZE));
-  const seasonPagedRows = seasonFilteredRows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+  // ---------- Pagination ----------
+  const total = isSeason ? seasonRanked.length : allTimeFiltered.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const curPage = Math.min(page, pages - 1);
+  const from = curPage * PAGE_SIZE;
 
-  const groupCategories = CATEGORIES.filter((c) => CATEGORY_GROUP[c] === group);
+  // ---------- Your-club strip ----------
+  const statName = CATEGORY_LABEL[isSeason ? seasonSortKey : sortKey];
+  // Reference watchlist strip: your pinned players (Dashboard watchlist, max 5) ranked among ALL
+  // players in the sorted column; with nothing pinned (or no pinned player has played yet), falls
+  // back to your club's three best-ranked players.
+  const pinnedRows = isSeason ? watchlist.map((id) => leagueRanked.find((x) => x.row.id === id)).filter((x): x is { row: SeasonRowVM; rank: number } => !!x) : [];
+  const usingWatchlist = pinnedRows.length > 0;
+  const yourRows = usingWatchlist ? pinnedRows : isSeason ? leagueRanked.filter((x) => x.row.club === myClub).slice(0, 3) : [];
+  const leagueOf = leagueRanked.length;
 
-  function selectCategory(next: RecordCategory) {
-    setCategory(next);
+  function resetFilters() {
+    setGroup("all");
+    setPosFilter("all");
+    setTeamFilter("all");
+    setQuery("");
+    setActiveOnly(false);
+    setSortKey("disposals");
+    setSortDir(-1);
     setPage(0);
   }
 
-  function selectMode(next: Mode) {
-    setMode(next);
+  function sortBy(k: RecordCategory) {
+    if (k === seasonSortKey) setSortDir((d) => (d < 0 ? 1 : -1));
+    else {
+      setSortKey(k);
+      setSortDir(-1);
+    }
     setPage(0);
   }
 
-  function selectArchetypeFilter(next: Archetype | "all") {
-    setArchetypeFilter(next);
-    setPage(0);
+  const roundsPlayed = season && season.played.length > 0 ? Math.max(...season.played.map((m) => m.round)) : 0;
+  const scopeLabel = isSeason ? `${year} Season${roundsPlayed ? ` · Rounds 1–${roundsPlayed}` : ""}` : "All-time career";
+
+  const selected = selectedId != null ? seasonData.find((r) => r.id === selectedId) : undefined;
+
+  const thBase: CSSProperties = { height: 38, textAlign: "left", font: `600 11px ${MONO}`, color: "#8f9ab0", borderBottom: "1px solid rgba(255,255,255,.1)", background: SURFACE.card };
+  const thSticky1: CSSProperties = { ...thBase, position: "sticky", left: 0, zIndex: 2, padding: "0 8px 0 14px", width: 52 };
+  const thSticky2: CSSProperties = { ...thBase, position: "sticky", left: 52, zIndex: 2, padding: "0 12px 0 4px", borderRight: "1px solid rgba(255,255,255,.06)" };
+
+  function headStyle(on: boolean): CSSProperties {
+    return {
+      padding: "0 10px",
+      height: 38,
+      minWidth: 58,
+      width: "100%",
+      font: `600 12px ${MONO}`,
+      letterSpacing: ".5px",
+      color: on ? "var(--on)" : "var(--accT)",
+      background: on ? "var(--acc)" : "transparent",
+      border: 0,
+      cursor: "pointer",
+      whiteSpace: "nowrap",
+    };
   }
 
-  function selectTeamFilter(next: string) {
-    setTeamFilter(next);
-    setPage(0);
+  function rankCell(rank: number, stickyBg: string): CSSProperties {
+    const medal = rank <= 3 ? MEDALS[rank - 1] : undefined;
+    return {
+      position: "sticky",
+      left: 0,
+      zIndex: 1,
+      background: stickyBg,
+      padding: "0 8px 0 14px",
+      height: 40,
+      font: `${medal ? 700 : 500} 13px ${MONO}`,
+      color: medal ?? "#8f9ab0",
+      borderBottom: `1px solid ${SURFACE.divider}`,
+      whiteSpace: "nowrap",
+    };
+  }
+  function nameCell(stickyBg: string): CSSProperties {
+    return {
+      position: "sticky",
+      left: 52,
+      zIndex: 1,
+      background: stickyBg,
+      padding: "0 12px 0 4px",
+      height: 40,
+      borderBottom: `1px solid ${SURFACE.divider}`,
+      borderRight: "1px solid rgba(255,255,255,.06)",
+      minWidth: 210,
+    };
+  }
+  const stickyBgFor = (mine: boolean) => (mine ? `color-mix(in oklch, var(--acc) 16%, ${SURFACE.card})` : SURFACE.card);
+
+  function numCell(on: boolean, tier: Tier | undefined): CSSProperties {
+    return {
+      padding: "0 10px",
+      height: 40,
+      textAlign: "center",
+      font: `${on ? 700 : 400} 13px ${MONO}`,
+      fontVariantNumeric: "tabular-nums",
+      color: on ? "#fff" : "#c3ccdd",
+      background: tier ? TIER_BG[tier] : on ? "rgba(255,255,255,.04)" : "transparent",
+      borderBottom: `1px solid ${SURFACE.divider}`,
+      whiteSpace: "nowrap",
+    };
   }
 
   return (
-    <div className="space-y-5">
+    <div style={{ fontFamily: BARLOW, color: "#e9edf4" }} className="flex flex-col gap-3.5">
       <div>
-        <div className="font-display text-2xl italic">Statistics</div>
-        <div className="text-sm text-slate-400">
-          The greatest of all time — real AFL/VFL legends and every AussieFootySim player, ranked together across all {CATEGORIES.length} tracked statistics.
-        </div>
+        <div style={{ font: `500 11px ${MONO}`, letterSpacing: "1.5px", color: "#9aa4b5" }}>STATISTICS · REAL VFL/AFL HISTORY + YOUR SAVE</div>
+        <h1 style={{ margin: "4px 0 0", font: `700 44px/1 ${COND}`, color: "#fff" }}>Stats leaders</h1>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
-        {GROUP_ORDER.map((g) => (
-          <button
-            key={g}
-            onClick={() => {
-              setGroup(g);
-              const first = CATEGORIES.find((c) => CATEGORY_GROUP[c] === g);
-              if (first) selectCategory(first);
+      {/* Filter bar */}
+      <section style={{ ...cardStyle, padding: "12px 14px" }} className="flex flex-wrap items-end gap-3">
+        <Field label="SEARCH" grow>
+          <input
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPage(0);
             }}
-            style={group === g ? { background: "var(--acc)", color: "var(--on)" } : undefined}
-            className={`rounded-full px-3 py-1 text-xs font-medium ${group === g ? "" : "bg-base-800 text-slate-400 hover:bg-base-700"}`}
+            placeholder="Player name"
+            style={fieldInput}
+          />
+        </Field>
+        <Field label="SCOPE">
+          <select
+            value={scope}
+            onChange={(e) => {
+              setScope(e.target.value as Scope);
+              setPage(0);
+              setSelectedId(null);
+            }}
+            style={{ ...fieldInput, cursor: "pointer" }}
           >
-            {g}
-          </button>
-        ))}
-      </div>
-
-      {mode === "allTime" && (
-        <div className="flex flex-wrap gap-1.5">
-          {groupCategories.map((c) => (
-            <button
-              key={c}
-              onClick={() => selectCategory(c)}
-              style={category === c ? { borderColor: "var(--accT)", background: "color-mix(in oklch, var(--acc) 10%, transparent)", color: "var(--accT)" } : undefined}
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${category === c ? "" : "border-base-600 text-slate-400 hover:bg-base-800"}`}
+            <option value="season">{year} Season</option>
+            <option value="allTime">All-time career</option>
+          </select>
+        </Field>
+        {isSeason ? (
+          <Field label="STAT GROUP">
+            <select
+              value={group}
+              onChange={(e) => {
+                setGroup(e.target.value as GroupKey);
+                setPage(0);
+              }}
+              style={{ ...fieldInput, cursor: "pointer" }}
             >
-              {CATEGORY_LABEL[c]}
-              {!hasRealWorldData(c) && <span className="ml-1 text-slate-600">· sim only</span>}
-            </button>
-          ))}
-          {group === "General" &&
-            PLACEHOLDER_STATS.map((p) => (
-              <span
-                key={p.key}
-                title="Not tracked yet — coming in a future round"
-                className="cursor-not-allowed rounded-full border border-dashed border-base-700 px-3 py-1 text-xs font-medium text-slate-600"
-              >
-                {p.label} <span className="text-slate-700">· coming soon</span>
-              </span>
-            ))}
-        </div>
-      )}
-      {mode === "season" && (
-        <p className="text-xs text-slate-500">
-          Click any column below to sort this season's {group} table by that stat — the Single-Game High card further down follows whichever column you're sorted by.
-        </p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1.5">
-          {(["allTime", "season"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => selectMode(m)}
-              style={mode === m ? { background: "var(--acc)", color: "var(--on)" } : undefined}
-              className={`rounded-full px-3 py-1 text-xs font-medium ${mode === m ? "" : "bg-base-800 text-slate-400 hover:bg-base-700"}`}
+              <option value="all">All stats</option>
+              {GROUPS.map((g) => (
+                <option key={g.key} value={g.key}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : (
+          <Field label="STATISTIC">
+            <select
+              value={sortKey}
+              onChange={(e) => {
+                setSortKey(e.target.value as RecordCategory);
+                setPage(0);
+              }}
+              style={{ ...fieldInput, cursor: "pointer", width: 230 }}
             >
-              {m === "allTime" ? "All-Time Career" : "This Season"}
-            </button>
-          ))}
-        </div>
-        <select
-          className="rounded-lg border border-base-600 bg-base-900 px-2.5 py-1 text-xs text-slate-200"
-          value={archetypeFilter}
-          onChange={(e) => selectArchetypeFilter(e.target.value as Archetype | "all")}
-          aria-label="Filter by position"
-        >
-          <option value="all">All positions</option>
-          {ARCHETYPES.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </select>
-        <select
-          className="rounded-lg border border-base-600 bg-base-900 px-2.5 py-1 text-xs text-slate-200"
-          value={teamFilter}
-          onChange={(e) => selectTeamFilter(e.target.value)}
-          aria-label="Filter by team"
-        >
-          <option value="all">All teams</option>
-          {CLUBS.map((c) => (
-            <option key={c.ClubID} value={c.name}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        {archetypeFilter !== "all" && (
-          <span className="text-[11px] text-slate-500">Position filtering applies to AussieFootySim players only — real-world legends aren't tagged with an archetype here.</span>
+              {GROUPS.map((g) => (
+                <optgroup key={g.key} label={g.label}>
+                  {(g.key === "general" ? (["gamesPlayed", ...g.cats] as RecordCategory[]) : g.cats).map((c) => (
+                    <option key={c} value={c}>
+                      {CATEGORY_LABEL[c]}
+                      {hasRealWorldData(c) ? "" : " · sim only"}
+                    </option>
+                  ))}
+                  {g.key === "general" &&
+                    PLACEHOLDER_STATS.map((p) => (
+                      <option key={p} disabled>
+                        {p} · coming soon
+                      </option>
+                    ))}
+                </optgroup>
+              ))}
+            </select>
+          </Field>
         )}
-      </div>
+        <Field label="POSITION">
+          <select
+            value={posFilter}
+            onChange={(e) => {
+              setPosFilter(e.target.value);
+              setPage(0);
+            }}
+            style={{ ...fieldInput, cursor: "pointer" }}
+          >
+            <option value="all">All positions</option>
+            {(Object.keys(POS_GROUP_LABEL) as PosGroup[]).map((g) => (
+              <option key={g} value={`g:${g}`}>
+                {POS_GROUP_LABEL[g]}
+              </option>
+            ))}
+            <optgroup label="Archetype">
+              {ARCHETYPES.map((a) => (
+                <option key={a} value={`a:${a}`}>
+                  {a}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+        </Field>
+        <Field label="TEAM">
+          <select
+            value={teamFilter}
+            onChange={(e) => {
+              setTeamFilter(e.target.value);
+              setPage(0);
+            }}
+            style={{ ...fieldInput, cursor: "pointer" }}
+          >
+            <option value="all">All teams</option>
+            {CLUBS.map((c) => (
+              <option key={c.ClubID} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {!isSeason && (
+          <button
+            onClick={() => {
+              setActiveOnly((v) => !v);
+              setPage(0);
+            }}
+            className="flex items-center gap-2"
+            style={{ background: "none", border: 0, cursor: "pointer", color: "#aab3c3", font: `600 13px ${BARLOW}`, padding: "9px 0" }}
+          >
+            <Toggle on={activeOnly} />
+            Active only
+          </button>
+        )}
+        <button onClick={resetFilters} style={{ background: "none", border: 0, color: "var(--accT)", font: `600 13px ${BARLOW}`, cursor: "pointer", padding: "9px 4px" }}>
+          Reset all filters
+        </button>
+      </section>
 
-      {mode === "allTime" && !hasReal && (
-        <p className="text-xs text-slate-500">
-          No reliable, publicly-compiled real-world AFL/VFL all-time total exists for {label.toLowerCase()} — this is AussieFootySim's own all-time leaderboard only.
-        </p>
-      )}
-      {mode === "season" && !season && <div className="card text-sm text-slate-400">No season in progress — start a season to see this season's leaders.</div>}
-
-      {mode === "allTime" && (
-        <div className="card">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide text-slate-400">
-            <span>{isFiltered ? `Filtered — ${filteredRows.length} players` : `All-time top ${filteredRows.length}`}</span>
-            {filteredRows.length > 0 && <span className="normal-case tracking-normal text-slate-500">Gold #1 · Silver #2-3 · Bronze #4-5</span>}
+      {/* Your-club strip — rank among ALL players in the sorted column */}
+      {yourRows.length > 0 && (
+        <section style={{ background: SURFACE.hero, border: "1px solid color-mix(in oklch, var(--acc) 35%, transparent)", borderRadius: 14, padding: "8px 8px 6px" }}>
+          <div className="flex justify-between gap-2.5" style={{ padding: "6px 10px", font: `600 10px ${MONO}`, letterSpacing: "1.5px", color: "var(--accT)" }}>
+            <span>
+              {usingWatchlist ? "YOUR WATCHLIST" : "YOUR BEST-RANKED"} · {statName.toUpperCase()}
+            </span>
+            <span style={{ color: "#8f9ab0", fontWeight: 500 }}>RANK AMONG ALL PLAYERS</span>
           </div>
-          <div className="space-y-0.5 text-sm">
-            {pagedRows.length === 0 && <div className="px-3 py-2 text-slate-500">No players match this filter.</div>}
-            {pagedRows.map((row) => {
-              const isTop5 = row.rank <= 5;
-              const isGoat = row.rank === 1;
-              return (
-                <div
-                  key={row.rank}
-                  style={tierRowStyle(row.rank)}
-                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-left ${tierRowClasses(row.rank)}`}
+          {yourRows.map(({ row, rank }) => {
+            const t = tierOf(row.id, seasonSortKey);
+            return (
+              <button
+                key={row.id}
+                onClick={() => setSelectedId(row.id)}
+                className="grid w-full grid-cols-[30px_minmax(0,1fr)_auto_52px] items-center gap-2.5 rounded-lg text-left hover:bg-white/[.04] sm:grid-cols-[34px_minmax(0,1fr)_auto_80px_minmax(0,200px)] sm:gap-3.5"
+                style={{ padding: "7px 10px", border: 0, background: "transparent", cursor: "pointer", color: "inherit" }}
+              >
+                <span
+                  className="flex items-center justify-center"
+                  style={{ width: 30, height: 30, borderRadius: 7, background: "var(--deep)", border: "1px solid color-mix(in oklch, var(--acc) 55%, transparent)", font: `700 13px ${COND}`, color: "var(--accT)" }}
                 >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span style={tierRankStyle(row.rank)} className={`w-8 tabular-nums ${tierRankClasses(row.rank)}`}>{row.rank}</span>
-                      {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                      <span className={`truncate ${isGoat ? "font-semibold" : ""}`}>
-                        {row.player ? (
-                          <PlayerLink player={row.player} as="span">
-                            {row.name}
-                          </PlayerLink>
-                        ) : (
-                          row.name
-                        )}
-                      </span>
-                      {row.source === "real" && row.real?.stillActive && (
-                        <span
-                          style={{ backgroundColor: `color-mix(in oklch, ${MEANING_TOKENS.rise} 20%, transparent)`, color: MEANING_TOKENS.rise }}
-                          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-                        >
-                          Active
-                        </span>
-                      )}
-                      {row.source === "sim" && (
-                        <span style={{ color: "var(--accT)" }} className="shrink-0 text-[10px] font-semibold uppercase tracking-wide">
-                          AFS
-                        </span>
-                      )}
-                      {isGoat && hasReal && row.source === "sim" && (
-                        <span
-                          style={{ backgroundColor: "color-mix(in oklch, var(--acc) 20%, transparent)", color: "var(--accT)" }}
-                          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-                        >
-                          AussieFootySim record
-                        </span>
-                      )}
-                    </span>
-                    <span className="flex shrink-0 items-baseline gap-1.5">
-                      {simContributionCaption(row) && <span className="text-[11px] text-slate-500">({simContributionCaption(row)})</span>}
-                      <span className={`tabular-nums ${isGoat ? "text-base font-bold" : ""}`}>{row.value.toLocaleString()}</span>
-                      {isTop5 && <span className="hidden text-[11px] text-slate-500 sm:inline">{unit}</span>}
-                    </span>
-                </div>
-              );
-            })}
+                  {row.player.jumperNumber}
+                </span>
+                <span className="truncate" style={{ font: `700 17px ${COND}`, color: "#fff" }}>
+                  {row.name}
+                </span>
+                <span className="whitespace-nowrap">
+                  <span style={{ font: `700 22px/1 ${COND}`, color: "#fff" }}>#{rank}</span> <span style={{ font: `500 11px ${MONO}`, color: "#8f9ab0" }}>of {leagueOf}</span>
+                </span>
+                <span style={{ font: `700 16px ${MONO}`, color: "var(--accT)", textAlign: "right" }}>{fmtValue(seasonVal(row, seasonSortKey), showDecimals(seasonSortKey))}</span>
+                <span className="hidden truncate sm:block" style={{ font: `500 12px ${BARLOW}`, color: "#aab3c3" }}>
+                  {t && row.pos ? `${TIER_LABEL[t]} among ${POS_GROUP_PLURAL[row.pos]}` : ""}
+                </span>
+              </button>
+            );
+          })}
+        </section>
+      )}
+
+      {/* Leaders table */}
+      <section style={{ ...cardStyle, overflow: "hidden" }}>
+        <div className="flex flex-wrap items-center justify-between gap-3.5" style={{ padding: "16px 18px 12px" }}>
+          <div style={{ font: `700 26px/1.1 ${COND}`, color: "#fff" }}>
+            {statName} <span style={{ fontWeight: 500, color: "#aab3c3" }}>· {scopeLabel}</span>
           </div>
-          {totalPages > 1 && (
-            <div className="mt-3 flex items-center justify-center gap-3 border-t border-base-800 pt-3">
+          {isSeason ? (
+            <div className="flex flex-wrap items-center gap-4">
               <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => setBench((b) => !b)}
+                className="flex items-center gap-2"
+                style={{ background: "none", border: 0, cursor: "pointer", color: "#aab3c3", font: `600 11px ${MONO}`, letterSpacing: "1px", padding: 0 }}
               >
-                Prev
+                BENCHMARKING <Toggle on={benchOn} />
               </button>
-              <span className="text-xs tabular-nums text-slate-500">
-                Page {page + 1} of {totalPages}
-              </span>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                disabled={page >= totalPages - 1}
-                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Next
-              </button>
+              <div className="flex" style={{ padding: 2, borderRadius: 8, background: SURFACE.inset, border: "1px solid rgba(255,255,255,.08)" }}>
+                {(["tot", "avg"] as StatMode[]).map((m) => {
+                  const on = statMode === m;
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => setStatMode(m)}
+                      style={{
+                        border: 0,
+                        borderRadius: 6,
+                        padding: "6px 12px",
+                        background: on ? "var(--acc)" : "transparent",
+                        color: on ? "var(--on)" : "#aab3c3",
+                        font: `${on ? 700 : 600} 12px ${BARLOW}`,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {m === "tot" ? "Total" : "Average"}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
+          ) : (
+            <div style={{ font: `500 11px ${MONO}`, letterSpacing: "1px", color: "#8f9ab0" }}>CAREER TOTALS · REAL LEGENDS + YOUR SAVE</div>
           )}
         </div>
-      )}
 
-      {mode === "season" && season && (
-        <div className="card overflow-x-auto">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide text-slate-400">
-            <span>{isFiltered ? `Filtered — ${seasonFilteredRows.length} players` : `This season — top ${seasonFilteredRows.length}`}</span>
-            <span className="normal-case tracking-normal text-slate-500">Click a column to sort by it</span>
+        {benchOn && (
+          <div className="flex flex-wrap gap-3.5" style={{ padding: "0 18px 12px", font: `600 10px ${MONO}`, letterSpacing: "1px", color: "#c3ccdd" }}>
+            {(
+              [
+                ["elite", "ELITE · TOP 10%"],
+                ["above", "ABOVE AVG · NEXT 25%"],
+                ["avg", "AVERAGE"],
+                ["below", "BELOW AVG · BOTTOM THIRD"],
+              ] as [Tier, string][]
+            ).map(([t, l]) => (
+              <span key={t} className="flex items-center gap-1.5">
+                <span style={{ width: 14, height: 10, borderRadius: 2, background: TIER_BG[t], border: t === "avg" ? "1px solid rgba(255,255,255,.2)" : undefined }} />
+                {l}
+              </span>
+            ))}
+            <span style={{ color: "#8f9ab0", fontWeight: 500 }}>vs same position</span>
           </div>
-          {seasonPagedRows.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-slate-500">No players match this filter.</div>
-          ) : (
-            <table className="w-full min-w-max text-sm">
+        )}
+
+        {!isSeason && !hasReal && (
+          <div style={{ padding: "0 18px 12px", font: `400 12px ${BARLOW}`, color: "#8f9ab0" }}>
+            No reliable, publicly-compiled real-world AFL/VFL all-time total exists for {statName.toLowerCase()} — this is AussieFootySim's own all-time leaderboard only.
+          </div>
+        )}
+        {!isSeason && posFilter !== "all" && (
+          <div style={{ padding: "0 18px 12px", font: `400 12px ${BARLOW}`, color: "#8f9ab0" }}>
+            Position filtering applies to AussieFootySim players only — real-world legends aren't tagged with a position here.
+          </div>
+        )}
+
+        <div className="overflow-x-auto" style={{ borderTop: `1px solid ${SURFACE.border}` }}>
+          {isSeason && !season ? (
+            <div style={{ padding: "24px 18px", font: `400 14px ${BARLOW}`, color: "#aab3c3" }}>No season in progress — start a season to see this season's leaders.</div>
+          ) : isSeason ? (
+            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 270 + cols.length * 66 }}>
               <thead>
-                <tr className="border-b border-base-700 text-xs uppercase tracking-wide text-slate-400">
-                  <th className="whitespace-nowrap px-2 py-2 text-left font-medium">Rank</th>
-                  <th className="whitespace-nowrap px-2 py-2 text-left font-medium">Player</th>
-                  {groupCategories.map((c) => (
-                    <th
-                      key={c}
-                      title={`Sort by ${CATEGORY_LABEL[c]}, descending`}
-                      onClick={() => selectCategory(c)}
-                      style={category === c ? { background: "color-mix(in oklch, var(--acc) 15%, transparent)", color: "var(--accT)" } : undefined}
-                      className="cursor-pointer whitespace-nowrap px-2 py-2 text-right font-medium"
-                    >
-                      {CATEGORY_SHORT[c]}
-                      {category === c && <span className="ml-0.5">▾</span>}
-                    </th>
-                  ))}
+                <tr>
+                  <th style={thSticky1}>RANK</th>
+                  <th style={thSticky2}>PLAYER</th>
+                  {cols.map((k) => {
+                    const on = k === seasonSortKey;
+                    return (
+                      <th key={k} style={{ padding: 0, borderBottom: "1px solid rgba(255,255,255,.1)" }}>
+                        <button onClick={() => sortBy(k)} title={CATEGORY_LABEL[k]} style={headStyle(on)}>
+                          {CATEGORY_SHORT[k]}
+                          {on ? (sortDir < 0 ? " ▾" : " ▴") : ""}
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {seasonPagedRows.map((row) => (
-                  <tr key={row.rank} className="odd:bg-base-800/50">
-                    <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">{row.rank}</td>
-                    <td className="px-2 py-1.5">
-                      <span className="flex min-w-0 items-center gap-2">
-                        {row.club && <ClubBadgeByName name={row.club} size="sm" />}
-                        <span className="truncate">
-                          <PlayerLink player={row.player} as="span">
-                            {row.name}
-                          </PlayerLink>
+                {seasonRanked.slice(from, from + PAGE_SIZE).map(({ row, rank }) => {
+                  const mine = row.club === myClub;
+                  const bg = stickyBgFor(mine);
+                  return (
+                    <tr key={row.id} onClick={() => setSelectedId(row.id)} className="cursor-pointer hover:brightness-125" style={mine ? { background: "color-mix(in oklch, var(--acc) 8%, transparent)" } : undefined}>
+                      <td style={rankCell(rank, bg)}>{rank}</td>
+                      <td style={nameCell(bg)}>
+                        <span className="flex items-center gap-2">
+                          <ClubChip club={row.club} />
+                          <span style={{ font: `600 14px ${BARLOW}`, color: mine ? "var(--accT)" : "#eef2f8", whiteSpace: "nowrap" }}>{row.name}</span>
+                          {row.pos && <span style={{ font: `500 10px ${MONO}`, color: "#8f9ab0" }}>{row.pos}</span>}
                         </span>
-                      </span>
-                    </td>
-                    {groupCategories.map((c) => (
-                      <td
-                        key={c}
-                        style={category === c ? { color: "var(--accT)" } : undefined}
-                        className={`whitespace-nowrap px-2 py-1.5 text-right tabular-nums ${category === c ? "font-semibold" : "text-slate-300"}`}
-                      >
-                        {(row.values[c] ?? 0).toLocaleString()}
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                      {cols.map((k) => (
+                        <td key={k} style={numCell(k === seasonSortKey, tierOf(row.id, k))}>
+                          {fmtValue(seasonVal(row, k), showDecimals(k))}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 520 }}>
+              <thead>
+                <tr>
+                  <th style={thSticky1}>RANK</th>
+                  <th style={thSticky2}>PLAYER</th>
+                  <th style={{ padding: 0, borderBottom: "1px solid rgba(255,255,255,.1)", width: 120 }}>
+                    <span className="flex items-center justify-center" style={headStyle(true)} title={CATEGORY_LABEL[sortKey]}>
+                      {CATEGORY_SHORT[sortKey]} ▾
+                    </span>
+                  </th>
+                  <th style={{ ...thBase, textAlign: "right", padding: "0 18px 0 10px", width: 170 }}>IN THIS SAVE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allTimeFiltered.slice(from, from + PAGE_SIZE).map((row) => {
+                  const mine = row.club === myClub && !!row.player;
+                  const bg = stickyBgFor(mine);
+                  const saveValue = row.source === "sim" ? row.value : row.simContribution;
+                  return (
+                    <tr
+                      key={`${row.source}-${row.name}-${row.rank}`}
+                      onClick={row.player ? () => usePlayerProfileStore.getState().openPlayer(row.player!.PlayerID) : undefined}
+                      className={row.player ? "cursor-pointer hover:brightness-125" : undefined}
+                    >
+                      <td style={rankCell(row.rank, bg)}>{row.rank}</td>
+                      <td style={nameCell(bg)}>
+                        <span className="flex items-center gap-2">
+                          <ClubChip club={row.club} />
+                          <span style={{ font: `600 14px ${BARLOW}`, color: mine ? "var(--accT)" : "#eef2f8", whiteSpace: "nowrap" }}>{row.name}</span>
+                          {row.player && posGroupOf(row.player) && <span style={{ font: `500 10px ${MONO}`, color: "#8f9ab0" }}>{posGroupOf(row.player)}</span>}
+                          {row.source === "real" && row.real?.stillActive && <span style={{ font: `600 9px ${MONO}`, letterSpacing: "1px", color: MEANING.rise }}>ACTIVE</span>}
+                          {row.source === "sim" && <span style={{ font: `600 9px ${MONO}`, letterSpacing: "1px", color: "var(--accT)" }}>AFS</span>}
+                          {row.rank === 1 && hasReal && row.source === "sim" && (
+                            <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: MEANING.gold, border: `1px solid ${MEANING.gold}`, borderRadius: 4, padding: "1px 5px" }}>
+                              AFS RECORD
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td style={numCell(true, undefined)}>{row.value.toLocaleString()}</td>
+                      <td style={{ ...numCell(false, undefined), textAlign: "right", padding: "0 18px 0 10px", color: saveValue ? "#c3ccdd" : "#5d6880" }}>
+                        {saveValue ? (row.source === "real" ? `+${saveValue.toLocaleString()}` : saveValue.toLocaleString()) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
-          {seasonTotalPages > 1 && (
-            <div className="mt-3 flex items-center justify-center gap-3 border-t border-base-800 pt-3">
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Prev
-              </button>
-              <span className="text-xs tabular-nums text-slate-500">
-                Page {page + 1} of {seasonTotalPages}
-              </span>
-              <button
-                onClick={() => setPage((p) => Math.min(seasonTotalPages - 1, p + 1))}
-                disabled={page >= seasonTotalPages - 1}
-                className="rounded-full bg-base-800 px-3 py-1 text-xs font-medium text-slate-400 hover:bg-base-700 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
+          {(isSeason ? !!season && seasonRanked.length === 0 : allTimeFiltered.length === 0) && (
+            <div style={{ padding: "24px 18px", font: `400 14px ${BARLOW}`, color: "#aab3c3" }}>No players match these filters.</div>
           )}
         </div>
-      )}
 
-      <SingleGameHighsCard category={category} label={label} />
+        <div className="flex items-center justify-between gap-3" style={{ padding: "12px 18px", borderTop: `1px solid ${SURFACE.border}`, font: `500 12px ${MONO}`, color: "#aab3c3" }}>
+          <span>
+            Showing {total ? from + 1 : 0}–{Math.min(total, from + PAGE_SIZE)} of {total}
+          </span>
+          <div className="flex items-center gap-2.5">
+            <button onClick={() => setPage(Math.max(0, curPage - 1))} disabled={curPage === 0} style={ghostButton} className="disabled:cursor-not-allowed disabled:opacity-40">
+              Prev
+            </button>
+            <span>
+              Page {curPage + 1} of {pages}
+            </span>
+            <button onClick={() => setPage(Math.min(pages - 1, curPage + 1))} disabled={curPage >= pages - 1} style={ghostButton} className="disabled:cursor-not-allowed disabled:opacity-40">
+              Next
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <SingleGameHighsCard category={isSeason ? seasonSortKey : sortKey} label={statName} />
+
+      {selected && (
+        <StatDrawer
+          row={selected}
+          scopeLabel={scopeLabel}
+          avgMode={avgMode}
+          league={seasonData}
+          valueOf={(r, k) => seasonVal(r, k)}
+          tierOf={tierOf}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </div>
   );
 }
 
+/** Reference "stat drawer": every season stat for one player, with league rank and position tier. */
+function StatDrawer({
+  row,
+  scopeLabel,
+  avgMode,
+  league,
+  valueOf,
+  tierOf,
+  onClose,
+}: {
+  row: SeasonRowVM;
+  scopeLabel: string;
+  avgMode: boolean;
+  league: SeasonRowVM[];
+  valueOf: (r: SeasonRowVM, k: RecordCategory) => number;
+  tierOf: (id: number, k: RecordCategory) => Tier | undefined;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,6,10,.6)", zIndex: 40 }} />
+      <aside
+        className="flex flex-col"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: "min(480px, 100%)",
+          zIndex: 41,
+          overflowY: "auto",
+          background: SURFACE.panel,
+          borderLeft: "1px solid rgba(255,255,255,.1)",
+          boxShadow: "-20px 0 60px rgba(0,0,0,.5)",
+        }}
+      >
+        <div className="flex flex-none" style={{ height: 4 }}>
+          <div style={{ flex: 6, background: "var(--acc)" }} />
+          <div style={{ flex: 2, background: "var(--acc2)" }} />
+          <div style={{ flex: 6, background: "var(--acc)" }} />
+        </div>
+        <div className="flex flex-col" style={{ padding: 22, gap: 18 }}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <ClubChip club={row.club} size={12} />
+                <span style={{ font: `600 10px ${MONO}`, letterSpacing: "1.5px", color: "#aab3c3" }}>
+                  {row.pos ?? row.player.archetype.toUpperCase()} · {row.gamesPlayed} GAMES
+                </span>
+              </div>
+              <div style={{ font: `700 36px/1 ${COND}`, color: "#fff", marginTop: 8 }}>{row.name}</div>
+              <div style={{ font: `500 12px ${MONO}`, color: "#8f9ab0", marginTop: 6 }}>
+                {scopeLabel} · {avgMode ? "Per game" : "Totals"}
+              </div>
+            </div>
+            <button onClick={onClose} aria-label="Close" style={{ flex: "none", width: 34, height: 34, borderRadius: 8, border: "1px solid rgba(255,255,255,.14)", background: "transparent", color: "#dfe5ee", font: `500 18px ${BARLOW}`, cursor: "pointer" }}>
+              ×
+            </button>
+          </div>
+          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))" }}>
+            {ALL_COLS.map((k) => {
+              const v = valueOf(row, k);
+              const t = tierOf(row.id, k);
+              const lower = LOWER_IS_BETTER.has(k);
+              const rank = 1 + league.filter((o) => (lower ? valueOf(o, k) < v : valueOf(o, k) > v)).length;
+              return (
+                <div key={k} className="flex flex-col" style={{ padding: "10px 12px", borderRadius: 10, background: t ? TIER_BG[t] : "rgba(255,255,255,.03)", border: `1px solid ${SURFACE.border}`, gap: 2 }}>
+                  <span style={{ font: `500 11px ${BARLOW}`, color: "#aab3c3" }}>{CATEGORY_LABEL[k]}</span>
+                  <span style={{ font: `700 22px/1.1 ${MONO}`, color: "#fff" }}>{fmtValue(v, avgMode && !TOTAL_ONLY.has(k))}</span>
+                  <span className="flex justify-between gap-1.5">
+                    <span style={{ font: `500 10px ${MONO}`, color: "#8f9ab0" }}>
+                      #{rank} of {league.length}
+                    </span>
+                    {t && (
+                      <span style={{ font: `600 9px ${MONO}`, letterSpacing: "1px", color: t === "elite" || t === "above" ? MEANING.rise : t === "below" ? MEANING.fall : "#8f9ab0" }}>
+                        {TIER_LABEL[t].toUpperCase()}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => usePlayerProfileStore.getState().openPlayer(row.id)}
+            style={{ background: "var(--acc)", color: "var(--on)", border: 0, borderRadius: 9, padding: "12px 18px", font: `700 14px ${BARLOW}`, cursor: "pointer" }}
+          >
+            Open full player profile
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+}
+
 /**
- * Round 61 — Single-Game Highs, now contextual to whichever category is selected (Tyler: "The
- * Single-Game High section needs to be relevant to the stat that we're currently looking at
- * though. Biggest goal kicking haul should only be visible when looking at the goal kicking tab and
- * disposals only visible for the disposal leaders tab"), rather than the old fixed, always-visible
- * Goals+Disposals pair. Goals/Disposals keep their richer existing source (`afltablesBigLists.ts` —
- * exact date, venue, and for Disposals a kicks/handballs breakdown, top 50 deep); every other
- * single-game-eligible category uses the newer, plainer `afltablesGameHighs.ts` source (year +
- * opponent only, top 20 deep — see that file's own doc comment for exactly which 13 categories and
- * why). Renders nothing at all for a category with no single-game source captured (either no
- * single-game analog, like Games Played, or no real data at all, like Fantasy Points) — quieter than
- * an apologetic empty-state card. Round 62: `category` now also tracks whichever column is sorted in
- * the This-Season table, so this card follows that too, unchanged in its own logic.
+ * Round 61 — Single-Game Highs, contextual to whichever category is selected/sorted (Tyler: "The
+ * Single-Game High section needs to be relevant to the stat that we're currently looking at").
+ * Goals/Disposals keep their richer `afltablesBigLists.ts` source (exact date, venue, K/H breakdown,
+ * top 50 deep); every other single-game-eligible category uses `afltablesGameHighs.ts` (year +
+ * opponent only, top 20 deep). Renders nothing for a category with no single-game source. Round 125:
+ * restyled to the Redesign3 card/row chrome; data and logic unchanged.
  */
 function SingleGameHighsCard({ category, label }: { category: RecordCategory; label: string }) {
+  let blurb: string;
+  let footer: string;
+  let rows: { rank: number; club?: string; player: string; value: string; detail: string }[];
+
   if (category === "goals") {
-    return (
-      <div className="card">
-        <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game High — {label}</div>
-        <div className="mb-3 mt-1 text-xs text-slate-500">The biggest individual goalkicking hauls in VFL/AFL history — one row per match, not per player, so a prolific performer can appear more than once.</div>
-        <div className="space-y-0.5 text-sm">
-          {SINGLE_GAME_GOALS.slice(0, 15).map((g) => (
-            <div key={g.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="w-5 text-slate-500 tabular-nums">{g.rank}</span>
-                {g.club && <ClubBadgeByName name={g.club} size="sm" />}
-                <span className="truncate">{g.player}</span>
-              </span>
-              <span className="shrink-0 text-right text-xs text-slate-400">
-                <span className="tabular-nums text-slate-200">{g.scoreLine}</span> · {g.date}
-              </span>
-            </div>
-          ))}
-        </div>
-        <p className="mt-3 text-[11px] text-slate-600">Showing the top 15 — 50 deep in the underlying data.</p>
-      </div>
-    );
+    blurb = "The biggest individual goalkicking hauls in VFL/AFL history — one row per match, not per player, so a prolific performer can appear more than once.";
+    footer = "Showing the top 15 — 50 deep in the underlying data.";
+    rows = SINGLE_GAME_GOALS.slice(0, 15).map((g) => ({ rank: g.rank, club: g.club, player: g.player, value: g.scoreLine, detail: g.date }));
+  } else if (category === "disposals") {
+    blurb = "The biggest individual disposal counts in VFL/AFL history since 1965 — one row per match, not per player.";
+    footer = "Showing the top 15 — 50 deep in the underlying data.";
+    rows = SINGLE_GAME_DISPOSALS.slice(0, 15).map((d) => ({ rank: d.rank, club: d.club, player: d.player, value: String(d.disposals), detail: `${d.kicks}k, ${d.handballs}hb · ${d.date}` }));
+  } else {
+    const highs = gameHighsFor(category);
+    if (!highs) return null;
+    blurb = `The best individual match performances in VFL/AFL history for ${label.toLowerCase()} — one row per match, not per player. No exact date on this source, unlike Goals/Disposals.`;
+    footer = `Showing all ${highs.length} — afltables' own Game Highs table doesn't go deeper than this for ${label.toLowerCase()}.`;
+    rows = highs.map((h) => ({ rank: h.rank, club: h.club, player: h.player, value: String(h.value), detail: `${h.year}${h.opponentClub ? ` v ${h.opponentClub}` : ""}` }));
   }
-
-  if (category === "disposals") {
-    return (
-      <div className="card">
-        <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game High — {label}</div>
-        <div className="mb-3 mt-1 text-xs text-slate-500">The biggest individual disposal counts in VFL/AFL history since 1965 — one row per match, not per player.</div>
-        <div className="space-y-0.5 text-sm">
-          {SINGLE_GAME_DISPOSALS.slice(0, 15).map((d) => (
-            <div key={d.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="w-5 text-slate-500 tabular-nums">{d.rank}</span>
-                {d.club && <ClubBadgeByName name={d.club} size="sm" />}
-                <span className="truncate">{d.player}</span>
-              </span>
-              <span className="shrink-0 text-right text-xs text-slate-400">
-                <span className="tabular-nums text-slate-200">{d.disposals}</span> ({d.kicks}k, {d.handballs}hb) · {d.date}
-              </span>
-            </div>
-          ))}
-        </div>
-        <p className="mt-3 text-[11px] text-slate-600">Showing the top 15 — 50 deep in the underlying data.</p>
-      </div>
-    );
-  }
-
-  const highs = gameHighsFor(category);
-  if (!highs) return null;
 
   return (
-    <div className="card">
-      <div className="text-xs uppercase tracking-wide text-slate-400">Single-Game High — {label}</div>
-      <div className="mb-3 mt-1 text-xs text-slate-500">The best individual match performances in VFL/AFL history for {label.toLowerCase()} — one row per match, not per player. No exact date on this source, unlike Goals/Disposals above.</div>
-      <div className="space-y-0.5 text-sm">
-        {highs.map((h) => (
-          <div key={h.rank} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1 odd:bg-base-800/50">
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="w-5 text-slate-500 tabular-nums">{h.rank}</span>
-              {h.club && <ClubBadgeByName name={h.club} size="sm" />}
-              <span className="truncate">{h.player}</span>
-            </span>
-            <span className="shrink-0 text-right text-xs text-slate-400">
-              <span className="tabular-nums text-slate-200">{h.value}</span> · {h.year}
-              {h.opponentClub ? ` v ${h.opponentClub}` : ""}
-            </span>
-          </div>
-        ))}
+    <section style={{ ...cardStyle, overflow: "hidden" }}>
+      <div style={{ padding: "16px 18px 12px" }}>
+        <div style={{ font: `500 11px ${MONO}`, letterSpacing: "1.5px", color: "#9aa4b5" }}>SINGLE-GAME HIGHS · REAL VFL/AFL</div>
+        <div style={{ font: `700 26px/1.1 ${COND}`, color: "#fff", marginTop: 4 }}>{label}</div>
+        <div style={{ font: `400 13px/1.4 ${BARLOW}`, color: "#aab3c3", marginTop: 6 }}>{blurb}</div>
       </div>
-      <p className="mt-3 text-[11px] text-slate-600">Showing all {highs.length} — afltables' own Game Highs table doesn't go deeper than this for {label.toLowerCase()}.</p>
-    </div>
+      <div style={{ borderTop: `1px solid ${SURFACE.border}` }}>
+        {rows.map((r) => {
+          const medal = r.rank <= 3 ? MEDALS[r.rank - 1] : undefined;
+          return (
+            <div key={r.rank} className="flex items-center justify-between gap-3" style={{ padding: "0 18px", height: 40, borderBottom: `1px solid ${SURFACE.divider}` }}>
+              <span className="flex min-w-0 items-center gap-2">
+                <span style={{ width: 28, font: `${medal ? 700 : 500} 13px ${MONO}`, color: medal ?? "#8f9ab0" }}>{r.rank}</span>
+                <ClubChip club={r.club} />
+                <span className="truncate" style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8" }}>
+                  {r.player}
+                </span>
+              </span>
+              <span className="shrink-0 text-right" style={{ font: `500 12px ${MONO}`, color: "#8f9ab0" }}>
+                <span style={{ font: `700 13px ${MONO}`, color: "#fff" }}>{r.value}</span> · {r.detail}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ padding: "10px 18px", font: `500 11px ${MONO}`, color: "#5d6880" }}>{footer}</div>
+    </section>
   );
 }

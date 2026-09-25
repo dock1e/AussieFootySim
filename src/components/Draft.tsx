@@ -631,7 +631,7 @@ export function Draft() {
           </div>
         </div>
       ) : (
-        <div className="grid gap-3 overflow-hidden rounded-card border border-base-700 bg-base-800 lg:min-h-0 lg:flex-1 lg:grid-cols-[216px_minmax(0,1fr)_372px]">
+        <div className="grid gap-3 overflow-hidden rounded-card border border-base-700 bg-base-800 lg:min-h-0 lg:flex-1 lg:grid-cols-[216px_minmax(0,1fr)_340px]">
           {/* Left sidebar — Round 99: Position/Min Confidence/Combine-only filters relocated here from
               the old strip above the board (same `lineFilter`/`minConfidence`/`combineOnly` state);
               Scout Budget and Your Picks Tonight relocated here from the old header row. */}

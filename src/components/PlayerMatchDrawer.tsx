@@ -151,9 +151,8 @@ export function PlayerMatchDrawer({
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${
-                  tab === t ? "bg-primary text-white" : "bg-base-900 text-slate-300 hover:bg-base-700"
-                }`}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${tab === t ? "" : "bg-base-900 text-slate-300 hover:bg-base-700"}`}
+                style={tab === t ? { background: "var(--acc)", color: "var(--on)" } : undefined}
               >
                 {t === "match" ? "Match stats" : t === "quarter" ? "By quarter" : "Career profile"}
               </button>
@@ -490,7 +489,7 @@ function ByQuarterTab({ player, events }: { player: Player; events: MatchEvent[]
               </tr>
             );
           })}
-          <tr className="border-t border-base-700 font-semibold text-primary-light">
+          <tr className="border-t border-base-700 font-semibold" style={{ color: "var(--accT)" }}>
             <td className="py-1 pr-2 text-left">FP</td>
             {quarterLines.map((q) => (
               <td key={q.quarter} className="px-2 py-1 text-right">

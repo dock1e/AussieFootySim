@@ -216,3 +216,26 @@
     display: none;
   }
 }
+
+/* Match Day v2 — responsive rules (match-day-v2/02-implementation-spec.md §4). */
+@media (max-width: 760px) {
+  .md-scoreboard .md-sb-centre {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .md-scoreboard .md-sb-side {
+    flex-basis: 40%;
+  }
+  .md-breakbar {
+    position: sticky;
+    bottom: 8px;
+    z-index: 20;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+  }
+}
+@media (max-width: 1000px) {
+  .md-live-row .md-ground {
+    order: -1;
+    flex-basis: 100%;
+  }
+}

@@ -155,12 +155,15 @@ const LINE_MOBILITY: Record<Line, number> = {
  * claiming a specific real AFL centre-bounce formation, just real,
  * meaningful separation instead of none.
  */
+// Round 129 (Tyler: wingers "right on the extremities of the ground"): W was 0.9, which renders at
+// ~85% of the boundary half-width — on the fence. 0.5 puts a Balanced winger just outside the
+// centre square on his wing, where real wingers set up; Spread the Ground (x1.15) still pushes wider.
 const POSITION_LANE: Partial<Record<Position, number>> = {
   FB: 0,
   BP: 0.6,
   HBF: 0.6,
   CHB: 0,
-  W: 0.9,
+  W: 0.5,
   C: -0.15,
   R: 0.15,
   RR: 0.45,
@@ -286,6 +289,9 @@ const FLOOD_CONTRACT_ZONE = 0.3;
 const FLOOD_SPREAD_SCALE = 1.15;
 const FLOOD_CONTRACT_SCALE = 0.7;
 const MIDDLE_GRAVITY_SCALE = 0.5;
+// Round 129 — wingers now start at half-width (W lane 0.5), so halving that again put an Attack the
+// Middle winger inside the centre square; wings pull in by a fifth, flanks keep the full effect.
+const MIDDLE_GRAVITY_WING_SCALE = 0.8;
 const SPREAD_WIDE_SCALE = 1.15;
 
 interface AnchorBias {
@@ -306,6 +312,7 @@ function gameStyleAnchorBias(position: Position, style: GameStyle): AnchorBias {
       if (DEFENSIVE_LINE_POSITIONS.includes(position)) return { zoneShift: -FLOOD_CONTRACT_ZONE, laneScale: FLOOD_CONTRACT_SCALE };
       return NO_BIAS;
     case "Attack the Middle":
+      if (position === "W") return { zoneShift: 0, laneScale: MIDDLE_GRAVITY_WING_SCALE };
       if (WING_FLANK_POSITIONS.includes(position)) return { zoneShift: 0, laneScale: MIDDLE_GRAVITY_SCALE };
       return NO_BIAS;
     case "Spread the Ground":

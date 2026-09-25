@@ -3,8 +3,9 @@ import { CLUBS, clubByName } from "../types/club";
 import type { Player } from "../types/player";
 import type { Position } from "../types/archetype";
 import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
-import { cloneMatchTeam, type MatchTeam } from "../engine/team";
-import { autoFillLineup, emptyLineup, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
+import { cloneMatchTeam, interchangesUpTo, teamAtEvent, type Cover, type MatchTeam } from "../engine/team";
+import { friendlyTimeslot, type Timeslot } from "../engine/fixture";
+import { autoFillLineup, defaultCovers, emptyLineup, lineupToMatchTeam, validCovers, type Lineup } from "../engine/selection";
 import {
   startMatch,
   simulateQuarter,
@@ -30,7 +31,7 @@ import { seasonPlayerTotals, toAverageMap } from "../engine/seasonSummary";
 import { computeFantasyMetrics, type PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
 import { groundForMatch } from "../data/clubGrounds";
 import type { AFLStadium } from "../data/stadiums";
-import { aiTeamPlan, defaultTeamPlan, DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
+import { aiTeamPlan, defaultTeamPlan, gameStyleModelledImpact, DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
 import { nextUnplayedRound } from "../engine/season";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
@@ -48,13 +49,14 @@ import { QuarterTimeDecisionRoom } from "./QuarterTimeDecisionRoom";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
 import { FlowFooter, FlowStepper, type FlowStep, type StepInfo } from "./matchday/flow/FlowChrome";
 import { SelectionStep, lineupStat } from "./matchday/flow/SelectionStep";
-import { RotationsStep, coverageCount } from "./matchday/flow/RotationsStep";
-import { RolesStep } from "./matchday/flow/RolesStep";
+import { GamePlanStep } from "./matchday/flow/GamePlanStep";
+import { useScoutPick } from "./matchday/flow/useScoutPick";
 import { FixtureStep } from "./matchday/flow/FixtureStep";
 import { OppositionStep, type WeeklyChange } from "./matchday/flow/OppositionStep";
 import { useTogProjection } from "./matchday/flow/useTogProjection";
 import {
   dangerMen,
+  isTaggable,
   lastMetLine,
   ladderLine,
   scoutingRows,
@@ -79,6 +81,9 @@ interface ActiveMatch {
   round: number | null;
   /** An untouched copy of the coach's own team as it took the field — interchanges mutate `home`/`away`. */
   myTeamAtBounce: MatchTeam;
+  /** Both teams as they took the field, replayed forward to the tick on screen (`teamAtEvent`). */
+  homeAtBounce: MatchTeam;
+  awayAtBounce: MatchTeam;
 }
 
 /**
@@ -109,26 +114,29 @@ export function LiveMatch({
 
   const savedLineup = useSelectionStore((s) => s.lineupFor(myClub));
   const lineup = savedLineup ?? emptyLineup();
-  const setSlot = useSelectionStore((s) => s.setSlot);
+  const setLineup = useSelectionStore((s) => s.setLineup);
   const autoFill = useSelectionStore((s) => s.autoFill);
   const allEligibility = useSelectionStore((s) => s.eligibility);
-  const setEligibility = useSelectionStore((s) => s.setEligibility);
   const myEligibility = allEligibility[myClub];
+  const storedCovers = useSelectionStore((s) => s.covers[myClub]);
+  const setCovers = useSelectionStore((s) => s.setCovers);
+  const lastWeek = useSelectionStore((s) => s.lastWeek[myClub]);
+  const setLastWeek = useSelectionStore((s) => s.setLastWeek);
 
   const standingPlan = useTeamPlanStore((s) => s.plans[myClub]) ?? defaultTeamPlan();
   const setStandingStyle = useTeamPlanStore((s) => s.setGameStyle);
-  const setStandingTactic = useTeamPlanStore((s) => s.setTactic);
+  const setPositionTactic = useTeamPlanStore((s) => s.setPositionTactic);
 
   const season = useSeasonStore((s) => s.season);
   const seasonTeams = useSeasonStore((s) => s.teams);
   const recordLiveRound = useSeasonStore((s) => s.recordLiveRound);
   const year = useSaveStore((s) => s.year);
 
-  const [step, setStep] = useState<FlowStep>(() => initialStep ?? (savedLineup && isLineupComplete(savedLineup) ? 3 : 0));
+  // Match Day flow v2: opening Match Day always lands on Fixture.
+  const [step, setStep] = useState<FlowStep>(() => initialStep ?? 0);
   const [friendlyOpponent, setFriendlyOpponent] = useState(() => CLUBS.find((c) => c.name !== myClub)?.name ?? CLUBS[0].name);
-  /** This week only: opponent PlayerID → your tagger's PlayerID. */
+  /** This week only: opponent PlayerID → your tagger's PlayerID. Cleared whenever the fixture changes. */
   const [tags, setTags] = useState<Map<number, number>>(new Map());
-  const [weekStyle, setWeekStyle] = useState<GameStyle | null>(null);
 
   const [active, setActive] = useState<ActiveMatch | null>(null);
   const [result, setResult] = useState<MatchResult | null>(null);
@@ -144,11 +152,35 @@ export function LiveMatch({
   const oppName = nextRow ? nextRow.opponent : friendlyOpponent;
   const oppClubId = clubByName(oppName)?.ClubID ?? -1;
   const iAmHome = nextRow ? nextRow.isHome : true;
+  const when: Timeslot = nextRow ? nextRow.when : friendlyTimeslot(oppClubId);
   const flowVenue = useMemo(
     () => (nextRow && season ? groundForMatch(nextRow.homeClubId, nextRow.round, season.fixture) : groundForMatch(myClubId)),
     [nextRow, season, myClubId],
   );
   const homeVenue = useMemo(() => groundForMatch(myClubId).commonName, [myClubId]);
+  // A new week (the next round moved on) starts with no tags.
+  const weekKey = nextRow ? `r${nextRow.round}` : `f${friendlyOpponent}`;
+  const [tagsWeek, setTagsWeek] = useState(weekKey);
+  if (tagsWeek !== weekKey) {
+    setTagsWeek(weekKey);
+    setTags(new Map());
+  }
+
+  // --- The plan: covers (who relieves whom) -----------------------------------------------------------
+  // A club with no saved covers uses the ones derived from its line-up and old per-position rotations.
+  const effectiveCovers = useMemo(
+    () => storedCovers ?? defaultCovers(lineup, myPlayers, myEligibility),
+    [storedCovers, lineup, myPlayers, myEligibility],
+  );
+  const liveCovers = useMemo(() => validCovers(lineup, effectiveCovers), [lineup, effectiveCovers]);
+  function setCover(resterId: number, cover: Cover | null) {
+    setCovers(myClub, { ...effectiveCovers, [resterId]: cover });
+  }
+  /** Every line-up change also drops covers the new line-up no longer supports. */
+  function changeLineup(next: Lineup) {
+    setLineup(myClub, next);
+    if (storedCovers) setCovers(myClub, validCovers(next, storedCovers));
+  }
 
   /**
    * Your side is always your saved line-up (topped up by `lineupToMatchTeam` if it isn't full yet);
@@ -156,8 +188,8 @@ export function LiveMatch({
    * club gets in season simulation.
    */
   const flowMine = useMemo(
-    () => lineupToMatchTeam(myClub, savedLineup ?? autoFillLineup(myPlayers), myPlayers, myEligibility),
-    [myClub, savedLineup, myPlayers, myEligibility],
+    () => lineupToMatchTeam(myClub, savedLineup ?? autoFillLineup(myPlayers), myPlayers, myEligibility, liveCovers),
+    [myClub, savedLineup, myPlayers, myEligibility, liveCovers],
   );
   const flowOpp = useMemo(() => {
     const fromSeason = nextRow ? seasonTeams?.get(oppClubId) : undefined;
@@ -166,7 +198,17 @@ export function LiveMatch({
     return lineupToMatchTeam(oppName, autoFillLineup(players), players, allEligibility[oppName]);
   }, [nextRow, seasonTeams, oppClubId, oppName, allEligibility]);
   const oppPlan = useMemo(() => aiTeamPlan(getPlayersByClub(oppName), leagueAverageOvr()), [oppName]);
-  const minePlan = useMemo(() => weeklyPlan(standingPlan, weekStyle, tags), [standingPlan, weekStyle, tags]);
+  /** Only valid tags reach the match: a taggable target, tagged by an on-field non-ruck starter. */
+  const validTags = useMemo(() => {
+    const out = new Map<number, number>();
+    for (const [target, tagger] of tags) {
+      const tPos = flowOpp.positions?.get(target);
+      const gPos = flowMine.positions?.get(tagger);
+      if (isTaggable(tPos) && gPos && gPos !== "INT" && gPos !== "R") out.set(target, tagger);
+    }
+    return out;
+  }, [tags, flowOpp, flowMine]);
+  const minePlan = useMemo(() => weeklyPlan(standingPlan, null, validTags), [standingPlan, validTags]);
 
   const homeTeam = active?.home ?? (iAmHome ? flowMine : flowOpp);
   const awayTeam = active?.away ?? (iAmHome ? flowOpp : flowMine);
@@ -206,6 +248,20 @@ export function LiveMatch({
 
   const playback = useMatchPlayback(result, homeIds, awayIds);
 
+  // Round 129 — who is on the ground at the tick on screen. A quarter is simulated ahead of playback
+  // and interchanges mutate `homeTeam`/`awayTeam` in place, so those describe the end of the quarter;
+  // the board, ground and bench rails read these replayed views instead. Only rebuilt when another
+  // interchange is revealed, so the objects stay stable between ticks.
+  const swapsSeen = active && result ? interchangesUpTo(result.events, playback.currentIndex) : 0;
+  const homeView = useMemo(
+    () => (active && result ? teamAtEvent(active.homeAtBounce, "home", result.events, playback.currentIndex) : homeTeam),
+    [active, result, swapsSeen, homeTeam], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const awayView = useMemo(
+    () => (active && result ? teamAtEvent(active.awayAtBounce, "away", result.events, playback.currentIndex) : awayTeam),
+    [active, result, swapsSeen, awayTeam], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const mySide: "home" | "away" = homeTeam.name === myClub ? "home" : "away";
 
   /** The coach's own line-coach assignments as `role -> ovr/99`; the opponent always plays the flat baseline. */
@@ -243,7 +299,15 @@ export function LiveMatch({
       stadium: flowVenue,
     });
     simulateQuarter(match, 1);
-    setActive({ home, away, venue: flowVenue, round: nextRow?.round ?? null, myTeamAtBounce: cloneMatchTeam(flowMine) });
+    setActive({
+      home,
+      away,
+      venue: flowVenue,
+      round: nextRow?.round ?? null,
+      myTeamAtBounce: cloneMatchTeam(flowMine),
+      homeAtBounce: cloneMatchTeam(iAmHome ? flowMine : flowOpp),
+      awayAtBounce: cloneMatchTeam(iAmHome ? flowOpp : flowMine),
+    });
     setMatchInProgress(match);
     setQuartersSimulated(1);
     setPendingCoachsCall(null);
@@ -251,7 +315,9 @@ export function LiveMatch({
     setRecordedRound(null);
     setGroundSel(null);
     setSelectedPlayer(null);
-    setStep(5);
+    // "Last week's team" and "Changes vs last week" read this snapshot of what took the field.
+    setLastWeek(myClub, { lineup: [...lineup], gameStyle: standingPlan.gameStyle });
+    setStep(4);
   }
 
   /** Leaves the match (or its full time) and goes back into the flow. A season round not yet at full time isn't recorded. */
@@ -265,15 +331,10 @@ export function LiveMatch({
     setAwayStyle(DEFAULT_GAME_STYLE);
     setGroundSel(null);
     setSelectedPlayer(null);
-    if (recordedRound !== null) {
-      // That round is on the ladder now; next week's plan starts clean.
-      setTags(new Map());
-      setWeekStyle(null);
-    }
     setRecordedRound(null);
     setStep(to);
   }
-  const newMatchup = () => leaveMatch(3);
+  const newMatchup = () => leaveMatch(0);
 
   function chooseCoachsCall(style: GameStyle) {
     if (!matchInProgress || !pendingCoachsCall) return;
@@ -383,7 +444,7 @@ export function LiveMatch({
   // the whole match exists.
   const friendlyVotes = useMemo(() => (result && quartersSimulated >= 4 ? generateMatchCoachesVotes(result, homeTeam, awayTeam) : null), [result, quartersSimulated, homeTeam, awayTeam]);
 
-  // --- Flow view-model (steps 1-5) -------------------------------------------------------------------
+  // --- Flow view-model (steps 1-4) -------------------------------------------------------------------
   const avgFpOfPlayer = (p: Player) => {
     const inSave = seasonAvgFpMap.get(p.PlayerID)?.fantasyPoints;
     return inSave !== undefined && inSave > 0 ? inSave : baselineFpAverage(p);
@@ -391,21 +452,29 @@ export function LiveMatch({
   const danger = useMemo(() => dangerMen(flowOpp, flowMine, avgFpOfPlayer), [flowOpp, flowMine, seasonAvgFpMap]); // eslint-disable-line react-hooks/exhaustive-deps
   const taggers = useMemo(() => taggerCandidates(flowMine), [flowMine]);
   const scout = useMemo(() => scoutingRows(oppName), [oppName]);
-  const covered = coverageCount(lineup, myById, myEligibility);
   const filled = lineup.filter((id) => id !== null).length;
+  const myAbbr = clubAbbr(myClub);
   const oppAbbr = clubAbbr(oppName);
   const roundLabel = nextRow ? `Round ${nextRow.round}` : "Friendly";
   const homeAway = iAmHome ? "Home" : "Away";
+  const style = standingPlan.gameStyle;
 
+  // Changes vs last week: team in/out, tags, style.
   const changes: WeeklyChange[] = [];
-  for (const [targetId, taggerId] of tags) {
+  if (lastWeek) {
+    const before = new Set(lastWeek.lineup.filter((id): id is number => id !== null));
+    const now = lineup.filter((id): id is number => id !== null);
+    const ins = now.filter((id) => !before.has(id)).map((id) => myById.get(id)?.lname ?? "?");
+    const outs = [...before].filter((id) => !now.includes(id)).map((id) => myById.get(id)?.lname ?? "?");
+    if (ins.length || outs.length) changes.push({ kind: "TEAM", text: [ins.length ? `In: ${ins.join(", ")}` : "", outs.length ? `Out: ${outs.join(", ")}` : ""].filter(Boolean).join(" · ") });
+  }
+  for (const [targetId, taggerId] of validTags) {
     const tagger = myById.get(taggerId);
     const target = flowOpp.players.find((p) => p.PlayerID === targetId);
     if (!tagger || !target) continue;
-    const pos = flowMine.positions?.get(taggerId);
-    changes.push({ kind: "TAG", text: `${tagger.lname} (${pos === "INT" || !pos ? "interchange" : pos}) → tags ${target.fname} ${target.lname}` });
+    changes.push({ kind: "TAG", text: `${tagger.lname} (${flowMine.positions?.get(taggerId)}) → tags ${target.fname} ${target.lname}` });
   }
-  if (weekStyle) changes.push({ kind: "STYLE", text: `${styleLabel(standingPlan.gameStyle)} → ${styleLabel(weekStyle)}` });
+  if (lastWeek && lastWeek.gameStyle !== style) changes.push({ kind: "STYLE", text: `${styleLabel(lastWeek.gameStyle)} → ${styleLabel(style)}` });
 
   function setTag(targetId: number, taggerId: number | null) {
     setTags((cur) => {
@@ -416,65 +485,51 @@ export function LiveMatch({
     });
   }
 
-  function placeInLineup(slot: number, playerId: number) {
-    const from = lineup.findIndex((id) => id === playerId);
-    const displaced = lineup[slot];
-    setSlot(myClub, slot, playerId);
-    if (from >= 0 && from !== slot && displaced !== null) setSlot(myClub, from, displaced);
-  }
-
-  // Rotations: projected time on ground against this week's opponent, re-run whenever anything that
-  // changes it does. Only computed while that step is open.
-  const projectionKey =
-    step === 1 && !active
-      ? JSON.stringify([
-          lineup,
-          myEligibility ?? null,
-          standingPlan.gameStyle,
-          [...standingPlan.tactics].map(([id, t]) => [id, t.tactic]),
-          oppName,
-          iAmHome,
-          flowVenue.commonName,
-          nextRow?.round ?? null,
-        ])
-      : "";
+  const condition = nextRow && season ? season.condition : undefined;
+  const planKey = JSON.stringify([
+    lineup,
+    liveCovers,
+    [...standingPlan.tactics].map(([id, t]) => [id, t.tactic]),
+    [...(standingPlan.positionTactics ?? [])].map(([k, t]) => [k, t.tactic]),
+    oppName,
+    iAmHome,
+    flowVenue.commonName,
+    nextRow?.round ?? null,
+  ]);
+  // Game plan: projected time on ground against this week's opponent (real simulated matches).
+  const projectionKey = step === 3 && !active ? JSON.stringify([planKey, style]) : "";
   const projection = useTogProjection(
-    projectionKey
-      ? {
-          mine: flowMine,
-          opp: flowOpp,
-          mineIsHome: iAmHome,
-          minePlan: standingPlan,
-          oppPlan,
-          stadium: flowVenue,
-          condition: nextRow && season ? season.condition : undefined,
-        }
-      : null,
+    projectionKey ? { mine: flowMine, opp: flowOpp, mineIsHome: iAmHome, minePlan: standingPlan, oppPlan, stadium: flowVenue, condition } : null,
     projectionKey,
+  );
+  // Opposition and Game plan: the scout plays this week's match out in every style.
+  const scoutKey = (step === 2 || step === 3) && !active ? planKey : "";
+  const scoutPick = useScoutPick(
+    scoutKey ? { mine: flowMine, opp: flowOpp, mineIsHome: iAmHome, minePlan: minePlan, oppPlan, stadium: flowVenue, condition } : null,
+    scoutKey,
   );
 
   // --- Stepper ---------------------------------------------------------------------------------------
   const locked = !!active && !atFullTime;
   const scoreSub = active && result ? `${playback.liveScore.homePoints} – ${playback.liveScore.awayPoints}` : "Ready";
+  const nTags = validTags.size;
   const steps: StepInfo[] = [
-    { sub: `${filled}/23 picked`, disabled: locked },
-    { sub: `${covered}/18 covered`, disabled: locked },
-    { sub: styleLabel(standingPlan.gameStyle), disabled: locked },
     { sub: nextRow ? `Rd ${nextRow.round} · ${oppAbbr}` : `Friendly · ${oppAbbr}`, disabled: locked },
-    { sub: changes.length ? plural(changes.length, "change") : "Standing plan", disabled: locked },
+    { sub: `${filled}/23 picked`, disabled: locked },
+    { sub: nTags ? plural(nTags, "tag") : "No tags", disabled: locked },
+    { sub: styleLabel(style), disabled: locked },
     { sub: scoreSub },
   ];
   function goStep(s: FlowStep) {
     if (active) {
-      if (s < 5 && atFullTime) leaveMatch(s);
+      if (s < 4 && atFullTime) leaveMatch(s);
       return;
     }
-    if (s === 5) kickOff();
+    if (s === 4) kickOff();
     else setStep(s);
   }
-  const stepper = (
-    <FlowStepper step={active ? 5 : step} steps={steps} weekLabel={nextRow ? `ROUND ${nextRow.round} VS ${oppAbbr}` : `FRIENDLY VS ${oppAbbr}`} onGo={goStep} />
-  );
+  const contextLine = `${nextRow ? `ROUND ${nextRow.round}` : "FRIENDLY"} · ${myAbbr} V ${oppAbbr} · ${flowVenue.commonName.toUpperCase()} · ${when.label.toUpperCase()}`;
+  const stepper = <FlowStepper step={active ? 4 : step} steps={steps} contextLine={contextLine} onGo={goStep} />;
 
   if (atFullTime && result) {
     return (
@@ -505,39 +560,18 @@ export function LiveMatch({
   }
 
   if (!active || !result) {
-    const NEXT = ["Next · Rotations", "Next · Roles", "Save plan · Pick fixture", `Plan for ${oppName}`, "First bounce"];
+    const NEXT = ["Pick the team", `Scout ${oppName}`, "Game plan", "First bounce"];
+    const coveredCount = Object.keys(liveCovers).length;
     const HINT = [
+      `${roundLabel} · ${flowVenue.commonName} · ${when.label} · ${homeAway}`,
       lineupStat(lineup, myById),
-      `${covered}/18 positions covered by the bench`,
-      "Roles save to your standing plan as you change them",
-      `${roundLabel} · ${flowVenue.commonName} · ${homeAway}`,
-      changes.length ? `${plural(changes.length, "change")} for this match only` : "Playing the standing plan",
+      changes.length ? `${plural(changes.length, "change")} vs last week` : "Playing last week's plan",
+      `${coveredCount}/18 have relief · ${styleLabel(style)}`,
     ];
     return (
       <div className="flex flex-col gap-3">
         {stepper}
-        {step === 0 && <SelectionStep players={myPlayers} lineup={lineup} onPlace={placeInLineup} onAutoPick={() => autoFill(myClub, myPlayers)} />}
-        {step === 1 && (
-          <RotationsStep
-            lineup={lineup}
-            byId={myById}
-            overrides={myEligibility}
-            onSetRotations={(id, positions: Position[]) => setEligibility(myClub, id, positions)}
-            tog={projection.tog}
-            projecting={projection.pending}
-          />
-        )}
-        {step === 2 && (
-          <RolesStep
-            lineup={lineup}
-            byId={myById}
-            plan={standingPlan}
-            overrides={myEligibility}
-            onStyle={(s) => setStandingStyle(myClub, s)}
-            onTactic={(id, pt) => setStandingTactic(myClub, id, pt)}
-          />
-        )}
-        {step === 3 && (
+        {step === 0 && (
           <FixtureStep
             myClub={myClub}
             year={year}
@@ -550,34 +584,64 @@ export function LiveMatch({
               setTags(new Map());
             }}
             homeVenue={homeVenue}
+            friendlyWhen={(club) => friendlyTimeslot(clubByName(club)?.ClubID ?? 0)}
             card={{
               roundLabel: roundLabel.toUpperCase(),
               opponent: oppName,
               venue: flowVenue.commonName,
               homeAway,
+              when: when.label,
+              night: when.night,
               ladder: season ? ladderLine(season, oppClubId) : "No season in progress",
               lastMet: season ? lastMetLine(season, myClubId, oppClubId) : "—",
+              carriedFrom: nextRow && nextRow.round > 1 ? nextRow.round - 1 : null,
             }}
           />
         )}
-        {step === 4 && (
+        {step === 1 && (
+          <SelectionStep
+            players={myPlayers}
+            lineup={lineup}
+            onChange={changeLineup}
+            onAutoPick={() => {
+              autoFill(myClub, myPlayers);
+              if (storedCovers) setCovers(myClub, validCovers(useSelectionStore.getState().lineupFor(myClub) ?? lineup, storedCovers));
+            }}
+            onLastWeek={lastWeek ? () => changeLineup(lastWeek.lineup) : null}
+          />
+        )}
+        {step === 2 && (
           <OppositionStep
             opponent={oppName}
-            subtitle={`${roundLabel} · ${flowVenue.commonName} · ${homeAway}`}
+            subtitle={`${roundLabel} · ${flowVenue.commonName} · ${when.label}`}
             howTheyPlay={`${styleLabel(oppPlan.gameStyle)}. ${styleBlurb(oppPlan.gameStyle)}`}
             danger={danger}
             taggers={taggers}
-            tags={tags}
+            taggerSlot={(p) => flowMine.positions?.get(p.PlayerID) ?? ""}
+            tags={validTags}
             onTag={setTag}
-            standingStyle={standingPlan.gameStyle}
-            weekStyle={weekStyle}
-            onWeekStyle={setWeekStyle}
             scout={scout}
+            scoutPick={scoutPick.pick}
+            scoutPending={scoutPick.pending}
+            planStyle={style}
+            onUseStyle={(st) => setStandingStyle(myClub, st)}
             changes={changes}
-            onReset={() => {
-              setTags(new Map());
-              setWeekStyle(null);
-            }}
+            onClearTags={() => setTags(new Map())}
+          />
+        )}
+        {step === 3 && (
+          <GamePlanStep
+            lineup={lineup}
+            byId={myById}
+            plan={standingPlan}
+            covers={liveCovers}
+            onStyle={(st) => setStandingStyle(myClub, st)}
+            onCover={setCover}
+            onRole={(id, pos: Position, tactic) => setPositionTactic(myClub, id, pos, { tactic })}
+            tog={projection.tog}
+            projecting={projection.pending}
+            scoutStyle={scoutPick.pick?.style ?? null}
+            lastWeekStyle={lastWeek?.gameStyle ?? null}
           />
         )}
         <FlowFooter
@@ -585,7 +649,7 @@ export function LiveMatch({
           onBack={() => setStep((step - 1) as FlowStep)}
           hint={HINT[step]}
           nextLabel={NEXT[step]}
-          onNext={() => (step === 4 ? kickOff() : setStep((step + 1) as FlowStep))}
+          onNext={() => (step === 3 ? kickOff() : setStep((step + 1) as FlowStep))}
         />
       </div>
     );
@@ -595,10 +659,14 @@ export function LiveMatch({
   // to home/away when spectating an AI-vs-AI match with no `mySide`.
   const yourSide: Side = mySide;
   const theirSide: Side = yourSide === "home" ? "away" : "home";
-  const yourTeam = yourSide === "home" ? homeTeam : awayTeam;
-  const theirTeam = theirSide === "home" ? homeTeam : awayTeam;
+  const yourTeam = yourSide === "home" ? homeView : awayView;
+  const theirTeam = theirSide === "home" ? homeView : awayView;
   const yourIds = yourSide === "home" ? homeIds : awayIds;
   const theirIds = theirSide === "home" ? homeIds : awayIds;
+
+  // Your side's starting 18 — the bench strip highlights a starter who's resting.
+  const kickoffMine = active ? (mySide === "home" ? active.homeAtBounce : active.awayAtBounce) : null;
+  const startingIds = new Set(kickoffMine?.onGround ?? []);
 
   // Drawer's Previous/Next roster: both teams, your side first, sorted by live fantasy points.
   const drawerRoster = [
@@ -684,6 +752,12 @@ export function LiveMatch({
               onNewMatchup={newMatchup}
               seed={lastSeed}
               disabled={playback.isComplete && quartersSimulated >= 4}
+              styleChip={(() => {
+                const st = mySide === "home" ? homeStyle : awayStyle;
+                const im = gameStyleModelledImpact(st);
+                const sg = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v)}%`;
+                return { label: styleLabel(st), detail: st === "Balanced" ? "no bias" : `us ${sg(im.ourScoring)} · them ${sg(im.theirScoring)}` };
+              })()}
             />
           </div>
 
@@ -705,8 +779,8 @@ export function LiveMatch({
               style={{ flex: "2.4 1 560px", minWidth: 0, background: "color-mix(in oklch, var(--deep) 25%, #0b1410)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 14, overflow: "hidden", display: "flex", flexDirection: "column" }}
             >
               <GroundView
-                home={homeTeam}
-                away={awayTeam}
+                home={homeView}
+                away={awayView}
                 venue={venue}
                 event={playback.currentEvent}
                 nextEvent={result.events[playback.currentIndex + 1] ?? null}
@@ -722,6 +796,8 @@ export function LiveMatch({
                 fantasyMetrics={fantasyMetrics}
                 ticksPerQuarter={tpq}
                 yourSide={yourSide}
+                night={when.night}
+                startingIds={startingIds}
               />
             </section>
           </div>
@@ -729,7 +805,7 @@ export function LiveMatch({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 400px), 1fr))", gap: 12 }}>
             <MoversWidget team={yourTeam} side={yourSide} events={revealedEvents} ticksPerQuarter={tpq} fantasyMetrics={fantasyMetrics} onSelect={selectOnGround} />
             <PlayByPlayWidget events={revealedEvents} ticksPerQuarter={tpq} homeTeam={homeTeam} awayTeam={awayTeam} homeIds={homeIds} yourSide={yourSide} />
-            <DangerMenWidget theirTeam={theirTeam} ourTeam={yourTeam} ourSide={yourSide} fantasyMetrics={fantasyMetrics} fitnessOf={fitnessOf} onSelect={selectOnGround} tags={tags} />
+            <DangerMenWidget theirTeam={theirTeam} ourTeam={yourTeam} ourSide={yourSide} fantasyMetrics={fantasyMetrics} fitnessOf={fitnessOf} onSelect={selectOnGround} tags={validTags} />
           </div>
         </>
       )}
@@ -740,8 +816,8 @@ export function LiveMatch({
           side={selectedPlayer.side}
           line={playback.liveBoxScore[selectedPlayer.player.PlayerID]}
           events={revealedEvents}
-          position={(selectedPlayer.side === "home" ? homeTeam : awayTeam).positions?.get(selectedPlayer.player.PlayerID)}
-          onGround={(selectedPlayer.side === "home" ? homeTeam : awayTeam).onGround?.has(selectedPlayer.player.PlayerID)}
+          position={(selectedPlayer.side === "home" ? homeView : awayView).positions?.get(selectedPlayer.player.PlayerID)}
+          onGround={(selectedPlayer.side === "home" ? homeView : awayView).onGround?.has(selectedPlayer.player.PlayerID)}
           fitness={fitnessOf(selectedPlayer.side, selectedPlayer.player.PlayerID)}
           fantasyMetrics={fantasyMetrics.get(selectedPlayer.player.PlayerID)}
           seasonAvgFp={seasonAvgFpOf(selectedPlayer.player.PlayerID)}

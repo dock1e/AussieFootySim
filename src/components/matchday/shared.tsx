@@ -399,6 +399,7 @@ export function TransportBar({
   onNewMatchup,
   seed,
   disabled,
+  styleChip,
 }: {
   playing: boolean;
   onTogglePlay: () => void;
@@ -412,6 +413,8 @@ export function TransportBar({
   onNewMatchup: () => void;
   seed: number | null;
   disabled?: boolean;
+  /** Round 130 — the active game style and its modelled scoring effect, e.g. "Push Harder" / "us +15% · them +10%". */
+  styleChip?: { label: string; detail: string };
 }) {
   const [menu, setMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -438,6 +441,13 @@ export function TransportBar({
           </button>
         ))}
       </div>
+      {styleChip && (
+        <span style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: "rgba(0,0,0,.2)", font: `600 12px ${BARLOW}`, color: "#eef2f8" }}>
+          <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "var(--accT)" }}>STYLE</span>
+          {styleChip.label}
+          <span style={{ font: `500 11px ${MONO}`, color: "#aab3c3" }}>{styleChip.detail}</span>
+        </span>
+      )}
       <div style={{ flex: 1 }} />
       <button onClick={onSimToBreak} disabled={disabled} style={{ ...outlineButton, opacity: disabled ? 0.5 : 1 }}>
         Sim to {nextBreak}

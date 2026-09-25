@@ -315,7 +315,7 @@ export default function App() {
         {screen === "dashboard" && (
           <Dashboard
             onGoToSelection={() => {
-              setMatchEntryStep(0);
+              setMatchEntryStep(1);
               setScreen("match");
             }}
             onGoToContracts={() => setScreen("contracts")}

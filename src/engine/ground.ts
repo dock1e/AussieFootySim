@@ -218,6 +218,8 @@ export interface DotPosition {
   y: number;
   /** True if this player is one of the 1-2 involved in the current event (drawn near the ball, highlighted). */
   involved: boolean;
+  /** Round 130 — on the interchange bench right now (drawn faded at the gate). */
+  bench?: boolean;
 }
 
 /**
@@ -253,7 +255,7 @@ const POSITION_LANES: Partial<Record<Position, readonly number[]>> = {
   BP: [-1, 1],
   HBF: [-1, 1],
   CHB: [0],
-  W: [-1, 1],
+  W: [-0.55, 0.55], // round 129 — wingers sit off the square on their wing, not on the boundary (see positioning.ts's POSITION_LANE)
   C: [0],
   ROV: [-0.12],
   R: [0],
@@ -551,6 +553,9 @@ const FLOOD_SPREAD_SCALE = 1.15; // the flooding line covers more width — see 
 const FLOOD_CONTRACT_SCALE = 0.7; // the other line packs in tighter, less leading
 
 const MIDDLE_GRAVITY_SCALE = 0.5; // Attack the Middle: wing/flank pull in toward the corridor
+// Round 129 — wingers now start at half-width (W lane 0.5), so halving that again put an Attack the
+// Middle winger inside the centre square; wings pull in by a fifth, flanks keep the full effect.
+const MIDDLE_GRAVITY_WING_SCALE = 0.8;
 const SPREAD_WIDE_SCALE = 1.15; // Spread the Ground: wing/flank hold maximum width — see headroom note above
 
 interface AnchorBias {
@@ -591,6 +596,7 @@ function gameStyleAnchorBias(position: Position, style: GameStyle): AnchorBias {
       if (DEFENSIVE_LINE_POSITIONS.includes(position)) return { zoneShift: -FLOOD_CONTRACT_ZONE, laneScale: FLOOD_CONTRACT_SCALE };
       return NO_BIAS;
     case "Attack the Middle":
+      if (position === "W") return { zoneShift: 0, laneScale: MIDDLE_GRAVITY_WING_SCALE };
       if (WING_FLANK_POSITIONS.includes(position)) return { zoneShift: 0, laneScale: MIDDLE_GRAVITY_SCALE };
       return NO_BIAS;
     case "Spread the Ground":
@@ -866,7 +872,11 @@ function formationFor(
   // on-ground/bench distinction (the plain pickBest22 path, the balance
   // simulator, every pre-round-8 test), so this is a no-op change for any
   // caller that doesn't supply real Selection Committee lineup data.
-  const roster = onGroundPlayers(team);
+  // Round 129 — when the engine's snapshot for this event exists, IT says who is on the ground: the
+  // team object may already reflect interchanges from later in the simulated quarter (see
+  // `MatchEvent.interchange`), and drawing a player the engine has on the bench put him at a
+  // fallback anchor on the boundary.
+  const roster = tracked ? team.players.filter((p) => tracked.has(p.PlayerID)) : onGroundPlayers(team);
   const anchors = assignAnchors(roster, team.positions, style);
   const sideOffset = side === "home" ? 18 : -18;
   const press = pressLineFor(side, event);
@@ -1046,31 +1056,44 @@ const SNAP_WINDUP_DOT_OFFSET_Y = 20;
 const PRESSURED_HANDBALL_DOT_OFFSET_X = 16;
 const PRESSURED_HANDBALL_DOT_OFFSET_Y = 10;
 
-// Round 111 — see the `isCentreBounce` branch's own doc comment inside
-// `computeDotPositions` for the full reasoning. Eight fixed ring slots (both
-// teams' Ruck/Ruck Rover/Rover/Centre), 45 degrees apart, so the two sides
-// fan out evenly around the circle without overlapping each other.
-// Deliberately includes "R" too, even though the two rucks ACTUALLY
-// contesting a given tap already get the tighter, more precise dead-centre
-// override just above this one (keyed off that specific event's own
-// `playerIds`) — this ring only ever ends up placing a Ruck when that
-// tighter override doesn't apply to them, which happens for exactly one real
-// case: the `CLEARANCE` event a tick after the tap, where only the
-// clearance WINNER (not necessarily a Ruck) is named, potentially leaving
-// the other Ruck with no override at all and stranded at their ordinary,
-// much-further-away general-play anchor.
-const CENTRE_BOUNCE_RING_RADIUS = 34;
-const CENTRE_BOUNCE_RING_POSITIONS: readonly Position[] = ["R", "RR", "ROV", "C"];
-const CENTRE_BOUNCE_RING_ANGLES: Record<string, number> = {
-  "home:R": 0,
-  "home:RR": 45,
-  "home:ROV": 90,
-  "home:C": 135,
-  "away:R": 180,
-  "away:RR": 225,
-  "away:ROV": 270,
-  "away:C": 315,
+// Round 129 (Tyler: "Gawn and Witts should run and jump at each other... the Centre, Ruck Rover and
+// Rover positions should be paired up, at the moment all of the Melbourne players are on one side
+// while all Gold Coast players are on the other"). Replaces round 111's eight-slot ring, which gave
+// each team one half of the circle. Offsets are canvas px from the ball (home attacks right, so the
+// home player of each pair stands on the left, goal-side of his opponent):
+//   - the two rucks face each other across the centre circle before the bounce, then meet at the
+//     hit-out (the tween between those two frames is the run-and-jump) and stay close for the
+//     clearance;
+//   - C, RR and ROV stand in opposing pairs just outside the circle — Centres above, Ruck Rovers
+//     below-right, Rovers below-left — shoulder to shoulder with their direct opponent.
+const CENTRE_BOUNCE_RUCK_GAP = { setup: 40, hitout: 9, clearance: 13 } as const;
+const CENTRE_BOUNCE_PAIR_CENTRES: Partial<Record<Position, { x: number; y: number }>> = {
+  C: { x: 0, y: -52 },
+  RR: { x: 43, y: 30 },
+  ROV: { x: -43, y: 30 },
 };
+const CENTRE_BOUNCE_PAIR_HALF_GAP = 12;
+
+type CentreBounceMoment = keyof typeof CENTRE_BOUNCE_RUCK_GAP;
+
+function applyCentreBounceLayout(all: Map<number, DotPosition>, home: MatchTeam, away: MatchTeam, ballX: number, moment: CentreBounceMoment): void {
+  for (const [side, team] of [["home", home] as const, ["away", away] as const]) {
+    const sign = side === "home" ? -1 : 1;
+    for (const [id, pos] of team.positions ?? []) {
+      const existing = all.get(id);
+      if (!existing) continue;
+      const tieBreak = hashPlayer(id, 5) - 0.5; // +-0.5, same small stable per-player jitter as every other branch here
+      if (pos === "R") {
+        // The rucks are always placed here, even when named in the event: this is their contest.
+        all.set(id, { ...existing, x: ballX + sign * CENTRE_BOUNCE_RUCK_GAP[moment], y: CENTER_Y + (moment === "clearance" ? 4 : 0) + tieBreak * 2 });
+        continue;
+      }
+      const centre = CENTRE_BOUNCE_PAIR_CENTRES[pos];
+      if (!centre || existing.involved) continue; // the clearance winner is already at the ball
+      all.set(id, { ...existing, x: ballX + centre.x + sign * CENTRE_BOUNCE_PAIR_HALF_GAP + tieBreak * 2, y: CENTER_Y + centre.y + tieBreak * 2 });
+    }
+  }
+}
 
 export function computeDotPositions(
   home: MatchTeam,
@@ -1170,6 +1193,10 @@ export function computeDotPositions(
     (event?.phase === "STOPPAGE" || event?.phase === "CLEARANCE") &&
     event.zone === MIDFIELD &&
     (event.stoppageType === undefined || event.stoppageType === "centreBounce");
+  // Round 129 — the frame before the first tick of a quarter (no event revealed yet, the bounce up
+  // next) shows the same set-up the bounce itself does, instead of general-play shape.
+  const isCentreBounceSetup =
+    !event && nextEvent?.phase === "STOPPAGE" && nextEvent.zone === MIDFIELD && (nextEvent.stoppageType === undefined || nextEvent.stoppageType === "centreBounce");
 
   // Aug 2026 round 26 (Tyler: "I want there to be a moment of suspense
   // where the viewer sees a ball kicked towards a contest... the target is
@@ -1468,44 +1495,12 @@ export function computeDotPositions(
       all.set(id, { ...existing, x: x + tieBreak * 8, y: avgAnchorY + spread + tieBreak * 6, involved: true });
     });
 
-    // Round 111 (Tyler: "I want you to review the current starting positions
-    // for our centre bounce as the Ruck, Ruck Rover, Rover and Centre
-    // positions should all be setup around the center circle"). The override
-    // above only ever repositions the two players actually named in
-    // `event.playerIds` — the two contesting rucks. Real broadcast footage
-    // (and Tyler's own reference screenshots) shows all 8 followers (both
-    // teams' R/RR/ROV/C) clustered tight around the circle at a genuine
-    // centre bounce — every OTHER follower still rendered at their ordinary,
-    // much more spread-out general-play formation anchor (`POSITION_LANE`'s
-    // own "0.3 apart" round-31 de-blob spacing), which is correct for
-    // general play but reads as scattered at the one moment real footage
-    // shows them tight. This pulls the remaining followers into a small
-    // ring around the same centre point, at fixed angles so the two teams
-    // fan out rather than overlap — R/RR/ROV/C for both sides, skipping
-    // anyone the tighter override above already placed (normally the two
-    // actual tap contestants). Deliberately not a claim about real Laws-of-the-Game
-    // centre-square eligibility or exact broadcast blocking — Tyler's own
-    // scoping ("we dont need to make all the tactical nuances into our
-    // engine") — just a plausible, clearly-clustered visual in place of the
-    // current scattered one.
-    if (isCentreBounce) {
-      for (const [side, team] of [["home", home] as const, ["away", away] as const]) {
-        for (const [id, playerPos] of team.positions ?? []) {
-          if (!CENTRE_BOUNCE_RING_POSITIONS.includes(playerPos)) continue;
-          const existing = all.get(id);
-          if (!existing || existing.involved) continue; // already handled above (one of the two contesting rucks, or another named event participant)
-          const angleDeg = CENTRE_BOUNCE_RING_ANGLES[`${side}:${playerPos}`];
-          if (angleDeg === undefined) continue;
-          const angleRad = (angleDeg * Math.PI) / 180;
-          const tieBreak = hashPlayer(id, 5) - 0.5; // +-0.5, same small stable per-player jitter as every other branch here
-          all.set(id, {
-            ...existing,
-            x: ballX + Math.cos(angleRad) * CENTRE_BOUNCE_RING_RADIUS + tieBreak * 4,
-            y: CENTER_Y + Math.sin(angleRad) * CENTRE_BOUNCE_RING_RADIUS + tieBreak * 4,
-          });
-        }
-      }
-    }
+  }
+
+  if (isCentreBounce && event) {
+    applyCentreBounceLayout(all, home, away, zoneToX(event.zone), event.phase === "CLEARANCE" ? "clearance" : event.playerIds.length > 0 ? "hitout" : "setup");
+  } else if (isCentreBounceSetup) {
+    applyCentreBounceLayout(all, home, away, zoneToX(MIDFIELD), "setup");
   }
 
   // BUG FIXED Aug 2026, round 3 (Tyler, live testing: "Ned Long and Nick
@@ -1568,6 +1563,20 @@ export function computeDotPositions(
       const y = Math.min(yMax, Math.max(yMin, dot.y + dy));
       all.set(id, { ...dot, x, y });
     }
+  }
+
+  // Round 130 (Match Day flow v2 §6) — the benches: everyone not on the ground sits at the interchange
+  // gate just outside the boundary, at the bottom centre of the oval (home to the left of the gate,
+  // away to the right). Drawn faded by GroundView; because every dot is keyed by player, a player
+  // coming on or going off slides between the gate and his position instead of popping in or out.
+  const gateY = CENTER_Y + trueHalfHeightAt(GROUND_WIDTH / 2) + 16;
+  const gap = 26 * (GROUND_WIDTH / 880);
+  for (const [side, team] of [["home", home] as const, ["away", away] as const]) {
+    const benchers = team.players.filter((p) => !all.has(p.PlayerID)).sort((a, b) => a.jumperNumber - b.jumperNumber);
+    benchers.forEach((p, i) => {
+      const x = GROUND_WIDTH / 2 + (side === "home" ? -(i + 1) : i + 1) * gap;
+      all.set(p.PlayerID, { playerId: p.PlayerID, lname: p.lname, jumperNumber: p.jumperNumber, side, x, y: gateY, involved: false, bench: true });
+    });
   }
 
   return [...all.values()];

@@ -640,7 +640,7 @@ const TILE_COLUMNS: { label: string; positions: Position[] }[] = [
   { label: "BACK", positions: ["BP", "FB", "BP"] },
   { label: "HALF BACK", positions: ["HBF", "CHB", "HBF"] },
   { label: "CENTRE", positions: ["W", "C", "W"] },
-  { label: "RUCK", positions: ["RR", "R", "ROV"] },
+  { label: "RUCK", positions: ["R", "RR", "ROV"] },
   { label: "HALF FWD", positions: ["HFF", "CHF", "HFF"] },
   { label: "FORWARD →", positions: ["FP", "FF", "FP"] },
 ];

@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { defaultTeamPlan, type TeamPlan, type GameStyle, type PlayerTactic } from "../engine/tactics";
+import { defaultTeamPlan, positionTacticKey, type TeamPlan, type GameStyle, type PlayerTactic } from "../engine/tactics";
+import type { Position } from "../types/archetype";
 
 interface TeamPlanState {
   /**
@@ -13,6 +14,8 @@ interface TeamPlanState {
   planFor: (clubName: string) => TeamPlan | undefined;
   setGameStyle: (clubName: string, style: GameStyle) => void;
   setTactic: (clubName: string, playerId: number, pt: PlayerTactic) => void;
+  /** Round 130 — a player's role at one specific position (Match Day flow v2 roles are per player per position). */
+  setPositionTactic: (clubName: string, playerId: number, position: Position, pt: PlayerTactic) => void;
   reset: (clubName: string) => void;
   /** Bulk-replaces every club's plans at once — used to hydrate from a loaded save, see useSaveStore.ts. */
   restorePlans: (plans: Record<string, TeamPlan>) => void;
@@ -49,6 +52,14 @@ export const useTeamPlanStore = create<TeamPlanState>((set, get) => ({
       const tactics = new Map(current.tactics);
       tactics.set(playerId, pt);
       return { plans: { ...state.plans, [clubName]: { ...current, tactics } } };
+    }),
+
+  setPositionTactic: (clubName, playerId, position, pt) =>
+    set((state) => {
+      const current = state.plans[clubName] ?? defaultTeamPlan();
+      const positionTactics = new Map(current.positionTactics);
+      positionTactics.set(positionTacticKey(playerId, position), pt);
+      return { plans: { ...state.plans, [clubName]: { ...current, positionTactics } } };
     }),
 
   reset: (clubName) =>

@@ -2,12 +2,13 @@ import type { CSSProperties, ReactNode } from "react";
 import { BARLOW, CARD_BG, COND, MONO, outlineButton, primaryButton } from "../shared";
 
 /**
- * Match Day flow chrome (`Match Day Flow.dc.html`): the six-step stepper, split into the standing plan
- * (set once, used every week) and this week, plus the sticky Back / hint / Next footer.
+ * Match Day flow chrome (`Match Day Flow v2.dc.html`): one row of five steps under a context line
+ * (round, teams, venue, time), plus the sticky Back / hint / Next footer. The plan carries forward
+ * each round; only tags are per match.
  */
 
-export const STEP_LABELS = ["Selection", "Rotations", "Roles", "Fixture", "Opposition", "Match"] as const;
-export type FlowStep = 0 | 1 | 2 | 3 | 4 | 5;
+export const STEP_LABELS = ["Fixture", "Selection", "Opposition", "Game plan", "Match"] as const;
+export type FlowStep = 0 | 1 | 2 | 3 | 4;
 
 export interface StepInfo {
   sub: string;
@@ -23,7 +24,7 @@ function StepButton({ n, label, info, on, onGo }: { n: number; label: string; in
       disabled={info.disabled}
       title={info.disabled ? "Locked until full time" : undefined}
       style={{
-        flex: "1 1 0",
+        flex: "1 1 160px",
         minWidth: 0,
         display: "flex",
         alignItems: "center",
@@ -61,21 +62,15 @@ function StepButton({ n, label, info, on, onGo }: { n: number; label: string; in
   );
 }
 
-export function FlowStepper({ step, steps, weekLabel, onGo }: { step: FlowStep; steps: StepInfo[]; weekLabel: string; onGo: (s: FlowStep) => void }) {
-  const group = (title: string, yours: boolean, idx: FlowStep[]) => (
-    <div style={{ flex: "3 1 480px", minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ font: `600 10px ${MONO}`, letterSpacing: "1.2px", color: yours ? "var(--accT)" : "#8f9ab0" }}>{title}</div>
-      <div style={{ display: "flex", gap: 6 }}>
-        {idx.map((i) => (
-          <StepButton key={i} n={i + 1} label={STEP_LABELS[i]} info={steps[i]} on={step === i} onGo={() => onGo(i)} />
+export function FlowStepper({ step, steps, contextLine, onGo }: { step: FlowStep; steps: StepInfo[]; contextLine: string; onGo: (s: FlowStep) => void }) {
+  return (
+    <nav className="mdf-stepper" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ font: `600 10px ${MONO}`, letterSpacing: "1.2px", color: "var(--accT)" }}>{contextLine}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {STEP_LABELS.map((label, i) => (
+          <StepButton key={label} n={i + 1} label={label} info={steps[i]} on={step === i} onGo={() => onGo(i as FlowStep)} />
         ))}
       </div>
-    </div>
-  );
-  return (
-    <nav className="mdf-stepper" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-      {group("STANDING PLAN · SET ONCE, USED EVERY WEEK", false, [0, 1, 2])}
-      {group(`THIS WEEK · ${weekLabel}`, true, [3, 4, 5])}
     </nav>
   );
 }

@@ -5,7 +5,7 @@ import { onGroundPlayers } from "./team.ts";
 import { laneFor } from "./involvement.ts";
 import { proximityFor, distanceBetween, realDistanceBetween, type AbstractPosition } from "./positioning.ts";
 import { ownZone, type Side, type Zone } from "./zones.ts";
-import { tacticGroupForSlot, defaultTacticForPosition, type Tactic, type TeamPlan, type GameStyle } from "./tactics.ts";
+import { tacticGroupForSlot, resolveTactic, type Tactic, type TeamPlan, type GameStyle } from "./tactics.ts";
 import type { AFLStadium } from "../data/stadiums.ts";
 
 /**
@@ -438,10 +438,7 @@ function forwardTarget(side: Side, home: AbstractPosition, opponent: AbstractPos
 
 /** Resolves a player's active tactic — a small, deliberate duplicate of `match.ts`'s own (non-exported) `tacticFor`, for the same circular-import reason `positioning.ts`'s own doc comment already gives (`match.ts` needs this module, so this module can't import back from `match.ts`). In practice every player in a non-null `plan` already has an explicit entry by the time this runs (`match.ts`'s `startMatch` always runs a supplied plan through `sanitizePlan` first), so the position-based fallback is defensive rather than load-bearing — same status match.ts's own version documents for itself. */
 function resolvedTactic(plan: TeamPlan | null, player: Player, position: Position | undefined): Tactic | undefined {
-  if (!plan) return undefined;
-  const explicit = plan.tactics.get(player.PlayerID)?.tactic;
-  if (explicit) return explicit;
-  return defaultTacticForPosition(position, tacticGroupForSlot(position, player.archetype as Archetype));
+  return resolveTactic(plan, player, position); // round 130 — one shared per-position resolver (tactics.ts)
 }
 
 /**

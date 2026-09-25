@@ -2,6 +2,8 @@ import { create } from "zustand";
 import type { Player } from "../types/player";
 import { autoFillLineup, emptyLineup, type Lineup } from "../engine/selection";
 import { POSITIONS, type Position } from "../types/archetype";
+import type { Cover } from "../engine/team";
+import type { LastWeekPlan } from "../engine/saveGame";
 
 /**
  * Aug 2026, round 8: a lineup saved before `POSITIONS` grew its 5th `INT`
@@ -34,6 +36,15 @@ interface SelectionState {
    * see that function's own doc comment.
    */
   eligibility: Record<string, Record<number, Position[]>>;
+  /**
+   * Round 130 (Match Day flow v2) — per club, the resting player's PlayerID → who covers him
+   * (`null` = plays through). A club with no entry yet uses covers derived from its lineup and old
+   * per-position eligibility (`defaultCovers` in the Match Day flow), and the first edit saves the
+   * whole derived set plus the change.
+   */
+  covers: Record<string, Record<number, Cover | null>>;
+  /** Round 130 — the line-up and game style that last took the field, per club. */
+  lastWeek: Record<string, LastWeekPlan>;
 
   lineupFor: (clubName: string) => Lineup | undefined;
   setSlot: (clubName: string, slotIndex: number, playerId: number | null) => void;
@@ -61,6 +72,13 @@ interface SelectionState {
   resetEligibility: (clubName: string, playerId: number) => void;
   /** Bulk-replaces every club's eligibility overrides at once — used to hydrate from a loaded save, see useSaveStore.ts. */
   restoreEligibility: (eligibility: Record<string, Record<number, Position[]>>) => void;
+  /** Replaces a club's lineup outright (Clear sheet, Last week's team). */
+  setLineup: (clubName: string, lineup: Lineup) => void;
+  /** Replaces a club's whole cover map (the Game plan step writes derived defaults plus the edit in one go). */
+  setCovers: (clubName: string, covers: Record<number, Cover | null>) => void;
+  setLastWeek: (clubName: string, plan: LastWeekPlan) => void;
+  restoreCovers: (covers: Record<string, Record<number, Cover | null>>) => void;
+  restoreLastWeek: (lastWeek: Record<string, LastWeekPlan>) => void;
 }
 
 /**
@@ -71,6 +89,8 @@ interface SelectionState {
 export const useSelectionStore = create<SelectionState>((set, get) => ({
   lineups: {},
   eligibility: {},
+  covers: {},
+  lastWeek: {},
 
   lineupFor: (clubName) => {
     const lineup = get().lineups[clubName];
@@ -103,6 +123,13 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
       if (current?.includes(playerId)) {
         next.lineups = { ...state.lineups, [clubName]: current.map((id) => (id === playerId ? null : id)) };
       }
+      const clubCovers = state.covers[clubName];
+      if (clubCovers) {
+        const kept = Object.fromEntries(
+          Object.entries(clubCovers).filter(([r, c]) => Number(r) !== playerId && c?.by !== playerId && c?.fill !== playerId),
+        );
+        next.covers = { ...state.covers, [clubName]: kept };
+      }
       if (hasEligibilityOverride) {
         const { [playerId]: _removed, ...rest } = state.eligibility[clubName];
         next.eligibility = { ...state.eligibility, [clubName]: rest };
@@ -131,4 +158,10 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     }),
 
   restoreEligibility: (eligibility) => set({ eligibility }),
+
+  setLineup: (clubName, lineup) => set((state) => ({ lineups: { ...state.lineups, [clubName]: normalized([...lineup]) } })),
+  setCovers: (clubName, covers) => set((state) => ({ covers: { ...state.covers, [clubName]: covers } })),
+  setLastWeek: (clubName, plan) => set((state) => ({ lastWeek: { ...state.lastWeek, [clubName]: plan } })),
+  restoreCovers: (covers) => set({ covers }),
+  restoreLastWeek: (lastWeek) => set({ lastWeek }),
 }));

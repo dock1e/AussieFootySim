@@ -569,6 +569,7 @@ export function DangerMenWidget({
   fantasyMetrics,
   fitnessOf,
   onSelect,
+  tags,
 }: {
   theirTeam: MatchTeam;
   ourTeam: MatchTeam;
@@ -576,13 +577,17 @@ export function DangerMenWidget({
   fantasyMetrics: Map<number, PlayerMatchFantasyMetrics>;
   fitnessOf: (side: Side, playerId: number) => number;
   onSelect: SelectFn;
+  /** Match Day flow (round 128): this week's tags, their PlayerID → your tagger's. A tagged man always shows, matched by his tagger. */
+  tags?: Map<number, number>;
 }) {
   const grid = "36px minmax(0,1fr) 40px minmax(0,1fr)";
   const opponents = directOpponents(theirTeam, ourTeam);
-  const rows = onGroundPlayers(theirTeam)
+  const ourById = new Map(ourTeam.players.map((p) => [p.PlayerID, p]));
+  const byFp = onGroundPlayers(theirTeam)
     .map((player) => ({ player, fp: fantasyMetrics.get(player.PlayerID)?.fp ?? 0 }))
-    .sort((a, b) => b.fp - a.fp)
-    .slice(0, 4);
+    .sort((a, b) => b.fp - a.fp);
+  const tagged = theirTeam.players.filter((p) => tags?.has(p.PlayerID)).map((player) => ({ player, fp: fantasyMetrics.get(player.PlayerID)?.fp ?? 0 }));
+  const rows = [...tagged, ...byFp.filter((r) => !tags?.has(r.player.PlayerID))].slice(0, 4);
   return (
     <section data-screen-label="Danger men" style={WIDGET}>
       <div style={{ ...sectionLabelStyle(), height: 22, display: "flex", alignItems: "center", marginBottom: 6 }}>{theirTeam.name} · THEIR DANGER MEN</div>
@@ -593,7 +598,13 @@ export function DangerMenWidget({
         <span>MATCHED BY</span>
       </div>
       {rows.map(({ player, fp }) => {
-        const by = opponents.get(player.PlayerID);
+        const taggerId = tags?.get(player.PlayerID);
+        const tagger = taggerId !== undefined ? ourById.get(taggerId) : undefined;
+        const by = tagger ?? opponents.get(player.PlayerID);
+        // Tag watch: is the tagged man running under or over his own average so far (the same pace
+        // number the board uses)? Not called until his average says he'd have 10 points by now.
+        const m = fantasyMetrics.get(player.PlayerID);
+        const verdict = tagger && m && m.fp - m.paceDelta >= 10 ? (m.paceDelta <= 0 ? { text: "HOLDING", color: RISE } : { text: "LOSING HIM", color: FALL }) : null;
         return (
           <div key={player.PlayerID} style={{ display: "grid", gridTemplateColumns: grid, gap: 8, alignItems: "center", height: 56, borderBottom: "1px solid rgba(255,255,255,.04)" }}>
             <span style={{ font: `500 10px ${MONO}`, color: "#8f9ab0" }}>{theirTeam.positions?.get(player.PlayerID) ?? "—"}</span>
@@ -605,10 +616,17 @@ export function DangerMenWidget({
                 title={`Find ${playerFullName(by)} on the ground`}
                 style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: 0, padding: 0, cursor: "pointer", minWidth: 0, textAlign: "left" }}
               >
+                {tagger && <span style={{ flex: "none", font: `600 9px ${MONO}`, letterSpacing: ".8px", color: WARN, padding: "1px 4px", border: `1px solid ${WARN}`, borderRadius: 4 }}>TAG</span>}
                 <span style={{ font: `600 13px ${BARLOW}`, color: "var(--accT)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   #{by.jumperNumber} {by.lname}
                 </span>
-                <FitnessValue value={fitnessOf(ourSide, by.PlayerID)} boxed />
+                {verdict ? (
+                  <span style={{ flex: "none", font: `600 9px ${MONO}`, letterSpacing: ".6px", color: verdict.color }} title="His fantasy points against his own average so far">
+                    {verdict.text}
+                  </span>
+                ) : (
+                  <FitnessValue value={fitnessOf(ourSide, by.PlayerID)} boxed />
+                )}
               </button>
             ) : (
               <span style={{ font: `500 12px ${BARLOW}`, color: "#5d6880" }}>—</span>

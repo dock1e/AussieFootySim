@@ -206,7 +206,24 @@ function nextConditionMap(prev: Map<number, number>, teams: Map<number, MatchTea
 }
 
 /** Simulates every game in `round` (a no-op if that round's already played) and returns a new Season with the results folded in, the ladder recomputed, `condition` advanced one round for every player fielded, and `disgruntlement` advanced one round for every non-delisted player at every club in `teams` (see engine/disgruntlement.ts — uses the freshly-recomputed `ladder`, so "is my club struggling" reflects this round's result). `plans` (clubId -> TeamPlan) is optional and opt-in — a club absent from it plays with no tactics/game-style plan, same as omitting `homePlan`/`awayPlan` from `simulateMatch` directly. Condition is read from `season.condition` (fatigue accumulated *before* this round) and applied to both sides of every match via the same map — match.ts resolves each player's own entry by PlayerID regardless of which side's slot it's passed into. */
-export function simulateRound(season: Season, round: number, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>): Season {
+/**
+ * Match Day flow (round 128): `presetResults` lets the coach's own fixture be played live on the Match
+ * Day screen and then folded into the round exactly like a headless one. Keyed by `presetResultKey`;
+ * a match with a preset skips `simulateMatch` and goes through the same coaches-votes/Brownlow steps
+ * below, so a live-played match and a headless one land in `played` in the identical shape. Every other
+ * match in the round still simulates as before.
+ */
+export function presetResultKey(homeClubId: number, awayClubId: number): string {
+  return `${homeClubId}-${awayClubId}`;
+}
+
+export function simulateRound(
+  season: Season,
+  round: number,
+  teams: Map<number, MatchTeam>,
+  plans?: Map<number, TeamPlan>,
+  presetResults?: Map<string, MatchResult>,
+): Season {
   if (isRoundPlayed(season, round)) return season;
   const roundMatches = matchesInRound(season.fixture, round);
 
@@ -223,13 +240,15 @@ export function simulateRound(season: Season, round: number, teams: Map<number, 
     // home club actually plays this round at (Tasmania/Gold Coast/GWS's own real
     // fixture-based exceptions, see clubGrounds.ts's own doc comment), not the flat
     // MCG default `simulateMatch` itself falls back to when `stadium` is omitted.
-    const rawResult = simulateMatch(home, away, mulberry32(seed), seed, {
-      homePlan,
-      awayPlan,
-      homeCondition: season.condition,
-      awayCondition: season.condition,
-      stadium: groundForMatch(m.homeClubId, round, season.fixture),
-    });
+    const rawResult =
+      presetResults?.get(presetResultKey(m.homeClubId, m.awayClubId)) ??
+      simulateMatch(home, away, mulberry32(seed), seed, {
+        homePlan,
+        awayPlan,
+        homeCondition: season.condition,
+        awayCondition: season.condition,
+        stadium: groundForMatch(m.homeClubId, round, season.fixture),
+      });
     // [[Coaches Votes and MVP Award]], round 90 — generated here, not lazily, because
     // `generateMatchCoachesVotes` needs `rawResult.events` (see that function's own doc comment),
     // which is still in memory now but gets stripped at archive time.

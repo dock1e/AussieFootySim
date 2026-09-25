@@ -145,11 +145,15 @@ export function lineupToMatchTeam(
   const interchangeEligibility = new Map<number, Set<Position>>();
   for (const p of picked) {
     const override = eligibilityOverrides?.[p.PlayerID];
-    if (override && override.length > 0) {
-      interchangeEligibility.set(p.PlayerID, new Set(override));
+    const assigned = positions.get(p.PlayerID);
+    // Round 128 (Match Day flow, Rotations step): an override is the coach's explicit pairing list,
+    // so an empty one now means "rotates into nothing" rather than "use the default". A player's own
+    // on-ground slot is always added back, so someone moved from the bench into the 18 can still
+    // return to his own position after a rest.
+    if (override) {
+      interchangeEligibility.set(p.PlayerID, new Set(assigned && assigned !== "INT" ? [...override, assigned] : override));
       continue;
     }
-    const assigned = positions.get(p.PlayerID);
     const defaults = defaultEligiblePositions(p.archetype as Archetype);
     interchangeEligibility.set(p.PlayerID, new Set(assigned ? [...defaults, assigned] : defaults));
   }

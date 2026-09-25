@@ -55,8 +55,10 @@ interface SelectionState {
 
   /** This club's saved eligibility overrides, or undefined if it's never been touched — see `eligibility`'s own doc comment. */
   eligibilityFor: (clubName: string) => Record<number, Position[]> | undefined;
-  /** Sets (or, given an empty array, clears back to the archetype default) one player's eligible-position override. */
+  /** Sets one player's eligible-position override. An empty array means he rotates into nothing. */
   setEligibility: (clubName: string, playerId: number, positions: Position[]) => void;
+  /** Drops one player's override so he falls back to his archetype default. */
+  resetEligibility: (clubName: string, playerId: number) => void;
   /** Bulk-replaces every club's eligibility overrides at once — used to hydrate from a loaded save, see useSaveStore.ts. */
   restoreEligibility: (eligibility: Record<string, Record<number, Position[]>>) => void;
 }
@@ -115,13 +117,17 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
   setEligibility: (clubName, playerId, positions) =>
     set((state) => {
       const current = state.eligibility[clubName] ?? {};
-      const next = { ...current };
-      if (positions.length === 0) {
-        delete next[playerId]; // empty selection = "reset to archetype default", not "eligible for nothing"
-      } else {
-        next[playerId] = positions;
-      }
-      return { eligibility: { ...state.eligibility, [clubName]: next } };
+      // Round 128: an empty list is kept as an explicit "rotates into nothing" (the Rotations step's
+      // "No rotations" state); `resetEligibility` is how a player goes back to his archetype default.
+      return { eligibility: { ...state.eligibility, [clubName]: { ...current, [playerId]: positions } } };
+    }),
+
+  resetEligibility: (clubName, playerId) =>
+    set((state) => {
+      const current = state.eligibility[clubName];
+      if (!current || current[playerId] === undefined) return state;
+      const { [playerId]: _removed, ...rest } = current;
+      return { eligibility: { ...state.eligibility, [clubName]: rest } };
     }),
 
   restoreEligibility: (eligibility) => set({ eligibility }),

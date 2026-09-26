@@ -3,6 +3,18 @@ import { missedCall } from "./missedCall";
 import { offerPitch } from "./offerPitch";
 import { boardBrief, unveilBody, unveilHeadline } from "./unveil";
 import { inboxAssistant, inboxCaptain, inboxFitness, inboxListManager, inboxPresident } from "./inbox";
+import {
+  splashCaptainLoss,
+  splashCaptainWin,
+  splashFootLoss,
+  splashFootWin,
+  splashHeadlineLoss,
+  splashHeadlineWin,
+  splashMedalCitation,
+  splashPlayerCitation,
+  splashSubLoss,
+  splashSubWin,
+} from "./splash";
 import { dashSubline, pressClipping, taskDept, taskList, taskPlan, taskScout } from "./system";
 
 /** New Game Onboarding — the whole phrase bank, keyed by slot (see `phraseEngine.ts` for how lines are picked). */
@@ -23,6 +35,16 @@ export const PHRASE_BANK: Record<Slot, Phrase[]> = {
   "taskBlurb.scout": taskScout,
   dashSubline,
   pressClipping,
+  "splash.headline.win": splashHeadlineWin,
+  "splash.headline.loss": splashHeadlineLoss,
+  "splash.sub.win": splashSubWin,
+  "splash.sub.loss": splashSubLoss,
+  "splash.captainQuote.win": splashCaptainWin,
+  "splash.captainQuote.loss": splashCaptainLoss,
+  "splash.medalCitation": splashMedalCitation,
+  "splash.playerCitation": splashPlayerCitation,
+  "splash.footNote.win": splashFootWin,
+  "splash.footNote.loss": splashFootLoss,
 };
 
 export const SLOTS = Object.keys(PHRASE_BANK) as Slot[];

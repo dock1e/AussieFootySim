@@ -93,6 +93,7 @@ export function CareerProfile() {
               Age {player.Age} · Debut {span.startYear}
               {span.stillActive ? "" : ` — ${span.endYear}`} · {gamesPlayed} games · {statMeta.label.toLowerCase()}: {focusTotal}
             </div>
+            <BigGameHonours player={player} />
             <div className="mt-3 grid grid-cols-3 gap-2">
               <KpiTile value={player.OVR} label="OVR" />
               <KpiTile value={player.POT} label="Ceiling" tone="accent" />
@@ -138,6 +139,27 @@ export function CareerProfile() {
       </div>
 
       <SeasonBySeasonTable rows={yearRows} statKey={statKey} statLabel={statMeta.label} careerTotals={careerTotals} />
+    </div>
+  );
+}
+
+// --- Big-game honours (Big Game Splash) ----------------------------------------------------------
+
+/** Medals (Norm Smith, Anzac Medal, Neale Daniher Trophy) and premierships won in this save, as gold chips under the name. */
+function BigGameHonours({ player }: { player: Player }) {
+  const chips = [
+    ...(player.premiershipPlayer ?? []).map((y) => `${y} PREMIERSHIP PLAYER`),
+    ...(player.honours ?? []).map((h) => `${h.medal} · ${h.season}${typeof h.round === "number" ? ` · R${h.round}` : ""}`),
+    ...(player.grandFinalist ?? []).map((y) => `${y} GRAND FINALIST`),
+  ];
+  if (!chips.length) return null;
+  return (
+    <div data-testid="big-game-honours" className="mt-2 flex flex-wrap gap-1.5">
+      {chips.map((c) => (
+        <StatusChip key={c} color="#e8c25a">
+          {c}
+        </StatusChip>
+      ))}
     </div>
   );
 }

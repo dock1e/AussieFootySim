@@ -9,7 +9,9 @@ import { isValidBallot, VOTE_VALUES, type CoachesVoteAllocation, type MatchCoach
 import { bestSingleGameFor } from "../engine/benchmarking";
 import { seasonPlayerTotals, toAverageMap } from "../engine/seasonSummary";
 import { useSaveStore } from "../store/useSaveStore";
-import { useSeasonStore } from "../store/useSeasonStore";
+import { useSeasonStore, type CoachesVoteMatchRef } from "../store/useSeasonStore";
+import { clubByName } from "../types/club";
+import { CompactMedalCard, MedalChip, SplashHost, useSpecialMatchFor } from "./splash/SplashHost";
 import { usePlayerProfileStore } from "../store/usePlayerProfileStore";
 import type { MatchStory, MatchStoryTag } from "../store/useMatchStoryStore";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
@@ -126,6 +128,7 @@ export function FullTimeResult({
   venueName,
   onContinue,
   onReplay,
+  specialRef,
 }: {
   result: MatchResult;
   homeTeam: MatchTeam;
@@ -141,6 +144,8 @@ export function FullTimeResult({
   /** Match Day v2 primary action. Receives the "From this game" items so the caller can send them to the Dashboard. */
   onContinue?: (stories: MatchStory[]) => void;
   onReplay?: () => void;
+  /** Big Game Splash — this match in the season, if it may be a special fixture: the coach's own get a "Medal" chip that reopens the splash; anyone else's get a compact medal card. */
+  specialRef?: CoachesVoteMatchRef;
 }) {
   const [tab, setTab] = useState<ReviewTab>("player-stats");
   const [teamFilter, setTeamFilter] = useState<"home" | "away" | "both">("both");
@@ -245,6 +250,8 @@ export function FullTimeResult({
   const year = useSaveStore((s) => s.year);
   const watchlist = useSaveStore((s) => s.watchlist);
   const season = useSeasonStore((s) => s.season);
+  const special = useSpecialMatchFor(season, specialRef ?? null, clubByName(myClub ?? "")?.ClubID ?? -1);
+  const [splashOpen, setSplashOpen] = useState(false);
   const stories = useMemo((): MatchStory[] => {
     if (!mySide) return [];
     const avgMap = season ? toAverageMap(seasonPlayerTotals(season)) : new Map();
@@ -340,6 +347,8 @@ export function FullTimeResult({
 
   return (
     <div className="flex flex-col gap-3">
+      {splashOpen && special && specialRef && <SplashHost matchRef={specialRef} onContinue={() => setSplashOpen(false)} onClose={() => setSplashOpen(false)} />}
+      {special && !special.mine && <CompactMedalCard match={special.match} />}
       {/* Hero (critique D3): result chip from your side, club stripe, no gold border, no seed. */}
       <section data-screen-label="Full time hero" style={{ position: "relative", overflow: "hidden", background: HERO_BG, border: "1px solid color-mix(in oklch, var(--acc) 30%, transparent)", borderRadius: 16 }}>
         <Stripe />
@@ -348,6 +357,7 @@ export function FullTimeResult({
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <span style={{ font: `700 11px ${MONO}`, letterSpacing: "1.2px", padding: "4px 8px", borderRadius: 5, color: resultChip.color, background: resultChip.bg }}>{resultChip.text}</span>
               <span style={{ ...sectionLabelStyle(), color: "#aab3c3" }}>FULL TIME{venueName ? ` · ${venueName.toUpperCase()}` : ""}</span>
+              {special?.mine && <MedalChip onOpen={() => setSplashOpen(true)} />}
             </div>
             <h1 style={{ margin: "10px 0 4px", font: `700 40px/1 ${COND}`, color: "#fff", textWrap: "balance" } as CSSProperties}>{headline}</h1>
             {summary && <div style={{ font: `500 14px/1.45 ${BARLOW}`, color: "#c3ccdd" }}>{summary}</div>}

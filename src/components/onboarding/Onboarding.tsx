@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CLUBS, clubById } from "../../types/club";
+import { CLUBS, clubById, clubFullName, clubNameParts } from "../../types/club";
 import { CURRENT_SEASON_YEAR } from "../../config";
 import { generatedPlayers } from "../../data/loadPlayers";
 import { clubTokensFor } from "../../theme/clubTokens";
@@ -93,7 +93,7 @@ function Row({ k, children, center }: { k: string; children: ReactNode; center?:
 
 /** Wraps the club's nickname (or name) in the accent colour, as the reference's headline does. */
 function Highlight({ text, ctx }: { text: string; ctx: ClubContext }) {
-  const needle = [`${ctx.club} ${ctx.nick}`, ctx.nick, ctx.club].find((n) => text.includes(n));
+  const needle = [clubFullName({ name: ctx.club, nickname: ctx.nick }), ctx.nick, ctx.club].find((n) => text.includes(n));
   if (!needle) return <>{text}</>;
   const i = text.indexOf(needle);
   return (
@@ -201,7 +201,7 @@ export function Onboarding({ onDone, onCancel }: { onDone: () => void; onCancel?
     const brief = picks[`boardBrief:${id}`] ?? pickNow("boardBrief", id, "0");
     await newGame(clubById(id)!.name, {
       saveId,
-      coach: { name: ctx.coach, clubId: id, contractYears: ctx.contractYears },
+      coach: { name: ctx.coach, clubId: id, contractYears: ctx.contractYears, startYear: CURRENT_SEASON_YEAR, premierships: 0 },
       board: { expectation: ctx.expectation, patience: ctx.patience },
       narrative: { history: history.current as Record<string, string[]> },
       dayOne: { year: CURRENT_SEASON_YEAR, done: {}, picks: brief ? { boardBrief: brief } : {} },
@@ -366,7 +366,7 @@ export function Onboarding({ onDone, onCancel }: { onDone: () => void; onCancel?
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                             <span style={{ font: `700 16px ${COND}`, color: "#fff", letterSpacing: ".3px" }}>
-                              {c.club} {c.nick}
+                              {clubFullName({ name: c.club, nickname: c.nick })}
                             </span>
                             <span style={{ font: `500 11px ${MONO}`, color: "#8f9ab0", whiteSpace: "nowrap" }}>{k.time}</span>
                           </div>
@@ -482,7 +482,7 @@ export function Onboarding({ onDone, onCancel }: { onDone: () => void; onCancel?
                   </div>
                   <div style={{ position: "relative" }}>
                     <h3 style={{ margin: 0, font: `700 46px/1 ${COND}`, color: "#fff" }}>
-                      {sel.club} <span style={{ color: "var(--accT)" }}>{sel.nick}</span>
+                      {clubNameParts({ name: sel.club, nickname: sel.nick })[0]} <span style={{ color: "var(--accT)" }}>{sel.nick}</span>
                     </h3>
                     <div style={{ font: `500 13px ${BARLOW}`, color: "#aab3c3", marginTop: 4 }}>
                       {sel.ground} · {STATUS_LABEL[sel.status]}

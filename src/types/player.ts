@@ -60,6 +60,15 @@ export type ProvenanceTag =
   | "stat-override/2026-08"
   | (string & {});
 
+export interface PlayerHonour {
+  /** The special event (data/specialEvents.ts `SpecialEventId`). */
+  type: string;
+  medal: string;
+  season: number;
+  /** Round number, or "GF". */
+  round: number | string;
+}
+
 export interface Player extends ImprovementRates, DeclineRates {
   // --- Identity / bio ---
   PlayerID: number;
@@ -223,6 +232,13 @@ export interface Player extends ImprovementRates, DeclineRates {
    * go. A disclosed simplification — see ROADMAP.md's Phase 4 Slice 3 gaps.
    */
   delisted?: boolean;
+
+  /** Big Game Splash — big-game medals won in this save (Norm Smith, Anzac Medal, Neale Daniher Trophy). */
+  honours?: PlayerHonour[];
+  /** Seasons this player played in a premiership (the Grand Final 22). */
+  premiershipPlayer?: number[];
+  /** Seasons this player played in a losing Grand Final. */
+  grandFinalist?: number[];
 
   /**
    * Optional — only populated if a caller merges in the per-player markdown

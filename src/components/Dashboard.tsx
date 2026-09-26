@@ -727,6 +727,7 @@ function LastGameModal({ match, teams, onClose }: { match: PlayedMatch; teams: M
         closeLabel="Close"
         coachesVotes={match.coachesVotes}
         myClub={myClub}
+        specialRef={{ kind: "round", round: match.round, homeClubId: match.homeClubId, awayClubId: match.awayClubId }}
         onSubmitBallot={(side, allocations) =>
           submitCoachesVotes({ kind: "round", round: match.round, homeClubId: match.homeClubId, awayClubId: match.awayClubId }, side, allocations)
         }

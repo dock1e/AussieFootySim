@@ -30,7 +30,8 @@ import { fantasyPointsFor } from "../engine/ratings";
 import { seasonPlayerTotals, toAverageMap } from "../engine/seasonSummary";
 import { computeFantasyMetrics, type PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
 import { groundForMatch } from "../data/clubGrounds";
-import type { AFLStadium } from "../data/stadiums";
+import { getStadium, type AFLStadium } from "../data/stadiums";
+import { buildGrandFinalTeam, GRAND_FINAL_2026_CLUBS, type GrandFinal2026Club } from "../data/grandFinal2026";
 import { aiTeamPlan, defaultTeamPlan, gameStyleModelledImpact, DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
 import { nextUnplayedRound } from "../engine/season";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
@@ -142,6 +143,14 @@ export function LiveMatch({
   const [result, setResult] = useState<MatchResult | null>(null);
   const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [recordedRound, setRecordedRound] = useState<number | null>(null);
+  /**
+   * Round 128 — Grand Final exhibition mode. Set only while a GF match is active; `null` the rest of the
+   * time (including all of Tyler's own real flow). Everything else about the GF match rides on the same
+   * generic `active`/`result`/`matchInProgress` state as a normal match — this is the one extra bit of
+   * state needed so `mySide`, `leaveMatch`, and `<FullTimeResult>` know which GF club is "mine" instead of
+   * comparing against `myClub` (which stays Tyler's real club, untouched, throughout).
+   */
+  const [gfSide, setGfSide] = useState<GrandFinal2026Club | null>(null);
 
   // --- This week's fixture --------------------------------------------------------------------------
   const fixtureRows = useMemo(() => (season ? seasonFixtureRows(season, myClubId) : []), [season, myClubId]);
@@ -262,7 +271,7 @@ export function LiveMatch({
     [active, result, swapsSeen, awayTeam], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const mySide: "home" | "away" = homeTeam.name === myClub ? "home" : "away";
+  const mySide: "home" | "away" = gfSide ? (homeTeam.name === gfSide ? "home" : "away") : homeTeam.name === myClub ? "home" : "away";
 
   /** The coach's own line-coach assignments as `role -> ovr/99`; the opponent always plays the flat baseline. */
   function lineCoachEffectiveness(): Partial<Record<MatchDayCoachRole, number>> {
@@ -320,6 +329,68 @@ export function LiveMatch({
     setStep(4);
   }
 
+  /**
+   * Round 128 — Grand Final exhibition mode. Kicks off the real 2026 AFL Grand Final (Fremantle v
+   * Brisbane Lions, MCG) as a one-off exhibition with `side` as the club the coach is playing. Modeled
+   * directly on `kickOff()` above but deliberately isolated from every bit of Tyler's own persistent save
+   * state: it never touches `useSelectionStore` (`setLastWeek`), `useSeasonStore` (`round: null` means
+   * `recordLiveRound` never fires for it, same as any other friendly), or `useTeamPlanStore` for either
+   * GF club — both sides get `defaultTeamPlan()` since neither Fremantle nor Brisbane Lions has any of
+   * Tyler's own saved team-plan data. Real lineups come from `buildGrandFinalTeam` (round 128's new
+   * `data/grandFinal2026.ts`), venue is hard-set to the MCG (the real Grand Final's venue) regardless of
+   * either club's normal home ground.
+   */
+  function kickOffGrandFinal(side: GrandFinal2026Club) {
+    const other = GRAND_FINAL_2026_CLUBS.find((c) => c !== side)!;
+    const sidePlayers = getPlayersByClub(side);
+    const otherPlayers = getPlayersByClub(other);
+    const { team: sideTeam, unmatched: sideUnmatched } = buildGrandFinalTeam(side, sidePlayers);
+    const { team: otherTeam, unmatched: otherUnmatched } = buildGrandFinalTeam(other, otherPlayers);
+    if (sideUnmatched.length || otherUnmatched.length) {
+      // Disclosed, not hidden: a name in grandFinal2026.ts that doesn't match this game's own roster data
+      // (a fringe player carried under a different name) still fields a full 23 via lineupToMatchTeam's
+      // own OVR-based top-up — this just surfaces which names, if any, fell back so it's easy to spot.
+      console.warn("Grand Final exhibition: unmatched real names (auto-topped-up from roster by OVR):", {
+        [side]: sideUnmatched,
+        [other]: otherUnmatched,
+      });
+    }
+    // Fremantle was the home side for the real 2026 Grand Final.
+    const sideIsHome = side === "Fremantle";
+    const home = sideIsHome ? sideTeam : otherTeam;
+    const away = sideIsHome ? otherTeam : sideTeam;
+    const gfPlan = defaultTeamPlan();
+    setHomeStyle(gfPlan.gameStyle);
+    setAwayStyle(gfPlan.gameStyle);
+    const seed = Math.floor(Math.random() * 1_000_000_000);
+    setLastSeed(seed);
+    const venue = getStadium("mcg");
+    const match = startMatch(home, away, mulberry32(seed), seed, {
+      homePlan: gfPlan,
+      awayPlan: gfPlan,
+      stadium: venue,
+    });
+    simulateQuarter(match, 1);
+    setActive({
+      home,
+      away,
+      venue,
+      round: null,
+      myTeamAtBounce: cloneMatchTeam(sideTeam),
+      homeAtBounce: cloneMatchTeam(home),
+      awayAtBounce: cloneMatchTeam(away),
+    });
+    setMatchInProgress(match);
+    setQuartersSimulated(1);
+    setPendingCoachsCall(null);
+    setResult(matchResultSoFar(match));
+    setRecordedRound(null);
+    setGroundSel(null);
+    setSelectedPlayer(null);
+    setGfSide(side);
+    setStep(4);
+  }
+
   /** Leaves the match (or its full time) and goes back into the flow. A season round not yet at full time isn't recorded. */
   function leaveMatch(to: FlowStep) {
     setResult(null);
@@ -332,6 +403,7 @@ export function LiveMatch({
     setGroundSel(null);
     setSelectedPlayer(null);
     setRecordedRound(null);
+    setGfSide(null);
     setStep(to);
   }
   const newMatchup = () => leaveMatch(0);
@@ -540,7 +612,7 @@ export function LiveMatch({
           homeTeam={homeTeam}
           awayTeam={awayTeam}
           onNewMatch={newMatchup}
-          myClub={myClub}
+          myClub={gfSide ?? myClub}
           venueName={venue.commonName}
           coachesVotes={friendlyVotes ?? undefined}
           onContinue={(stories) => {
@@ -571,6 +643,35 @@ export function LiveMatch({
     return (
       <div className="flex flex-col gap-3">
         {stepper}
+        {step === 0 && (
+          <div className="rounded-xl border border-amber-400/40 bg-gradient-to-br from-amber-500/10 to-purple-500/10 p-4">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-amber-500">Exhibition · 2026 AFL Grand Final</div>
+                <div className="text-sm text-[var(--text-secondary,#666)]">
+                  Fremantle v Brisbane Lions at the MCG — coach either side with today's real, confirmed 22-man teams. This is a
+                  one-off match; your own club and save are untouched.
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  onClick={() => kickOffGrandFinal("Fremantle")}
+                  className="rounded-lg bg-purple-700 px-4 py-2 text-sm font-bold text-white hover:bg-purple-800"
+                >
+                  Coach Fremantle
+                </button>
+                <button
+                  type="button"
+                  onClick={() => kickOffGrandFinal("Brisbane Lions")}
+                  className="rounded-lg bg-red-700 px-4 py-2 text-sm font-bold text-white hover:bg-red-800"
+                >
+                  Coach Brisbane Lions
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {step === 0 && (
           <FixtureStep
             myClub={myClub}

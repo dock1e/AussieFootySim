@@ -6,7 +6,7 @@ import type { ContestType } from "./contestTypes.ts";
 import { advanceZone, isForward50, isDefensive50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers, benchPlayers } from "./team.ts";
-import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
+import { weightedPlayerChoice, weightedChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
 import { carrierPosition, proximityFor, realDistanceBetween, proximityWeight, spaceWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
 import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
 import { getStadium, DEFAULT_STADIUM_ID, type AFLStadium } from "../data/stadiums.ts";
@@ -892,6 +892,20 @@ const SHOT_CHANCE_ON_ENTRY_ANGLE_PENALTY = 0.55;
 export const SNAP_LIVE_PRESSURE_PENALTY = 40;
 /** See its own use in `runStoppage` — a real, cited correlation (AFL.com.au: ruckmen tap to a favoured side 75-80% of the time), expressed as a rating bonus since tap *direction* itself isn't modelled. */
 const FAVOURED_SIDE_CLEARANCE_BONUS = 1.3;
+/**
+ * Round 138 — how strongly `runClearance`'s rep pick favours the highest-`clearanceRating` player
+ * on the ground. Used as the exponent in `Math.pow(clearanceRating(p), CLEARANCE_REP_WEIGHT_EXPONENT)`
+ * fed to `weightedChoice`, replacing the old `bestByRating` deterministic max-pick (see `runClearance`'s
+ * own doc comment for the full report that prompted this: Tyler's screenshots showing Serong with 23
+ * of 28 disposals as clearances, Oliver 19 of 25, "no other players have a clearance" — a 100%
+ * per-stoppage concentration onto one player per team, against real footy's all-time record holder
+ * Lachie Neale averaging only 6.3 clearances/game for his career). Value picked to be clearly stronger
+ * than a linear weighting (so the best contested-ball player still leads his team's clearance count
+ * most games, matching real footy) without being deterministic — verified empirically in
+ * `verify_round138_scratch.ts` against Neale's real career average, pending Tyler's balance-simulator
+ * pass like every other placeholder constant in this file.
+ */
+const CLEARANCE_REP_WEIGHT_EXPONENT = 3;
 /** See its own use in `runShot` — the share of a shot that "misses everything" (not a behind) that goes out of bounds for a throw-in, gap #73. */
 const P_MISS_BECOMES_THROW_IN = 0.5;
 /**
@@ -2432,8 +2446,20 @@ function runClearance(ctx: Ctx, state: State): State {
   // tackled-and-grounded player (round 39) was never excluded from a clearance rep pick either.
   const availableHome = home.filter((p) => (ctx.groundedUntilTick.get(p.PlayerID) ?? -Infinity) < ctx.tick);
   const availableAway = away.filter((p) => (ctx.groundedUntilTick.get(p.PlayerID) ?? -Infinity) < ctx.tick);
-  const homeClear = bestByRating(availableHome.length > 0 ? availableHome : home, clearanceRating);
-  const awayClear = bestByRating(availableAway.length > 0 ? availableAway : away, clearanceRating);
+  // Round 138 — Tyler's own evidenced report (screenshots of a live match showing Serong with 23
+  // clearances of 28 disposals, Oliver 19 of 25, "no other players have a clearance", against real
+  // footy's all-time clearance record holder Lachie Neale averaging only 6.3/game for his career).
+  // `bestByRating` used to pick the clearance rep here: a strict deterministic `reduce` with zero
+  // randomness, so the single highest-clearanceRating player on each team won literally every
+  // clearance for the entire match. Swapped for `weightedChoice` (the same weighted-pick primitive
+  // `runContest`'s `attackerRep` already uses), weighted by `clearanceRating` raised to
+  // CLEARANCE_REP_WEIGHT_EXPONENT so the best contested-ball player still wins clearances more often
+  // than his teammates (matching real footy, where a team's main clearance-getter still leads the
+  // count) without it being a 100%-deterministic lock every stoppage.
+  const homeClearPool = availableHome.length > 0 ? availableHome : home;
+  const awayClearPool = availableAway.length > 0 ? availableAway : away;
+  const homeClear = weightedChoice(ctx.rng, homeClearPool, (p) => Math.pow(Math.max(1, clearanceRating(p)), CLEARANCE_REP_WEIGHT_EXPONENT));
+  const awayClear = weightedChoice(ctx.rng, awayClearPool, (p) => Math.pow(Math.max(1, clearanceRating(p)), CLEARANCE_REP_WEIGHT_EXPONENT));
   // Favoured-side tap bonus, Aug 2026 — a real, cited correlation, not an
   // invented number: AFL.com.au's centre-bounce breakdown ([[Tactics and
   // Positional Play]] Part 3) found ruckmen tap to a favoured side 75-80% of

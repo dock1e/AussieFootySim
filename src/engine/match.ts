@@ -601,6 +601,19 @@ const P_FORWARD_MARK_IS_LEAD = 0.4;
  */
 const P_FORWARD50_CONTEST_IS_GROUNDBALL = 0.3;
 /**
+ * Round 136 — [[Season Statistics Balance Pass]] finding #3 (ROADMAP backlog #104): BUILT, MEASURED,
+ * AND REVERTED this same round — kept as a disclosed dead end rather than silently deleted. The
+ * diagnosis that `contestType` outside forward 50 is structurally always `"groundBall"` (never
+ * `markContested`/`markLead`) is accurate — but round 133's own real-data finding was that
+ * `contestedMarks` was ALREADY 3.47x real (over-represented), not under. Opening a second,
+ * much-higher-volume source of markContested wins (most CONTEST ticks happen outside forward 50,
+ * where this branch fires) pushed it to 7.87x real (verify_round136_scratch.ts) — the wrong
+ * direction entirely. The real fix for an over-represented stat is to make winning the EXISTING
+ * forward-50 marking duel harder or rarer, not to add more places it can happen. See this round's
+ * report to Tyler. Constant removed with the reverted branch; if a genuine non-forward-50 marking
+ * mechanic is designed later, re-derive its own probability rather than reusing this abandoned one.
+ */
+/**
  * Round 106, item 5 — [[Contest Resolution Redesign]]'s own original item 5
  * framing, untouched since round 27 until now: "Replace the flat
  * P_KICK_VS_HANDBALL constant with a threshold roll over distance-to-
@@ -3802,6 +3815,13 @@ function runContest(ctx: Ctx, state: State): State {
   // markLead split Aug 2026 — see P_FORWARD_MARK_IS_LEAD's own doc comment.
   // groundBall-in-forward-50 split Aug 2026 round 41 — see
   // P_FORWARD50_CONTEST_IS_GROUNDBALL's own doc comment.
+  // Round 136 — a non-forward-50 markContested branch (gated by P_MIDFIELD_CONTEST_IS_MARK) was
+  // built and empirically tested here, then REVERTED the same round: contestedMarks was already
+  // 3.47x real (OVER-represented, not under, per round 133's own diagnosis) before this change, and
+  // adding a second, much-higher-volume source of markContested wins (most CONTEST ticks happen
+  // outside forward 50) pushed it to 7.87x — see verify_round136_scratch.ts's own real measured
+  // output and this round's report to Tyler for the full disclosure. Reverted to the pre-round-136
+  // strict isForward50 gate pending a correct root-cause diagnosis of the over-representation.
   const contestType: "markContested" | "markLead" | "groundBall" = isForward50(state.zone, attackingSide)
     ? ctx.rng() < P_FORWARD50_CONTEST_IS_GROUNDBALL
       ? "groundBall"

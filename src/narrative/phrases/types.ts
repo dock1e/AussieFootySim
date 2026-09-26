@@ -1,4 +1,6 @@
 import type { Status } from "../clubContext";
+import type { SpecialEventId } from "../../data/specialEvents";
+import type { StatKey } from "../splashContext";
 
 /** New Game Onboarding — the phrase bank's entry shape (brief §3). */
 
@@ -19,6 +21,19 @@ export interface PhraseWhen {
   starAgeMax?: number;
   listRankMax?: number;
   listRankMin?: number;
+  // --- Big Game Splash (only a splash context can pass these) ---
+  event?: SpecialEventId[];
+  comeback?: boolean;
+  wireToWire?: boolean;
+  thriller?: boolean;
+  thrashing?: boolean;
+  isFirstFlag?: boolean;
+  flagDroughtMin?: number;
+  oppMedallist?: boolean;
+  rivalry?: boolean;
+  repeatWinner?: boolean;
+  /** Citations: the stat the line is about. */
+  stat?: StatKey[];
 }
 
 export interface Phrase {
@@ -49,7 +64,17 @@ export type Slot =
   | "taskBlurb.scout"
   | "dashSubline"
   | "pressClipping"
-  | "boardBrief";
+  | "boardBrief"
+  | "splash.headline.win"
+  | "splash.headline.loss"
+  | "splash.sub.win"
+  | "splash.sub.loss"
+  | "splash.captainQuote.win"
+  | "splash.captainQuote.loss"
+  | "splash.medalCitation"
+  | "splash.playerCitation"
+  | "splash.footNote.win"
+  | "splash.footNote.loss";
 
 /** Compact authoring helper: `p("offerPitch.rebuild.01", "text", { status: ["rebuild"] })`. */
 export function p(id: string, text: string, when?: PhraseWhen, extra?: { weight?: number; tone?: Tone }): Phrase {
@@ -71,4 +96,9 @@ export function clubLines(slot: Slot, byClub: Record<string, string[]>): Phrase[
   return Object.entries(byClub).flatMap(([club, lines]) =>
     lines.map((text, i) => p(`${slot}.${club}.${String(i + 1).padStart(2, "0")}`, text, { club: [club] })),
   );
+}
+
+/** Big Game Splash: sequential ids for lines sharing one condition, e.g. `lines("splash.sub.win", "gf", ["…"], { event: ["grandFinal"] })` → splash.sub.win.gf.01… */
+export function lines(slot: Slot, tag: string, texts: string[], when?: PhraseWhen): Phrase[] {
+  return texts.map((text, i) => p(`${slot}.${tag}.${String(i + 1).padStart(2, "0")}`, text, when));
 }

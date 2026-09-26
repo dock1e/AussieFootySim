@@ -72,7 +72,7 @@ export function ensureCareer(myClub: string, year: number, seasonArchives: reado
   const ctx = getClubContext(club.ClubID, { year, seasonArchives, coachName: DEFAULT_COACH_NAME, seed: hashString(saveId) });
   store.restore({
     saveId,
-    coach: { name: DEFAULT_COACH_NAME, clubId: club.ClubID, contractYears: ctx.contractYears },
+    coach: { name: DEFAULT_COACH_NAME, clubId: club.ClubID, contractYears: ctx.contractYears, startYear: year, premierships: 0 },
     board: { expectation: ctx.expectation, patience: ctx.patience },
     narrative: store.narrative,
     dayOne: store.dayOne ?? undefined,

@@ -153,6 +153,9 @@ export interface CoachSave {
   name: string;
   clubId: number;
   contractYears: number;
+  /** Big Game Splash — the season the coach started (for "first premiership, season 2"). */
+  startYear?: number;
+  premierships?: number;
 }
 
 export interface BoardSave {

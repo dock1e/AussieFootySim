@@ -42,7 +42,7 @@ type Viewing = {
 };
 
 export function SeasonHub() {
-  const { season, teams, startNewSeason, simulateNextRound, simulateAllRemaining, playFinals, submitCoachesVotes } = useSeasonStore();
+  const { season, teams, startNewSeason, simulateNextRound, simulateAllRemaining, playFinals, playFinalsWeek, submitCoachesVotes } = useSeasonStore();
   const myClub = useGameStore((s) => s.myClub);
   const myClubId = useMemo(() => clubByName(myClub)?.ClubID ?? CLUBS[0].ClubID, [myClub]);
   const year = useSaveStore((s) => s.year);
@@ -96,6 +96,7 @@ export function SeasonHub() {
         onNewMatch={() => setViewing(null)}
         coachesVotes={viewing.coachesVotes}
         myClub={myClub}
+        specialRef={viewing.matchRef}
         onSubmitBallot={(side, allocations) => {
           submitCoachesVotes(viewing.matchRef, side, allocations);
           // submitCoachesVotes replaces `season` with a new object — re-derive this modal's own
@@ -159,7 +160,9 @@ export function SeasonHub() {
             {complete
               ? season.finals
                 ? `Premiers: ${clubById(season.premierClubId!)?.name}`
-                : "Home-and-away complete — finals ready"
+                : season.finalsInProgress?.length
+                  ? `Finals under way — week ${season.finalsInProgress[season.finalsInProgress.length - 1].week + 1} next · play yours live on Match Day`
+                  : "Home-and-away complete — finals ready · play yours live on Match Day"
               : `Round ${upNext} of ${SEASON_ROUNDS} up next`}
           </div>
         </div>
@@ -179,6 +182,11 @@ export function SeasonHub() {
                 Simulate to Finals
               </button>
             </>
+          )}
+          {complete && !season.finals && (
+            <button onClick={playFinalsWeek} className="rounded-lg bg-base-700 px-4 py-2 text-sm font-medium hover:bg-base-600">
+              Sim Next Finals Week
+            </button>
           )}
           {complete && !season.finals && (
             <button

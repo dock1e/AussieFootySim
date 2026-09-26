@@ -18,6 +18,7 @@
  */
 import type { FixtureMatch } from "../engine/fixture.ts";
 import { STADIUM_CONFIGS, type AFLStadium } from "./stadiums.ts";
+import { SPECIAL_EVENTS } from "./specialEvents.ts";
 
 /**
  * Each of the 18 real clubs' actual primary home ground, mapped onto
@@ -138,6 +139,10 @@ export function groundForMatch(homeClubId: number, round?: number, fixture?: Fix
   const primary = primaryId ? STADIUM_CONFIGS[primaryId] : STADIUM_CONFIGS["mcg"];
 
   if (round === undefined || !fixture) return primary;
+
+  // Big Game Splash — Anzac Day and King's Birthday are always at the MCG, whoever is listed as home.
+  const special = fixture.find((m) => m.round === round && m.homeClubId === homeClubId)?.special;
+  if (special) return STADIUM_CONFIGS[SPECIAL_EVENTS[special].venueId] ?? primary;
 
   const exception = GROUND_EXCEPTIONS.find((e) => e.clubId === homeClubId);
   if (!exception) return primary;

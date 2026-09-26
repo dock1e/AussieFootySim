@@ -1,5 +1,7 @@
 import { mulberry32, type Rng } from "../engine/rng";
 import { ordinal, type ClubContext } from "./clubContext";
+import { clubFullName } from "../types/club";
+import { splashTokens, type SplashContext } from "./splashContext";
 import { PHRASE_BANK } from "./phrases";
 import type { Phrase, PhraseWhen, Slot } from "./phrases/types";
 
@@ -32,13 +34,20 @@ const STATUS_PHRASE: Record<ClubContext["status"], string> = {
   rebuild: "rebuild",
 };
 
+/** A club context (onboarding, Day one) or a Big Game Splash context. */
+export type PhraseContext = ClubContext | SplashContext;
+
+const isSplash = (ctx: PhraseContext): ctx is SplashContext => (ctx as SplashContext).kind === "splash";
+
 /** Token values for a context. `null` means the token can't be filled here, and any phrase using it is ineligible. */
-export function tokenValues(ctx: ClubContext): Record<string, string | number | null> {
+export function tokenValues(ctx: PhraseContext): Record<string, string | number | null> {
+  if (isSplash(ctx)) return splashTokens(ctx);
   return {
     coach: ctx.coach,
     coachFirst: ctx.coachFirst,
     coachLast: ctx.coachLast,
     club: ctx.club,
+    clubFull: clubFullName({ name: ctx.club, nickname: ctx.nick }),
     nick: ctx.nick,
     ground: ctx.ground,
     finish: ctx.finish,
@@ -64,7 +73,7 @@ export function tokenValues(ctx: ClubContext): Record<string, string | number | 
 const TOKEN_RE = /\{([a-zA-Z0-9]+)(?:\|([^|}]*)\|([^|}]*))?\}/g;
 
 /** Fills `{token}`s (and `{token|singular|plural}`) from `ctx`. Returns null if any token doesn't resolve. */
-export function fill(text: string, ctx: ClubContext): string | null {
+export function fill(text: string, ctx: PhraseContext): string | null {
   const values = tokenValues(ctx);
   let ok = true;
   const out = text.replace(TOKEN_RE, (_m, name: string, one?: string, many?: string) => {
@@ -79,8 +88,23 @@ export function fill(text: string, ctx: ClubContext): string | null {
   return ok ? out : null;
 }
 
-export function whenPasses(when: PhraseWhen | undefined, ctx: ClubContext): boolean {
+const SPLASH_KEYS = ["event", "comeback", "wireToWire", "thriller", "thrashing", "isFirstFlag", "flagDroughtMin", "oppMedallist", "rivalry", "repeatWinner", "stat"] as const;
+
+function splashWhenPasses(when: PhraseWhen, c: SplashContext): boolean {
+  // Club-context conditions never pass on a splash.
+  if (Object.keys(when).some((k) => !(SPLASH_KEYS as readonly string[]).includes(k))) return false;
+  if (when.event && !when.event.includes(c.event)) return false;
+  const flags = ["comeback", "wireToWire", "thriller", "thrashing", "isFirstFlag", "oppMedallist", "rivalry", "repeatWinner"] as const;
+  for (const f of flags) if (when[f] !== undefined && when[f] !== c[f]) return false;
+  if (when.flagDroughtMin !== undefined && (c.flagDrought === null || c.flagDrought < when.flagDroughtMin)) return false;
+  if (when.stat && (!c.statKey || !when.stat.includes(c.statKey))) return false;
+  return true;
+}
+
+export function whenPasses(when: PhraseWhen | undefined, ctx: PhraseContext): boolean {
   if (!when) return true;
+  if (isSplash(ctx)) return splashWhenPasses(when, ctx);
+  if (SPLASH_KEYS.some((k) => when[k] !== undefined)) return false;
   if (when.status && !when.status.includes(ctx.status)) return false;
   if (when.club && !when.club.includes(ctx.id)) return false;
   if (when.madeFinals !== undefined && when.madeFinals !== ctx.madeFinals) return false;
@@ -98,7 +122,7 @@ export function whenPasses(when: PhraseWhen | undefined, ctx: ClubContext): bool
 }
 
 /** The slot's entries that can be shown for `ctx`, each with its filled text. */
-export function eligible(slot: Slot, ctx: ClubContext): { phrase: Phrase; text: string }[] {
+export function eligible(slot: Slot, ctx: PhraseContext): { phrase: Phrase; text: string }[] {
   const out: { phrase: Phrase; text: string }[] = [];
   for (const phrase of PHRASE_BANK[slot]) {
     if (!whenPasses(phrase.when, ctx)) continue;
@@ -121,10 +145,20 @@ function specificity(when: PhraseWhen | undefined): number {
     when.r1LastResult !== undefined ||
     when.isInterstate !== undefined ||
     when.starAgeMin !== undefined ||
-    when.starAgeMax !== undefined
+    when.starAgeMax !== undefined ||
+    when.comeback !== undefined ||
+    when.wireToWire !== undefined ||
+    when.thriller !== undefined ||
+    when.thrashing !== undefined ||
+    when.isFirstFlag !== undefined ||
+    when.flagDroughtMin !== undefined ||
+    when.oppMedallist !== undefined ||
+    when.rivalry !== undefined ||
+    when.repeatWinner !== undefined ||
+    when.stat !== undefined
   )
     m *= 2;
-  if (when.status) m *= 1.5;
+  if (when.status || when.event) m *= 1.5;
   return m;
 }
 
@@ -151,7 +185,7 @@ export function recordPick(history: NarrativeHistory, slot: Slot, id: string): v
  * Picks one phrase for `slot`. `history` is updated in place (the caller owns persisting it).
  * `exclude` skips ids or texts already used on screen (pickMany's "distinct").
  */
-export function pickPhrase(slot: Slot, ctx: ClubContext, rng: Rng, history: NarrativeHistory, exclude?: { ids?: Set<string>; texts?: Set<string> }): Picked | null {
+export function pickPhrase(slot: Slot, ctx: PhraseContext, rng: Rng, history: NarrativeHistory, exclude?: { ids?: Set<string>; texts?: Set<string> }): Picked | null {
   let pool = eligible(slot, ctx).filter(({ phrase, text }) => !exclude?.ids?.has(phrase.id) && !exclude?.texts?.has(text));
   if (pool.length === 0) return null;
   const past = history[slot] ?? [];
@@ -180,7 +214,7 @@ export function pickPhrase(slot: Slot, ctx: ClubContext, rng: Rng, history: Narr
  * `n` distinct phrases from one slot. `ctx` may be one context for all picks, or one per pick (the
  * missed-calls feed: a different club per line, each filled with its own club's context).
  */
-export function pickMany(slot: Slot, ctx: ClubContext | ClubContext[], n: number, rng: Rng, history: NarrativeHistory): Picked[] {
+export function pickMany(slot: Slot, ctx: PhraseContext | PhraseContext[], n: number, rng: Rng, history: NarrativeHistory): Picked[] {
   const ids = new Set<string>();
   const texts = new Set<string>();
   const out: Picked[] = [];
@@ -197,7 +231,7 @@ export function pickMany(slot: Slot, ctx: ClubContext | ClubContext[], n: number
 }
 
 /** Re-fills a phrase already picked (by id) against a fresh context, e.g. after the coach's name changes. Null if the id is gone or no longer fills. */
-export function textFor(slot: Slot, id: string, ctx: ClubContext): string | null {
+export function textFor(slot: Slot, id: string, ctx: PhraseContext): string | null {
   const phrase = PHRASE_BANK[slot].find((x) => x.id === id);
   return phrase ? fill(phrase.text, ctx) : null;
 }

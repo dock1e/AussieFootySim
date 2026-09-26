@@ -273,3 +273,13 @@ export function clubById(id: number): Club | undefined {
 export function clubByName(name: string): Club | undefined {
   return CLUBS.find((c) => c.name === name);
 }
+
+/** "Melbourne Demons", but "Western Bulldogs" (not "Western Bulldogs Bulldogs") when the name already ends with the nickname. */
+export function clubFullName(c: Pick<Club, "name" | "nickname">): string {
+  return c.name.endsWith(c.nickname) ? c.name : `${c.name} ${c.nickname}`;
+}
+
+/** The full name split for a two-tone heading: ["Western", "Bulldogs"], ["Melbourne", "Demons"]. */
+export function clubNameParts(c: Pick<Club, "name" | "nickname">): [string, string] {
+  return c.name.endsWith(c.nickname) ? [c.name.slice(0, -c.nickname.length).trim(), c.nickname] : [c.name, c.nickname];
+}

@@ -1,3 +1,6 @@
+import { CLUBS } from "../types/club.ts";
+import { SPECIAL_EVENTS, type SpecialEventId } from "../data/specialEvents.ts";
+
 /**
  * Home-and-away fixture generation — Configuration.md "Season structure":
  * "23 home-and-away rounds + top-8 finals, matching the current real AFL
@@ -25,6 +28,8 @@ export interface FixtureMatch {
   round: number; // 1-based, 1..SEASON_ROUNDS
   homeClubId: number;
   awayClubId: number;
+  /** Big Game Splash — Anzac Day, King's Birthday (see data/specialEvents.ts). */
+  special?: SpecialEventId;
 }
 
 /** Standard circle-method round robin: fix the first club, rotate the rest each round. Returns n-1 rounds for n clubs, each club appearing exactly once per round. */
@@ -79,7 +84,28 @@ export function generateFixture(clubIds: number[]): FixtureMatch[] {
     for (const [home, away] of pairs) matches.push({ round, homeClubId: away, awayClubId: home });
   }
 
-  return matches.sort((a, b) => a.round - b.round);
+  return tagSpecialFixtures(matches.sort((a, b) => a.round - b.round));
+}
+
+/**
+ * Big Game Splash — marks the home-and-away special fixtures (Anzac Day: Essendon v Collingwood;
+ * King's Birthday: Melbourne v Collingwood). The draw has no dates, so each event goes to its two
+ * clubs' meeting nearest the round it's played in the real season. Idempotent, so a season loaded from
+ * an older save can be tagged on the way in.
+ */
+export function tagSpecialFixtures(fixture: FixtureMatch[]): FixtureMatch[] {
+  const out = fixture.map((m) => ({ ...m }));
+  for (const ev of Object.values(SPECIAL_EVENTS)) {
+    if (!ev.clubs || ev.targetRound === undefined) continue;
+    if (out.some((m) => m.special === ev.id)) continue;
+    const ids = ev.clubs.map((abbr) => CLUBS.find((c) => c.abbreviation === abbr)?.ClubID);
+    if (ids.some((id) => id === undefined)) continue;
+    const meetings = out.filter((m) => !m.special && ids.includes(m.homeClubId) && ids.includes(m.awayClubId));
+    if (!meetings.length) continue;
+    const pick = meetings.reduce((a, b) => (Math.abs(b.round - ev.targetRound!) < Math.abs(a.round - ev.targetRound!) ? b : a));
+    pick.special = ev.id;
+  }
+  return out;
 }
 
 export function matchesInRound(fixture: FixtureMatch[], round: number): FixtureMatch[] {

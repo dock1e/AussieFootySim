@@ -6,7 +6,10 @@ import { simulateMatch, type MatchResult } from "./match.ts";
 import { mulberry32 } from "./rng.ts";
 import { generateFixture, matchesInRound, SEASON_ROUNDS, type FixtureMatch } from "./fixture.ts";
 import { computeLadder, top8, type LadderRow, type MatchOutcome } from "./ladder.ts";
-import { runFinalsSeries, type FinalsSeriesResult } from "./finals.ts";
+import { nextFinalsWeek, playFinal, type FinalsMatch, type FinalsPairing, type FinalsSeriesResult } from "./finals.ts";
+import { awardsFor, type MatchAwards } from "./medalVotes.ts";
+import type { SpecialEventId } from "../data/specialEvents.ts";
+import { STADIUM_CONFIGS } from "../data/stadiums.ts";
 import type { TeamPlan } from "./tactics.ts";
 import { updateConditionAfterRound } from "./progression.ts";
 import { autoFillLineup, lineupToMatchTeam } from "./selection.ts";
@@ -83,6 +86,14 @@ export interface PlayedMatch {
    * `condition`/`disgruntlement`'s own per-player maps already use for old saves.
    */
   coachesVotes?: MatchCoachesVotes;
+  /** Big Game Splash — the special fixture this was (Anzac Day, King's Birthday), its medal, and whether the coach has seen its splash. */
+  special?: SpecialEventId;
+  awards?: MatchAwards;
+  splashSeen?: boolean;
+  /** The splash copy picked the first time it showed (phrase ids), so reopening it reads the same. */
+  splashPicks?: Record<string, string>;
+  /** Set once this match's medal (and, for a Grand Final, premiership) has been written to the players' records. */
+  honoursApplied?: boolean;
 }
 
 export interface Season {
@@ -107,6 +118,12 @@ export interface Season {
    * Tyler's own framing, see disgruntlement.ts's doc comment.
    */
   disgruntlement: Map<number, DisgruntlementState>;
+  /**
+   * Big Game Splash — finals played so far while the series is under way (week by week, so the coach
+   * can play his own final live). `finals` is only set once the Grand Final is played, so everything
+   * that reads a finished series is unchanged.
+   */
+  finalsInProgress?: FinalsMatch[];
 }
 
 /**
@@ -258,7 +275,19 @@ export function simulateRound(
     // runFinals below, matching the real Brownlow Medal's own finals-ineligibility rule).
     const withCoachesVotes = applyVotesToBoxScore(rawResult.boxScore, coachesVotes);
     const result = { ...rawResult, boxScore: applyBrownlowVotesToBoxScore(withCoachesVotes, coachesVotes.objectiveRanking) };
-    return { round, homeClubId: m.homeClubId, awayClubId: m.awayClubId, result, coachesVotes };
+    const played: PlayedMatch = { round, homeClubId: m.homeClubId, awayClubId: m.awayClubId, result, coachesVotes };
+    if (m.special) {
+      played.special = m.special;
+      played.awards = awardsFor({
+        event: m.special,
+        matchId: `${season.seed}:r${round}:${m.homeClubId}-${m.awayClubId}`,
+        result,
+        home,
+        away,
+        stadium: groundForMatch(m.homeClubId, round, season.fixture),
+      });
+    }
+    return played;
   });
 
   const played = [...season.played, ...newlyPlayed];
@@ -268,54 +297,68 @@ export function simulateRound(
   return { ...season, played, ladder, condition, disgruntlement };
 }
 
-/** Runs the full 9-match finals series off the current ladder's top 8. Requires the home-and-away season to be complete; a no-op if finals have already been run. `plans` behaves the same as in `simulateRound`. Every finals match uses whatever `season.condition` was left at h&a-completion — see this file's doc comment for why that's not advanced further across the 4-week bracket. */
+/** The next finals week's fixtures (empty before the home-and-away season is done, or once the Grand Final is played). */
+export function nextFinalsPairings(season: Season): FinalsPairing[] {
+  if (!isHomeAndAwayComplete(season) || season.finals) return [];
+  return nextFinalsWeek(top8(season.ladder).map((r) => r.clubId), season.finalsInProgress ?? []);
+}
+
+/** Finals played so far this season, whether the series is finished or not. */
+export function finalsPlayed(season: Season): FinalsMatch[] {
+  return season.finals?.matches ?? season.finalsInProgress ?? [];
+}
+
+/**
+ * Plays the next finals week. `preset` (keyed by `presetResultKey`) is the coach's own final played live
+ * on Match Day, folded in exactly like a headless one. The Grand Final gets its Norm Smith Medal here.
+ * Once the Grand Final is played the series moves from `finalsInProgress` to `finals`.
+ */
+export function runFinalsWeek(season: Season, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>, preset?: Map<string, MatchResult>): Season {
+  const week = nextFinalsPairings(season);
+  if (!week.length) return season;
+  const done = [...(season.finalsInProgress ?? [])];
+  for (const p of week) {
+    const home = teams.get(p.homeClubId);
+    const away = teams.get(p.awayClubId);
+    if (!home || !away) {
+      throw new Error(`runFinals: missing MatchTeam for club ${p.homeClubId} or ${p.awayClubId}`);
+    }
+    const seed = matchSeed(season.seed, SEASON_ROUNDS + 1, done.length);
+    // A final isn't one of a club's own fixture rounds, so the home seed's primary ground (no round
+    // exceptions); real finals are often at a neutral venue — a disclosed simplification. The Grand
+    // Final is always at the MCG.
+    const stadium = p.key === "GF" ? STADIUM_CONFIGS["mcg"] : groundForMatch(p.homeClubId);
+    const raw =
+      preset?.get(presetResultKey(p.homeClubId, p.awayClubId)) ??
+      simulateMatch(home, away, mulberry32(seed), seed, {
+        homePlan: plans?.get(p.homeClubId),
+        awayPlan: plans?.get(p.awayClubId),
+        homeCondition: season.condition,
+        awayCondition: season.condition,
+        stadium,
+      });
+    // [[Coaches Votes and MVP Award]], round 90 — the Gary-Ayres-Medal-equivalent finals tally, while
+    // the events are still in memory.
+    const coachesVotes = generateMatchCoachesVotes(raw, home, away);
+    const result = { ...raw, boxScore: applyVotesToBoxScore(raw.boxScore, coachesVotes) };
+    const match: FinalsMatch = { ...playFinal(p, result), coachesVotes };
+    if (p.key === "GF") {
+      match.special = "grandFinal";
+      match.awards = awardsFor({ event: "grandFinal", matchId: `${season.seed}:GF:${p.homeClubId}-${p.awayClubId}`, result, home, away, stadium });
+    }
+    done.push(match);
+  }
+  const gf = done.find((m) => m.key === "GF");
+  if (gf) return { ...season, finalsInProgress: undefined, finals: { matches: done, premierClubId: gf.winnerClubId }, premierClubId: gf.winnerClubId };
+  return { ...season, finalsInProgress: done };
+}
+
+/** Runs whatever is left of the finals series (all of it, from the end of the home-and-away season). Requires the home-and-away season to be complete; a no-op if finals have already been run. `plans` behaves the same as in `simulateRound`. Every finals match uses whatever `season.condition` was left at h&a-completion — see this file's doc comment for why that's not advanced further across the 4-week bracket. */
 export function runFinals(season: Season, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>): Season {
   if (!isHomeAndAwayComplete(season)) {
     throw new Error("runFinals: home-and-away season is not complete yet");
   }
-  if (season.finals) return season;
-
-  const top8ClubIds = top8(season.ladder).map((r) => r.clubId);
-  let finalsMatchIndex = 0;
-  const finals = runFinalsSeries(top8ClubIds, (homeClubId, awayClubId) => {
-    const home = teams.get(homeClubId);
-    const away = teams.get(awayClubId);
-    if (!home || !away) {
-      throw new Error(`runFinals: missing MatchTeam for club ${homeClubId} or ${awayClubId}`);
-    }
-    const seed = matchSeed(season.seed, SEASON_ROUNDS + 1, finalsMatchIndex++);
-    const homePlan = plans?.get(homeClubId);
-    const awayPlan = plans?.get(awayClubId);
-    // Round 107 — [[Simulation Engine Report Review]] Phase C: `round`/`fixture` are
-    // deliberately omitted here (unlike simulateRound above) — a final isn't one of
-    // a club's own fixture.ts home rounds, so groundForMatch's own round/fixture-based
-    // exceptions (Tasmania/Gold Coast/GWS) don't apply; this resolves to the home
-    // seed's real primary ground. Real AFL finals are often played at a neutral or
-    // designated venue (the MCG for most finals) rather than the higher seed's home
-    // ground — a disclosed simplification, not modelled this round.
-    return simulateMatch(home, away, mulberry32(seed), seed, {
-      homePlan,
-      awayPlan,
-      homeCondition: season.condition,
-      awayCondition: season.condition,
-      stadium: groundForMatch(homeClubId),
-    });
-  });
-
-  // [[Coaches Votes and MVP Award]], round 90 — the Gary-Ayres-Medal-equivalent finals tally.
-  // Deliberately a post-processing pass over `finals.matches` rather than threading vote generation
-  // through `runFinalsSeries`'s own callback: keeps finals.ts's bracket-advancement logic (which
-  // reads each match's plain `MatchResult` to decide who advances) completely untouched. Same
-  // events-must-still-be-in-memory requirement as `simulateRound` — done here, immediately, not later.
-  const matches = finals.matches.map((m) => {
-    const home = teams.get(m.homeClubId);
-    const away = teams.get(m.awayClubId);
-    if (!home || !away) return m;
-    const coachesVotes = generateMatchCoachesVotes(m.result, home, away);
-    const result = { ...m.result, boxScore: applyVotesToBoxScore(m.result.boxScore, coachesVotes) };
-    return { ...m, result, coachesVotes };
-  });
-  const finalsWithVotes = { ...finals, matches };
-
-  return { ...season, finals: finalsWithVotes, premierClubId: finals.premierClubId };
+  let s = season;
+  while (!s.finals) s = runFinalsWeek(s, teams, plans);
+  return s;
 }

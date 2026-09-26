@@ -567,8 +567,10 @@ export function PlayerProfileContent({
         </div>
         {hasRealRows && (
           <p className="mb-2 text-[11px] text-slate-500">
-            Seasons before {CURRENT_SEASON_YEAR} (marked <span className="rounded bg-base-700/60 px-1 py-0.5 text-slate-400">AFL</span>) are this
-            player's real-world career, sourced from afltables.com — {CURRENT_SEASON_YEAR} onward is this save's own simulated history.
+            Seasons marked <span className="rounded bg-base-700/60 px-1 py-0.5 text-slate-400">AFL</span> are this player's real-world
+            career, sourced from afltables.com. A real {CURRENT_SEASON_YEAR} row can appear alongside this save's own {CURRENT_SEASON_YEAR}
+            season — that's this save's fictional universe starting under the same year number as the real season that just wrapped, not a
+            duplicate; the real row is shown for reference only and isn't counted in CAREER totals below.
           </p>
         )}
         <p className="mb-2 text-[11px] text-slate-500">
@@ -619,6 +621,11 @@ export interface YearRow {
   grade?: Grade;
   /** Round 94 Part 2 — this year's own award-win tags (`awardTagsFor`). `undefined` when no awards data exists for this row at all (a real pre-save year, the live season — awards are never computed mid-season, or a pre-round-94 archive); an EMPTY array specifically means awards were computed and this player won none that year — `CareerTable` renders the two differently ("" vs "—"). */
   awardsTags?: string[];
+  /** Round 127 — true only for the real `CURRENT_SEASON_YEAR` row (see `yearRowsFor`'s doc comment on
+   * why that one real year is a special case). Display-only: `sumYearRows` skips any row with this set,
+   * so this real-world season is shown to the user but never double-added into `combinedCareerTotals`
+   * alongside this save's own same-numbered fictional season. */
+  excludeFromTotals?: boolean;
 }
 
 /** Sums a set of `YearRow`s (real and/or sim) into one combined totals object — the CAREER row's own value, always a fresh sum of exactly the rows displayed above it rather than a separately-maintained total that could drift out of sync. `undefined` for an empty list, matching `allTimePlayerTotals`'s existing "no entry = no games" convention. */
@@ -627,6 +634,7 @@ export function sumYearRows(playerId: number, rows: YearRow[]): SeasonPlayerTota
   const totals = { playerId, gamesPlayed: 0, fantasyPoints: 0 } as SeasonPlayerTotals;
   for (const key of LEADERBOARD_STAT_FIELDS) totals[key] = 0;
   for (const r of rows) {
+    if (r.excludeFromTotals) continue;
     totals.gamesPlayed += r.totals.gamesPlayed;
     totals.fantasyPoints += r.totals.fantasyPoints;
     for (const key of LEADERBOARD_STAT_FIELDS) totals[key] += r.totals[key];
@@ -749,22 +757,39 @@ const DRAFT_PICK_TONE: Record<DraftTier, string> = {
  * One row per year this player has a `gamesPlayed > 0` entry, oldest first. Round 67: now also
  * prepends real-world pre-save seasons from `realSeasonHistory.ts` (year < `CURRENT_SEASON_YEAR`,
  * the year every save starts at — see that file's own doc comment for why the cutoff lives here and
- * not there). A real row and a sim row can never collide on the same year, since a save's own
- * simulated years only ever start at `CURRENT_SEASON_YEAR` and count up. Shared by `CareerTable` and
- * `FantasyPointsChart` so both read off the identical underlying rows.
+ * not there). Shared by `CareerTable` and `FantasyPointsChart` so both read off the identical
+ * underlying rows.
  *
- * Round 94 Part 2: each sim-archived row now also carries that year's own Season Grade/award tags,
- * read directly off the `SeasonArchiveEntry` already being iterated (both frozen there at archive
- * time — no extra lookup needed). `liveGrade` (computed on demand by the caller, see
- * `PlayerProfileContent`) applies only to the LIVE row — the live season never gets `awardsTags` at
- * all, matching `engine/awards.ts`'s own "completed seasons only" scope. A real pre-save row gets
- * neither field (no sim match data exists for those years).
+ * Round 94 Part 2: each sim-archived row also carries that year's own Season Grade/award tags, read
+ * directly off the `SeasonArchiveEntry` already being iterated (both frozen there at archive time —
+ * no extra lookup needed). `liveGrade` (computed on demand by the caller, see `PlayerProfileContent`)
+ * applies only to the LIVE row — the live season never gets `awardsTags` at all, matching
+ * `engine/awards.ts`'s own "completed seasons only" scope. A real pre-save row gets neither field
+ * (no sim match data exists for those years).
+ *
+ * Round 127, Tyler: `CURRENT_SEASON_YEAR` is a permanent constant marking where THIS SAVE's own
+ * fictional timeline begins — it happens to numerically collide with the real-world 2026 AFL season
+ * that just concluded. Previously any real row with `real.year >= CURRENT_SEASON_YEAR` was dropped
+ * entirely, on the theory that a save's own simulated years only ever start there — which hid a real
+ * player's actual 2026 season (e.g. Luke Jackson's real 163 disposals) behind whatever fictional
+ * season this save separately generated under the same year number. Now the real `CURRENT_SEASON_YEAR`
+ * row (and only that one — a real row for a LATER year genuinely would be this save's own future,
+ * fabricated territory, so it's still dropped) is included too, tagged `excludeFromTotals: true` so
+ * it displays (with its own "AFL" badge) without being summed into `combinedCareerTotals` alongside
+ * this save's same-numbered fictional season — the two seasons are shown side by side rather than
+ * conflated into one row or silently dropped. `CareerTable`/`CareerProfile`'s row `key` now includes
+ * `isReal` for exactly this reason: real-2026 and sim-2026 rows can now coexist.
  */
 export function yearRowsFor(player: Player, seasonArchives: SeasonArchiveEntry[], season: Season | null, year: number, liveGrade?: Grade): YearRow[] {
   const rows: YearRow[] = [];
   for (const real of realSeasonHistoryFor(player.realFullName ?? playerFullName(player))) {
-    if (real.year >= CURRENT_SEASON_YEAR || real.games === 0) continue;
-    rows.push({ year: real.year, totals: realSeasonEntryToTotals(player.PlayerID, real), isReal: true });
+    if (real.year > CURRENT_SEASON_YEAR || real.games === 0) continue;
+    rows.push({
+      year: real.year,
+      totals: realSeasonEntryToTotals(player.PlayerID, real),
+      isReal: true,
+      excludeFromTotals: real.year === CURRENT_SEASON_YEAR,
+    });
   }
   for (const archive of [...seasonArchives].sort((a, b) => a.year - b.year)) {
     const t = archive.playerTotals.find((pt) => pt.playerId === player.PlayerID);
@@ -842,7 +867,9 @@ function CareerTable({
   if (yearRows.length === 0 && historyEntries.length === 0) {
     return <p className="text-sm text-slate-500">No recorded games yet.</p>;
   }
-  const realGames = yearRows.filter((r) => r.isReal).reduce((sum, r) => sum + r.totals.gamesPlayed, 0);
+  const realGames = yearRows
+    .filter((r) => r.isReal && !r.excludeFromTotals)
+    .reduce((sum, r) => sum + r.totals.gamesPlayed, 0);
   const simGames = (careerTotals?.gamesPlayed ?? 0) - realGames;
   const merged = mergeCareerRows(yearRows, historyEntries);
   const totalColumns = 2 + 1 + TABLE_COLUMNS.length + 1; // Year, GM, Grade, ...stat columns, Awards
@@ -895,7 +922,7 @@ function CareerTable({
             }
             const row = r.row;
             return (
-              <tr key={row.year} className="border-t border-base-800">
+              <tr key={`${row.year}-${row.isReal ? "real" : "sim"}`} className="border-t border-base-800">
                 <td className="py-1.5 pr-3 font-medium tabular-nums">
                   {row.year}
                   {row.isReal && <span className="ml-1.5 rounded bg-base-700/60 px-1 py-0.5 text-[9px] font-medium text-slate-400" title="Real-world statistics (afltables.com)">AFL</span>}

@@ -391,7 +391,7 @@ function SeasonBySeasonTable({ rows, statKey, statLabel, careerTotals }: { rows:
             const perGame = r.totals.gamesPlayed > 0 ? r.totals[statKey] / r.totals.gamesPlayed : 0;
             return (
               <div
-                key={r.year}
+                key={`${r.year}-${r.isReal ? "real" : "sim"}`}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "60px 1fr 60px 90px 90px 70px",

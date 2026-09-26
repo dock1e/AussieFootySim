@@ -571,8 +571,51 @@ const P_DISPOSAL_BECOMES_CONTEST = 0.35;
  * start). Same "deliberately roughed in" status as every other P_ constant
  * here — no real split ratio is recorded anywhere in the vault, just a
  * plausible middle value pending balance-simulator tuning.
+ *
+ * Round C139 — recalibrated 0.4 -> 0.84. Round 137 diagnosed `contestedMarks` running 3.55x real
+ * (sim ~40% of all marks contested, real AFL ~11%) to `nearbyDefenders`' shared proximity gate
+ * finding a "contesting" defender too liberally, and Tyler's own steer (this round) was to give
+ * marking-duel eligibility its own separate, tighter radius. Built exactly that (`nearbyDefenders`'
+ * new `distanceOverride` param, still in involvement.ts) and instrumented it — but a live measurement
+ * this round (temporary `DEBUG_MARKING_DUEL_DISTANCES` counter, see involvement.ts's own trail)
+ * showed the round-137 diagnosis itself was wrong: the single closest defender to a forward-50
+ * marking attempt is at ~0m in essentially every case (p10 through p90 of 2,003 sampled contests all
+ * read 0.00m) — some on-ground opponent's *estimated* position (`positioning.ts`'s `proximityFor`,
+ * used whenever a real tracked position isn't available) always coincides with the contest's own
+ * zone. So no radius, however tight (tested down to 0.01m — byte-identical result), can ever exclude
+ * every defender; `nearby` in `runContest` is essentially never `null` for a forward-50 attempt
+ * regardless of the gate. The actual lever, found by reading where `contestedMarks` is incremented
+ * (a few lines below `recordContest`): it's credited unconditionally whenever `contestType ===
+ * "markContested"`, with no further check against `nearby`/`defenderRep` at all — so THIS constant,
+ * not the distance gate, is what really controls the contested share. Recalibrated by treating total
+ * marks volume as roughly constant w.r.t. this split (confirmed empirically) and solving for the
+ * value that puts contestedMarks/totalMarks at ~11% — see `scripts/verify_roundC139_marks_scratch.ts`
+ * for the measured before/after. The `distanceOverride` plumbing in involvement.ts is left in place
+ * (harmless, inert unless passed) rather than torn back out, in case a future genuinely
+ * distance-gated use case wants it — but `runContest` no longer passes it, since it provably does
+ * nothing for this problem.
  */
-const P_FORWARD_MARK_IS_LEAD = 0.4;
+const P_FORWARD_MARK_IS_LEAD = 0.84;
+/**
+ * Round C139 — the REAL fix for `contestedMarks` running 3.55x real (round 137's diagnosis: sim ~40%
+ * of all marks contested, real AFL ~11%). `P_FORWARD_MARK_IS_LEAD` above only touches the much
+ * smaller forward-50 CONTEST-phase source; measuring where `contestedMarks` actually gets
+ * incremented (match.ts, grep `contestedMarks +=`) found the DOMINANT source is `runMarkingContest`
+ * — the general kick-reception mark mechanism that fires on every kick in the game, not just
+ * forward-50 stoppages. That function's own contested/uncontested split is a single hard cutoff
+ * (`proximityWeight(distance) === 0`) against the SAME shared `PROXIMITY_RANGE_DISTANCE` (10m,
+ * positioning.ts) round 137 originally flagged — and unlike `runContest`'s forward-50 attackerRep
+ * (a zone-blind pick that's ~0m from *some* defender virtually always, see `P_FORWARD_MARK_IS_LEAD`'s
+ * own doc comment), `runMarkingContest`'s distance is a REAL kick-landing-to-nearest-defender distance
+ * (`state.markContestDistance`, set at kick time), genuinely varied (measured median ~7.3m across
+ * 29,056 sampled kick receptions, 153-match round-robin) — so tightening the gate here actually moves
+ * the needle, unlike the disproven `runContest` attempt. This constant replaces the shared
+ * `PROXIMITY_RANGE_DISTANCE` at that one call site only (`runMarkingContest`'s own gate, a few lines
+ * below); every other `nearbyDefenders`/`proximityWeight` caller (tackle-attempts, `runContest`,
+ * general-play reception, disposal targeting) is untouched. Calibrated empirically against the ~11%
+ * target — see `scripts/verify_roundC139_marks_scratch.ts`.
+ */
+const MARKING_DUEL_RANGE_DISTANCE = 1.35; // calibrated: 12.5% contested share on the 153-match sample, vs the ~11% real target
 /**
  * Aug 2026 round 41 — closes the "no reachable ground-ball-to-shot pathway"
  * gap `verify_round38_scratch.ts` found and [[Match Realism Review]]'s own
@@ -2446,6 +2489,30 @@ function runClearance(ctx: Ctx, state: State): State {
   // tackled-and-grounded player (round 39) was never excluded from a clearance rep pick either.
   const availableHome = home.filter((p) => (ctx.groundedUntilTick.get(p.PlayerID) ?? -Infinity) < ctx.tick);
   const availableAway = away.filter((p) => (ctx.groundedUntilTick.get(p.PlayerID) ?? -Infinity) < ctx.tick);
+  // Round C139 — Tyler, live testing: "Jaeger O'Meara was in the back pocket and he contested a
+  // centre square ballup." Root cause: the pool this function draws its clearance winner from was
+  // (and until this round, still is for throw-ins) every on-ground player regardless of position —
+  // exactly the same class of bug round 129 already fixed for the RUCK TAP itself
+  // (`nominatedRuck`, above in `resolveRuckTap`: "a side's nominated ruck... goes up, rather than
+  // whoever happens to rate highest"), but round 129 never touched this function, the very next
+  // tick, which re-opens the same gap one contest later. A real AFL centre-bounce law restricts who
+  // may even stand inside the centre square until the ball is live — only the ruck plus a small
+  // handful of nominated followers/centre — so a back-pocket player physically cannot be the one
+  // crumbing a centre bounce, no matter how good his clearanceRating is. `CENTRE_SQUARE_ELIGIBLE`
+  // reuses the exact same position set `ground.ts`'s own `CENTRE_BOUNCE_PAIR_CENTRES` already treats
+  // as "the centre-bounce cluster" (C/RR/ROV, plus R handled separately there) — not a new
+  // convention, the same one already governing how this exact contest renders. Falls back to the
+  // full available pool if a side has nobody in any of those positions (e.g. no position data), same
+  // defensive shape as the grounded-filter fallback just above. Boundary throw-ins and general-play
+  // stoppages elsewhere on the ground are deliberately NOT gated here — real AFL has no equivalent
+  // hard exclusion zone away from the centre square, and scoping this fix to exactly what Tyler
+  // reported (a centre-square ballup) avoids guessing at a broader positional-proximity model this
+  // round didn't ask for.
+  const CENTRE_SQUARE_ELIGIBLE: ReadonlySet<Position> = new Set(["C", "R", "RR", "ROV"]);
+  const centreSquareFilter = (team: MatchTeam, players: Player[]) =>
+    state.stoppageType === "centreBounce" ? players.filter((p) => CENTRE_SQUARE_ELIGIBLE.has(team.positions?.get(p.PlayerID) as Position)) : players;
+  const eligibleHome = centreSquareFilter(ctx.home, availableHome);
+  const eligibleAway = centreSquareFilter(ctx.away, availableAway);
   // Round 138 — Tyler's own evidenced report (screenshots of a live match showing Serong with 23
   // clearances of 28 disposals, Oliver 19 of 25, "no other players have a clearance", against real
   // footy's all-time clearance record holder Lachie Neale averaging only 6.3/game for his career).
@@ -2456,8 +2523,8 @@ function runClearance(ctx: Ctx, state: State): State {
   // CLEARANCE_REP_WEIGHT_EXPONENT so the best contested-ball player still wins clearances more often
   // than his teammates (matching real footy, where a team's main clearance-getter still leads the
   // count) without it being a 100%-deterministic lock every stoppage.
-  const homeClearPool = availableHome.length > 0 ? availableHome : home;
-  const awayClearPool = availableAway.length > 0 ? availableAway : away;
+  const homeClearPool = eligibleHome.length > 0 ? eligibleHome : availableHome.length > 0 ? availableHome : home;
+  const awayClearPool = eligibleAway.length > 0 ? eligibleAway : availableAway.length > 0 ? availableAway : away;
   const homeClear = weightedChoice(ctx.rng, homeClearPool, (p) => Math.pow(Math.max(1, clearanceRating(p)), CLEARANCE_REP_WEIGHT_EXPONENT));
   const awayClear = weightedChoice(ctx.rng, awayClearPool, (p) => Math.pow(Math.max(1, clearanceRating(p)), CLEARANCE_REP_WEIGHT_EXPONENT));
   // Favoured-side tap bonus, Aug 2026 — a real, cited correlation, not an
@@ -3892,6 +3959,11 @@ function runContest(ctx: Ctx, state: State): State {
   // Round 34: real tracked position preferred here too — see involvement.ts's
   // nearbyDefenders doc comment.
   const attackerPos = ctx.trackedPositions.get(attackerRep.PlayerID) ?? carrierPosition(attackerRep, attackingTeam.positions?.get(attackerRep.PlayerID), state.zone, attackingTeam.positions);
+  // Round C139 — a marking-duel-specific `distanceOverride` was tried and measured here (tighter
+  // radius than the shared default), per Tyler's own steer — see `P_FORWARD_MARK_IS_LEAD`'s own doc
+  // comment for why it was reverted: the nearest defender is ~0m in essentially every forward-50
+  // attempt regardless of radius, so `nearby` is virtually never null here and the real lever for
+  // `contestedMarks` share turned out to be `P_FORWARD_MARK_IS_LEAD` itself, recalibrated instead.
   const nearby = nearbyDefenders(ctx.rng, defendingSide, defendingTeam, state.zone, attackingSide, attackerPos, ctx.trackedPositions, ctx.groundedUntilTick, ctx.tick, ctx.stadium);
   if (!nearby) {
     return resolveUncontestedGather(ctx, state, attackingSide, defendingSide, defendingTeam, attackerRep, contestType);
@@ -4237,7 +4309,9 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
   };
 
-  if (proximityWeight(distance) === 0) return attemptUncontestedMark();
+  // Round C139 — MARKING_DUEL_RANGE_DISTANCE, not the shared PROXIMITY_RANGE_DISTANCE, decides
+  // contested-vs-uncontested here — see that constant's own doc comment for the full diagnosis.
+  if (distance > MARKING_DUEL_RANGE_DISTANCE) return attemptUncontestedMark();
 
   // Strongly attended — Row 3's "Contested mark." A real defender, freshly
   // identified via the same carrierPosition-for-the-ball-holder convention

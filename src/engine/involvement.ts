@@ -10,6 +10,7 @@ import {
   proximityFor,
   realDistanceBetween,
   proximityWeight,
+  PROXIMITY_MID_FACTOR,
   spaceWeight,
   directionWeight,
   kickRangeWeight,
@@ -309,6 +310,21 @@ export interface KickPick extends NearbyPick {
  * (not the flat abstract `distanceBetween`), since `proximityWeight`'s own
  * eligibility gate (`PROXIMITY_RANGE_DISTANCE`) is now a real-metres
  * threshold too — see that constant's own doc comment (`positioning.ts`).
+ *
+ * Round C139 — `distanceOverride`: built per Tyler's steer to try fixing `contestedMarks` running
+ * 3.55x real (round 137's diagnosis: this function's shared proximity gate finding a "contesting"
+ * defender too liberally at forward-50 marking duels) via a second, tighter radius scoped to just
+ * that one call site, rather than tightening the shared default (which round 136 found tackle-attempt
+ * eligibility can't afford). Measured with temporary instrumentation and PROVEN INEFFECTIVE: the
+ * closest on-ground opponent to a forward-50 marking attempt is ~0m away in essentially every case
+ * (p10-p90 of 2,003 sampled contests all read 0.00m — some defender's `proximityFor` estimate always
+ * coincides with the contest's own zone when they lack a live tracked position), so no radius here,
+ * however tight, ever excludes anyone — `runContest` (match.ts) no longer passes this parameter; the
+ * real fix for `contestedMarks` was `P_FORWARD_MARK_IS_LEAD` (match.ts), recalibrated instead — see
+ * that constant's own doc comment. Left in place, unused, as harmless infrastructure: a genuinely
+ * distance-gated use case (one where the target pool's positions are more reliably tracked) could
+ * still opt in via this same parameter without touching the shared default every other call site
+ * (tackle-attempts, kick-in-flight reception, disposal targeting) relies on.
  */
 export function nearbyDefenders(
   rng: Rng,
@@ -321,16 +337,22 @@ export function nearbyDefenders(
   groundedUntilTick: Map<number, number>,
   tick: number,
   stadium: AFLStadium,
+  distanceOverride?: { close: number; range: number },
 ): NearbyPick | null {
+  const weightFor = (distance: number): number => {
+    if (!distanceOverride) return proximityWeight(distance);
+    if (distance > distanceOverride.range) return 0;
+    return distance <= distanceOverride.close ? 1 : PROXIMITY_MID_FACTOR;
+  };
   const pool = onGroundPlayers(team);
   const withDistance = pool.map((player) => {
     const estimated = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const pos = trackedPositions.get(player.PlayerID) ?? estimated;
     return { player, distance: realDistanceBetween(target, pos, stadium) };
   });
-  const eligible = withDistance.filter((d) => proximityWeight(d.distance) > 0 && (groundedUntilTick.get(d.player.PlayerID) ?? -Infinity) < tick);
+  const eligible = withDistance.filter((d) => weightFor(d.distance) > 0 && (groundedUntilTick.get(d.player.PlayerID) ?? -Infinity) < tick);
   if (eligible.length === 0) return null;
-  return weightedChoice(rng, eligible, (d) => involvementWeight(side, d.player, zone, team.positions?.get(d.player.PlayerID)) * proximityWeight(d.distance));
+  return weightedChoice(rng, eligible, (d) => involvementWeight(side, d.player, zone, team.positions?.get(d.player.PlayerID)) * weightFor(d.distance));
 }
 
 /**

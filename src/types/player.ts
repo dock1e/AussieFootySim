@@ -211,6 +211,20 @@ export interface Player extends ImprovementRates, DeclineRates {
   morale?: number;
 
   /**
+   * Round 126 — closes ROADMAP gap #37 for real. `true` for a player whose `OVR` and/or `POT`
+   * (respectively) is Tyler's own hand-set scouting judgment (Schema.md's "Manual POT & OVR
+   * overrides"), not formula output. `engine/ratingGeneration.ts`'s `applyFairnessPass` — the
+   * round 125/126 fairness-pass replacement for the old offline generation script's OVR/POT step —
+   * checks these before touching either field, so a future refresh or in-engine `runOffSeason` can
+   * no longer silently clobber Tyler's own calls the way every prior pass could. Optional: `false`/
+   * absent for the other 744 players, and for every synthetic player (draft prospects, test
+   * fixtures) which never carries an override at all.
+   */
+  ovrOverride?: boolean;
+  /** See `ovrOverride` — the same protection, for `POT` specifically. Currently 7 real players carry this (Sam Darcy, Nasiah Wanganeen-Milera, Kysaiah Pickett, Nick Watson, Nick Daicos, Bailey Smith, Max Gawn); Max Gawn alone also carries `ovrOverride`. */
+  potOverride?: boolean;
+
+  /**
    * Optional, added Phase 4 Slice 3 (Contracts) — true once a coach has
    * delisted this player from `Team`/`ClubID`'s active list via
    * engine/contracts.ts's `delist()`. `getPlayersByClub` does NOT filter

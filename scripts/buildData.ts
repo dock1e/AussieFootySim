@@ -47,11 +47,19 @@ const STRING_FIELDS = new Set([
   "sc_trend_years",
 ]);
 
-function coerceRow(raw: Record<string, string>): Player {
+// Round 126 — closes gap #37. Stored in the CSV as "1"/"0" (buildData.ts's numeric-coercion
+// convention elsewhere), coerced to a real boolean here rather than left as 1/0 so
+// `p.ovrOverride`/`p.potOverride` reads naturally everywhere else in the codebase.
+const BOOLEAN_FIELDS = new Set(["ovrOverride", "potOverride"]);
+
+/** Exported (round 126) so `scripts/refreshPlayerRatings.ts` can parse the CSV into real `Player` objects the same way this pipeline does, rather than re-implementing the coercion rules a second time. */
+export function coerceRow(raw: Record<string, string>): Player {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (STRING_FIELDS.has(key)) {
       out[key] = value;
+    } else if (BOOLEAN_FIELDS.has(key)) {
+      out[key] = value === "1" || value.toLowerCase() === "true";
     } else {
       const n = Number(value);
       if (Number.isNaN(n)) {
@@ -101,4 +109,9 @@ function main() {
   console.log(`POT >= OVR invariant: ok (0 violations)`);
 }
 
-main();
+// Round 126: guarded so `scripts/refreshPlayerRatings.ts` can `import { coerceRow } from
+// "./buildData.ts"` without triggering a second, unwanted CSV read/write as a side effect of the
+// import itself — only run automatically when this file is the actual entrypoint (`npm run build:data`).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}

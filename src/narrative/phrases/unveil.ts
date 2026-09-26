@@ -3,7 +3,7 @@ import { anyLines, byStatus, clubLines, type Phrase } from "./types";
 /** Unveiling screen H2. Speaker: the media. Under 14 words. */
 export const unveilHeadline: Phrase[] = [
   ...anyLines("unveilHeadline", [
-    "{coach} named senior coach of the {club} {nick}",
+    "{coach} named senior coach of the {clubFull}",
     "{club} land the most wanted coach in the game",
     "It's official: {coach} takes the {nick} job",
     "{coachLast} picks the {nick} over seventeen other offers",

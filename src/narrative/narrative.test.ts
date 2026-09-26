@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CLUBS } from "../types/club";
 import { STATUSES, boardFor, getAllClubContexts, type ClubContext, type Status } from "./clubContext";
-import { PHRASE_BANK, SLOTS } from "./phrases";
+import { PHRASE_BANK, SLOTS as ALL_SLOTS } from "./phrases";
+
+// The onboarding slots; the Big Game Splash slots have their own tests (splash.test.ts).
+const SLOTS = ALL_SLOTS.filter((s) => !s.startsWith("splash."));
 import type { Slot } from "./phrases/types";
 import { eligible, fill, pickMany, pickPhrase, rngFor, tokenValues, type NarrativeHistory } from "./phraseEngine";
 

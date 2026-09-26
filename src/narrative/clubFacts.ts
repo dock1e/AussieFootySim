@@ -41,6 +41,28 @@ export const LAST_FLAG_YEAR: Record<string, number | null> = {
   WB: 2016,
 };
 
+/** VFL/AFL premierships won up to the end of 2025 (Brisbane Lions from 1997; Sydney includes South Melbourne). The save's own flags are added on top. */
+export const PREMIERSHIP_COUNT: Record<string, number> = {
+  ADEL: 2,
+  BL: 5,
+  CARL: 16,
+  COLL: 16,
+  ESS: 16,
+  FRE: 0,
+  GEEL: 10,
+  GCFC: 0,
+  GWS: 0,
+  HAW: 13,
+  MELB: 13,
+  NMFC: 4,
+  PORT: 1,
+  RICH: 13,
+  STK: 1,
+  SYD: 5,
+  WCE: 4,
+  WB: 2,
+};
+
 /** Big-market clubs: membership and expectation are larger than the ladder alone suggests (the "sleeping giant" rule). */
 export const BIG_MARKET = new Set(["COLL", "ESS", "CARL", "RICH", "HAW", "WCE"]);
 

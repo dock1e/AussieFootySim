@@ -2,8 +2,8 @@ import type { Player } from "../../../types/player";
 import { POSITIONS, suitabilityFor, type Archetype, type Position, type Suitability } from "../../../types/archetype";
 import { CLUBS, clubById } from "../../../types/club";
 import type { MatchTeam } from "../../../engine/team";
-import type { Season } from "../../../engine/season";
-import { matchesInRound, roundsForClub, timeslotFor, type Timeslot } from "../../../engine/fixture";
+import { finalsPlayed, nextFinalsPairings, type Season } from "../../../engine/season";
+import { matchesInRound, roundsForClub, timeslotFor, SEASON_ROUNDS, type Timeslot } from "../../../engine/fixture";
 import { groundForMatch } from "../../../data/clubGrounds";
 import { getPlayersByClub } from "../../../data/loadPlayers";
 import type { GameStyle, Tactic, TeamPlan } from "../../../engine/tactics";
@@ -158,6 +158,52 @@ export interface FixtureRow {
   when: Timeslot;
   /** e.g. "W 92–71", from your side. Null while unplayed. */
   result: { outcome: "W" | "L" | "D"; score: string } | null;
+  /** Big Game Splash — finals rows: the bracket key ("QF1", "GF") and the short label shown for the round. */
+  finalKey?: string;
+  label?: string;
+  name?: string;
+}
+
+const FINAL_LABEL: Record<string, string> = { QF1: "QF", QF2: "QF", EF1: "EF", EF2: "EF", SF1: "SF", SF2: "SF", PF1: "PF", PF2: "PF", GF: "GF" };
+
+/**
+ * Big Game Splash — your finals as fixture rows: the ones you've played, then your next final (so it
+ * can be played live on Match Day). Finals take the round numbers after the home and away season
+ * (24 = week 1 … 27 = Grand Final) so they sort and key like any other round.
+ */
+export function finalsFixtureRows(season: Season, myClubId: number): FixtureRow[] {
+  const row = (m: { key: string; name: string; week: number; homeClubId: number; awayClubId: number }, index: number, result: FixtureRow["result"]): FixtureRow => {
+    const isHome = m.homeClubId === myClubId;
+    const opponentId = isHome ? m.awayClubId : m.homeClubId;
+    const round = SEASON_ROUNDS + m.week;
+    return {
+      round,
+      opponentId,
+      opponent: clubById(opponentId)?.name ?? "?",
+      isHome,
+      homeClubId: m.homeClubId,
+      awayClubId: m.awayClubId,
+      venue: m.key === "GF" ? "MCG" : groundForMatch(m.homeClubId).commonName,
+      when: m.key === "GF" ? { label: "Sat 2:30pm", night: false } : timeslotFor(season.seed, round, index),
+      result,
+      finalKey: m.key,
+      label: FINAL_LABEL[m.key] ?? m.key,
+      name: m.name,
+    };
+  };
+  const mine = (m: { homeClubId: number; awayClubId: number }) => m.homeClubId === myClubId || m.awayClubId === myClubId;
+  const played = finalsPlayed(season)
+    .filter(mine)
+    .map((m, i) => {
+      const us = m.homeClubId === myClubId ? m.result.home.points : m.result.away.points;
+      const them = m.homeClubId === myClubId ? m.result.away.points : m.result.home.points;
+      return row(m, i, { outcome: us > them ? "W" : us < them ? "L" : "D", score: `${us}–${them}` });
+    });
+  const next = nextFinalsPairings(season)
+    .map((p, i) => ({ p, i }))
+    .filter(({ p }) => mine(p))
+    .map(({ p, i }) => row(p, i, null));
+  return [...played, ...next];
 }
 
 export function seasonFixtureRows(season: Season, myClubId: number): FixtureRow[] {

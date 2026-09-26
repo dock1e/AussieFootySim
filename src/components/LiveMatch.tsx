@@ -30,7 +30,7 @@ import { fantasyPointsFor } from "../engine/ratings";
 import { seasonPlayerTotals, toAverageMap } from "../engine/seasonSummary";
 import { computeFantasyMetrics, type PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
 import { groundForMatch } from "../data/clubGrounds";
-import { getStadium, type AFLStadium } from "../data/stadiums";
+import { getStadium, STADIUM_CONFIGS, type AFLStadium } from "../data/stadiums";
 import { buildGrandFinalTeam, GRAND_FINAL_2026_CLUBS, type GrandFinal2026Club } from "../data/grandFinal2026";
 import { aiTeamPlan, defaultTeamPlan, gameStyleModelledImpact, DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
 import { nextUnplayedRound } from "../engine/season";
@@ -46,6 +46,8 @@ import { LiveBoard, MoversWidget, PlayByPlayWidget, DangerMenWidget, baselineFpA
 import { useMatchStoryStore } from "../store/useMatchStoryStore";
 import { generateMatchCoachesVotes } from "../engine/coachesVotes";
 import { FullTimeResult } from "./FullTimeResult";
+import { SplashHost, findSpecialMatch } from "./splash/SplashHost";
+import type { CoachesVoteMatchRef } from "../store/useSeasonStore";
 import { QuarterTimeDecisionRoom } from "./QuarterTimeDecisionRoom";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
 import { FlowFooter, FlowStepper, type FlowStep, type StepInfo } from "./matchday/flow/FlowChrome";
@@ -62,6 +64,7 @@ import {
   ladderLine,
   scoutingRows,
   seasonFixtureRows,
+  finalsFixtureRows,
   styleBlurb,
   styleLabel,
   taggerCandidates,
@@ -78,8 +81,14 @@ interface ActiveMatch {
   home: MatchTeam;
   away: MatchTeam;
   venue: AFLStadium;
-  /** The season round being played, or null for a friendly. */
+  /** The season round being played, or null for a friendly or a final. */
   round: number | null;
+  /** Big Game Splash — the final being played ("QF1" … "GF"), or null. */
+  finalKey: string | null;
+  homeClubId: number;
+  awayClubId: number;
+  /** A special fixture (Grand Final, Anzac Day, King's Birthday): full time opens the splash first. */
+  special: boolean;
   /** An untouched copy of the coach's own team as it took the field — interchanges mutate `home`/`away`. */
   myTeamAtBounce: MatchTeam;
   /** Both teams as they took the field, replayed forward to the tick on screen (`teamAtEvent`). */
@@ -148,14 +157,24 @@ export function LiveMatch({
    * time (including all of Tyler's own real flow). Everything else about the GF match rides on the same
    * generic `active`/`result`/`matchInProgress` state as a normal match — this is the one extra bit of
    * state needed so `mySide`, `leaveMatch`, and `<FullTimeResult>` know which GF club is "mine" instead of
-   * comparing against `myClub` (which stays Tyler's real club, untouched, throughout).
+   * comparing against `myClub` (which stays Tyler's real club, untouched, throughout). Deliberately never
+   * treated as a "special" match for round 132's Big Game Splash system below — the exhibition kicks off
+   * a fictional one-off match with no season/finals fixture entry of its own, so `special` stays `false`
+   * and `findSpecialMatch` correctly finds nothing to splash.
    */
   const [gfSide, setGfSide] = useState<GrandFinal2026Club | null>(null);
+  const [recordedFinal, setRecordedFinal] = useState<string | null>(null);
+  /** The splash has been continued past (it's also marked seen in the save the moment it shows). */
+  const [splashDismissed, setSplashDismissed] = useState(false);
+  const recordLiveFinal = useSeasonStore((s) => s.recordLiveFinal);
 
   // --- This week's fixture --------------------------------------------------------------------------
   const fixtureRows = useMemo(() => (season ? seasonFixtureRows(season, myClubId) : []), [season, myClubId]);
   const nextRound = season ? nextUnplayedRound(season) : null;
-  const nextRow = fixtureRows.find((r) => r.round === nextRound) ?? null;
+  // Big Game Splash: once the home and away season is done, your next final is this week's match.
+  const finalsRows = useMemo(() => (season ? finalsFixtureRows(season, myClubId) : []), [season, myClubId]);
+  const nextFinal = finalsRows.find((r) => r.result === null) ?? null;
+  const nextRow = fixtureRows.find((r) => r.round === nextRound) ?? nextFinal;
   const friendlyOnly = !nextRow;
   const choice: FixtureChoice = nextRow ? { kind: "season", round: nextRow.round } : { kind: "friendly", opponent: friendlyOpponent };
   const oppName = nextRow ? nextRow.opponent : friendlyOpponent;
@@ -163,7 +182,12 @@ export function LiveMatch({
   const iAmHome = nextRow ? nextRow.isHome : true;
   const when: Timeslot = nextRow ? nextRow.when : friendlyTimeslot(oppClubId);
   const flowVenue = useMemo(
-    () => (nextRow && season ? groundForMatch(nextRow.homeClubId, nextRow.round, season.fixture) : groundForMatch(myClubId)),
+    () =>
+      nextRow?.finalKey === "GF"
+        ? STADIUM_CONFIGS["mcg"]
+        : nextRow && season
+          ? groundForMatch(nextRow.homeClubId, nextRow.finalKey ? undefined : nextRow.round, season.fixture)
+          : groundForMatch(myClubId),
     [nextRow, season, myClubId],
   );
   const homeVenue = useMemo(() => groundForMatch(myClubId).commonName, [myClubId]);
@@ -312,7 +336,13 @@ export function LiveMatch({
       home,
       away,
       venue: flowVenue,
-      round: nextRow?.round ?? null,
+      round: nextRow && !nextRow.finalKey ? nextRow.round : null,
+      finalKey: nextRow?.finalKey ?? null,
+      homeClubId: iAmHome ? myClubId : oppClubId,
+      awayClubId: iAmHome ? oppClubId : myClubId,
+      special:
+        nextRow?.finalKey === "GF" ||
+        (!!nextRow && !nextRow.finalKey && !!season?.fixture.find((m) => m.round === nextRow.round && m.homeClubId === nextRow.homeClubId && m.awayClubId === nextRow.awayClubId)?.special),
       myTeamAtBounce: cloneMatchTeam(flowMine),
       homeAtBounce: cloneMatchTeam(iAmHome ? flowMine : flowOpp),
       awayAtBounce: cloneMatchTeam(iAmHome ? flowOpp : flowMine),
@@ -322,6 +352,8 @@ export function LiveMatch({
     setPendingCoachsCall(null);
     setResult(matchResultSoFar(match));
     setRecordedRound(null);
+    setRecordedFinal(null);
+    setSplashDismissed(false);
     setGroundSel(null);
     setSelectedPlayer(null);
     // "Last week's team" and "Changes vs last week" read this snapshot of what took the field.
@@ -376,6 +408,14 @@ export function LiveMatch({
       away,
       venue,
       round: null,
+      // Round 132's Big Game Splash "special" fixture handling is deliberately not engaged here: this
+      // exhibition has no entry in the season's own fixture/finals data for `findSpecialMatch` to find,
+      // so `special: false` (with `finalKey: null`) keeps `specialRef` null and the normal full-time
+      // screen renders, rather than the splash-gated branch returning early with nothing to show.
+      finalKey: null,
+      homeClubId: clubByName(home.name)?.ClubID ?? -1,
+      awayClubId: clubByName(away.name)?.ClubID ?? -1,
+      special: false,
       myTeamAtBounce: cloneMatchTeam(sideTeam),
       homeAtBounce: cloneMatchTeam(home),
       awayAtBounce: cloneMatchTeam(away),
@@ -385,6 +425,8 @@ export function LiveMatch({
     setPendingCoachsCall(null);
     setResult(matchResultSoFar(match));
     setRecordedRound(null);
+    setRecordedFinal(null);
+    setSplashDismissed(false);
     setGroundSel(null);
     setSelectedPlayer(null);
     setGfSide(side);
@@ -473,6 +515,11 @@ export function LiveMatch({
     if (!atFullTime || !active || active.round === null || !result || recordedRound === active.round) return;
     if (recordLiveRound(active.round, result, myClubId, active.myTeamAtBounce)) setRecordedRound(active.round);
   }, [atFullTime, active, result, recordedRound, recordLiveRound, myClubId]);
+  // …and full time of a final records it into the finals series (the rest of that week simulating headlessly).
+  useEffect(() => {
+    if (!atFullTime || !active?.finalKey || !result || recordedFinal === active.finalKey) return;
+    if (recordLiveFinal(active.finalKey, result, myClubId, active.myTeamAtBounce)) setRecordedFinal(active.finalKey);
+  }, [atFullTime, active, result, recordedFinal, recordLiveFinal, myClubId]);
 
   // Sep 2026 round 112 — [[Match Day Fantasy Layer]]: replaces the old `useFantasyHistory` wall-clock
   // ring buffer. Every ribbon/board/drawer number for this match now comes from one pass over the
@@ -527,7 +574,7 @@ export function LiveMatch({
   const filled = lineup.filter((id) => id !== null).length;
   const myAbbr = clubAbbr(myClub);
   const oppAbbr = clubAbbr(oppName);
-  const roundLabel = nextRow ? `Round ${nextRow.round}` : "Friendly";
+  const roundLabel = nextRow ? (nextRow.name ?? `Round ${nextRow.round}`) : "Friendly";
   const homeAway = iAmHome ? "Home" : "Away";
   const style = standingPlan.gameStyle;
 
@@ -586,7 +633,7 @@ export function LiveMatch({
   const scoreSub = active && result ? `${playback.liveScore.homePoints} – ${playback.liveScore.awayPoints}` : "Ready";
   const nTags = validTags.size;
   const steps: StepInfo[] = [
-    { sub: nextRow ? `Rd ${nextRow.round} · ${oppAbbr}` : `Friendly · ${oppAbbr}`, disabled: locked },
+    { sub: nextRow ? `${nextRow.label ?? `Rd ${nextRow.round}`} · ${oppAbbr}` : `Friendly · ${oppAbbr}`, disabled: locked },
     { sub: `${filled}/23 picked`, disabled: locked },
     { sub: nTags ? plural(nTags, "tag") : "No tags", disabled: locked },
     { sub: styleLabel(style), disabled: locked },
@@ -600,8 +647,34 @@ export function LiveMatch({
     if (s === 4) kickOff();
     else setStep(s);
   }
-  const contextLine = `${nextRow ? `ROUND ${nextRow.round}` : "FRIENDLY"} · ${myAbbr} V ${oppAbbr} · ${flowVenue.commonName.toUpperCase()} · ${when.label.toUpperCase()}`;
+  const contextLine = `${nextRow ? (nextRow.name ?? `ROUND ${nextRow.round}`).toUpperCase() : "FRIENDLY"} · ${myAbbr} V ${oppAbbr} · ${flowVenue.commonName.toUpperCase()} · ${when.label.toUpperCase()}`;
   const stepper = <FlowStepper step={active ? 4 : step} steps={steps} contextLine={contextLine} onGo={goStep} />;
+
+  // Big Game Splash: a special fixture's full time opens the splash (once) before the match report.
+  const specialRef: CoachesVoteMatchRef | null = active?.special
+    ? active.finalKey
+      ? { kind: "finals", key: active.finalKey }
+      : active.round !== null
+        ? { kind: "round", round: active.round, homeClubId: active.homeClubId, awayClubId: active.awayClubId }
+        : null
+    : null;
+  const specialMatch = atFullTime ? findSpecialMatch(season, specialRef) : null;
+  if (atFullTime && result && specialRef && !specialMatch) return <div className="flex flex-col gap-3">{stepper}</div>;
+  if (atFullTime && result && specialMatch && !specialMatch.splashSeen && !splashDismissed) {
+    return (
+      <div className="flex flex-col gap-3">
+        {stepper}
+        <SplashHost
+          matchRef={specialRef!}
+          onContinue={() => setSplashDismissed(true)}
+          onReplay={() => {
+            setSplashDismissed(true);
+            playback.restart();
+          }}
+        />
+      </div>
+    );
+  }
 
   if (atFullTime && result) {
     return (
@@ -626,6 +699,7 @@ export function LiveMatch({
             onContinue?.();
           }}
           onReplay={playback.restart}
+          specialRef={specialRef ?? undefined}
         />
       </div>
     );
@@ -676,7 +750,7 @@ export function LiveMatch({
           <FixtureStep
             myClub={myClub}
             year={year}
-            rows={fixtureRows}
+            rows={[...fixtureRows, ...finalsRows]}
             nextRound={nextRow?.round ?? null}
             friendlyOnly={friendlyOnly}
             choice={choice}
@@ -695,7 +769,7 @@ export function LiveMatch({
               night: when.night,
               ladder: season ? ladderLine(season, oppClubId) : "No season in progress",
               lastMet: season ? lastMetLine(season, myClubId, oppClubId) : "—",
-              carriedFrom: nextRow && nextRow.round > 1 ? nextRow.round - 1 : null,
+              carriedFrom: nextRow && !nextRow.finalKey && nextRow.round > 1 ? nextRow.round - 1 : null,
             }}
           />
         )}

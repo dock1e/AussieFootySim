@@ -171,7 +171,7 @@ export function FixtureStep({
                     title={played ? undefined : isNext ? undefined : "Only the next round can be played"}
                     className="mdf-fix-grid" style={rowStyle(on, played, isNext)}
                   >
-                    <span style={{ font: `600 12px ${MONO}`, color: "#8f9ab0" }}>R{f.round}</span>
+                    <span style={{ font: `600 12px ${MONO}`, color: "#8f9ab0" }}>{f.label ?? `R${f.round}`}</span>
                     <Badge club={f.opponent} />
                     <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                       <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.opponent}</span>

@@ -5,12 +5,18 @@ import {
   buildTeams,
   simulateRound,
   runFinals,
+  runFinalsWeek,
+  nextFinalsPairings,
   nextUnplayedRound,
   isHomeAndAwayComplete,
   presetResultKey,
   type Season,
 } from "../engine/season";
-import { matchesInRound } from "../engine/fixture";
+import { matchesInRound, tagSpecialFixtures } from "../engine/fixture";
+import { applyBigGameHonours } from "../engine/bigGameHonours";
+import { ALL_PLAYERS, loadPool } from "../data/loadPlayers";
+import { useSaveStore } from "./useSaveStore";
+import { useCareerStore } from "./useCareerStore";
 import type { MatchResult } from "../engine/match";
 import type { MatchTeam } from "../engine/team";
 import type { Position } from "../types/archetype";
@@ -61,6 +67,34 @@ interface SeasonStoreState {
    * `FullTimeResult`'s submit form only ever renders when `coachesVotes` is already present.
    */
   submitCoachesVotes: (matchRef: CoachesVoteMatchRef, side: "home" | "away", allocations: CoachesVoteAllocation[]) => void;
+  /** Big Game Splash — plays the next finals week headlessly. */
+  playFinalsWeek: () => void;
+  /** Big Game Splash — folds the coach's own final (played live on Match Day) into its finals week, the rest of that week simulating headlessly. */
+  recordLiveFinal: (key: string, result: MatchResult, myClubId: number, myTeam: MatchTeam) => boolean;
+  /** Big Game Splash — the splash for this match has been seen (it shows once; the match report can reopen it). */
+  markSplashSeen: (ref: CoachesVoteMatchRef, picks?: Record<string, string>) => void;
+}
+
+/**
+ * Big Game Splash — writes any newly played special match's medal (and a Grand Final's premiership) to
+ * the players and the coach's record, exactly once per match (see engine/bigGameHonours.ts).
+ */
+function settleHonours(season: Season): Season {
+  const year = useSaveStore.getState().year;
+  const out = applyBigGameHonours(season, ALL_PLAYERS, year);
+  if (out.season === season) return season;
+  loadPool(out.players);
+  const career = useCareerStore.getState();
+  const myId = clubByName(useGameStore.getState().myClub)?.ClubID;
+  if (career.coach && myId !== undefined && out.flagsWon.includes(myId)) {
+    career.restore({ ...careerSnapshot(), coach: { ...career.coach, premierships: (career.coach.premierships ?? 0) + 1 } });
+  }
+  return out.season;
+}
+
+function careerSnapshot() {
+  const c = useCareerStore.getState();
+  return { saveId: c.saveId ?? undefined, coach: c.coach ?? undefined, board: c.board ?? undefined, narrative: c.narrative, dayOne: c.dayOne ?? undefined };
 }
 
 /** Shared by startNewSeason/restoreSeason — see useSeasonStore's own doc comment for why teams are always rebuilt rather than persisted. */
@@ -155,7 +189,7 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     if (!season || !teams) return;
     const round = nextUnplayedRound(season);
     if (round === null) return;
-    set({ season: simulateRound(season, round, teams, currentPlans()) });
+    set({ season: settleHonours(simulateRound(season, round, teams, currentPlans())) });
   },
 
   simulateAllRemaining: () => {
@@ -168,7 +202,7 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
       season = simulateRound(season, round, teams, plans);
       round = nextUnplayedRound(season);
     }
-    set({ season });
+    set({ season: settleHonours(season) });
   },
 
   recordLiveRound: (round, result, myClubId, myTeam) => {
@@ -179,17 +213,56 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     const nextTeams = new Map(teams);
     nextTeams.set(myClubId, myTeam);
     const preset = new Map([[presetResultKey(mine.homeClubId, mine.awayClubId), result]]);
-    set({ season: simulateRound(season, round, nextTeams, currentPlans(), preset), teams: nextTeams });
+    set({ season: settleHonours(simulateRound(season, round, nextTeams, currentPlans(), preset)), teams: nextTeams });
     return true;
+  },
+
+  playFinalsWeek: () => {
+    const { season, teams } = get();
+    if (!season || !teams || !isHomeAndAwayComplete(season)) return;
+    set({ season: settleHonours(runFinalsWeek(season, teams, currentPlans())) });
+  },
+
+  recordLiveFinal: (key, result, myClubId, myTeam) => {
+    const { season, teams } = get();
+    if (!season || !teams) return false;
+    const mine = nextFinalsPairings(season).find((p) => p.key === key && (p.homeClubId === myClubId || p.awayClubId === myClubId));
+    if (!mine) return false;
+    const nextTeams = new Map(teams);
+    nextTeams.set(myClubId, myTeam);
+    const preset = new Map([[presetResultKey(mine.homeClubId, mine.awayClubId), result]]);
+    set({ season: settleHonours(runFinalsWeek(season, nextTeams, currentPlans(), preset)), teams: nextTeams });
+    return true;
+  },
+
+  markSplashSeen: (ref, picks) => {
+    const { season } = get();
+    if (!season) return;
+    if (ref.kind === "round") {
+      const played = season.played.map((m) =>
+        m.round === ref.round && m.homeClubId === ref.homeClubId && m.awayClubId === ref.awayClubId ? { ...m, splashSeen: true, splashPicks: m.splashPicks ?? picks } : m,
+      );
+      set({ season: { ...season, played } });
+      return;
+    }
+    const mark = <T extends { key: string }>(ms: T[]) => ms.map((m) => (m.key === ref.key ? { ...m, splashSeen: true, splashPicks: (m as { splashPicks?: Record<string, string> }).splashPicks ?? picks } : m));
+    set({
+      season: {
+        ...season,
+        finals: season.finals ? { ...season.finals, matches: mark(season.finals.matches) } : season.finals,
+        finalsInProgress: season.finalsInProgress ? mark(season.finalsInProgress) : undefined,
+      },
+    });
   },
 
   playFinals: () => {
     const { season, teams } = get();
     if (!season || !teams || !isHomeAndAwayComplete(season)) return;
-    set({ season: runFinals(season, teams, currentPlans()) });
+    set({ season: settleHonours(runFinals(season, teams, currentPlans())) });
   },
 
-  restoreSeason: (season) => set({ season, teams: buildTeamsForMyClub() }),
+  // An older save's fixture gets its special rounds tagged on the way in (a no-op once tagged).
+  restoreSeason: (season) => set({ season: { ...season, fixture: tagSpecialFixtures(season.fixture) }, teams: buildTeamsForMyClub() }),
 
   clearSeason: () => set({ season: null, teams: null }),
 

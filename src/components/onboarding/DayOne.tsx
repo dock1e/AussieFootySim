@@ -1,5 +1,5 @@
 import { useEffect, useMemo, type CSSProperties } from "react";
-import { CLUBS, clubById } from "../../types/club";
+import { CLUBS, clubById, clubNameParts } from "../../types/club";
 import { generateFixture, matchesInRound, timeslotFor } from "../../engine/fixture";
 import { groundForMatch } from "../../data/clubGrounds";
 import { getPlayersByClub, leagueAverageOvr } from "../../data/loadPlayers";
@@ -133,7 +133,7 @@ export function DayOne({ myClub, onGo }: { myClub: string; onGo: (target: DayOne
             SENIOR COACH · {coachName} · PRE-SEASON {year}
           </div>
           <h1 style={{ margin: "4px 0 2px", font: `700 38px/1 ${COND}`, color: "#fff" }}>
-            {club.name} <span style={{ color: "var(--accT)" }}>{club.nickname}</span>
+            {clubNameParts(club)[0]} <span style={{ color: "var(--accT)" }}>{club.nickname}</span>
           </h1>
           <div style={{ font: `400 14px ${BARLOW}`, color: "#aab3c3" }}>{say("dashSubline")}</div>
         </div>

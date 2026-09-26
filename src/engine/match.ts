@@ -2829,29 +2829,12 @@ function snapZoneBlindPick(ctx: Ctx, player: Player, zone: Zone, team: MatchTeam
  * `carrierStandingTheMark`'s own game-logic effect (skipping the tackle/
  * High-Contact roll in `runGeneralPlay`).
  */
-function unpressuredKickCleanPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean, isLongKick: boolean): string {
-  const phrases: ((c: string, r: string) => string)[] = standingTheMark
-    ? isLongKick
-      ? [
-          (c, r) => `${c} plays on and kicks it long, ${r} leading into space`,
-          (c, r) => `${c} plays on from the mark, going long to find ${r} leading into space`,
-        ]
-      : [
-          (c, r) => `${c} plays on from the mark and finds ${r} leading into space`,
-          (c, r) => `${c} plays on and picks out ${r}, leading into space`,
-        ]
-    : isLongKick
-      ? [
-          (c, r) => `${c} kicks it long, ${r} leading into space — no one close enough to contest`,
-          (c, r) => `${c} has time to pick out the long option, ${r} leading into space`,
-        ]
-      : [
-          (c, r) => `${c} finds ${r} leading into space, no one close enough to contest`,
-          (c, r) => `${c} has all the time in the world and finds ${r} leading into space`,
-        ];
-  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
-}
-/** See `unpressuredKickCleanPhrase`'s own doc comment. Covers the "strongly attended" contested-target branch instead of the clean-leading one. */
+// Round C140 — `unpressuredKickCleanPhrase` used to cover this branch (kick lands beyond
+// MARKING_DUEL_RANGE_DISTANCE, standingTheMark/isLongKick axes). Deleted: every case it covered is now
+// a GUARANTEED uncontested mark (see MARKING_DUEL_RANGE_DISTANCE's own doc comment, backlog #102) and
+// resolves same-tick via `unpressuredKickInstantMarkPhrase` below instead of waiting a tick to narrate
+// a foregone-conclusion catch — see that function's own doc comment for the full "why".
+/** See the Round C140 note above (`unpressuredKickCleanPhrase`'s own doc comment used to anchor this — now deleted). Covers the "strongly attended" contested-target branch instead of the clean-leading one. */
 function unpressuredKickContestedPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean): string {
   const phrases: ((c: string, r: string) => string)[] = standingTheMark
     ? [
@@ -2872,23 +2855,204 @@ function unpressuredKickMissedPhrase(ctx: Ctx, carrier: string, receiver: string
   ];
   return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
 }
-/** See `unpressuredKickCleanPhrase`'s own doc comment. `targetUnderPressure` is a separate axis from `standingTheMark` — it's about whether the RECEIVER (not the disposing carrier, guaranteed unpressured here) has a defender close by. */
-function unpressuredHandballPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean, targetUnderPressure: boolean): string {
-  const phrases: ((c: string, r: string) => string)[] = targetUnderPressure
-    ? [
-        (c, r) => `${c} looks for the outlet — ${r} is under pressure`,
-        (c, r) => `${c} finds ${r} with a handball, straight into pressure`,
-      ]
-    : standingTheMark
+/**
+ * See `unpressuredKickCleanPhrase`'s own doc comment (deleted above; see the Round C140 note there) for
+ * the double-log consolidation this was originally part of. `targetUnderPressure` is a separate axis
+ * from `standingTheMark` — it's about whether the RECEIVER (not the disposing carrier, guaranteed
+ * unpressured here) has a defender close by.
+ *
+ * Round C140 — the `!targetUnderPressure` branches (both `standingTheMark` and plain) are gone: they
+ * covered exactly `proximityWeight(handballPick.distance) === 0`, which is now a GUARANTEED clean
+ * reception resolved same-tick via `unpressuredHandballInstantPhrase` instead — see
+ * `MARKING_DUEL_RANGE_DISTANCE`'s own doc comment (backlog #102) for the kick-side twin of this fix.
+ * Only the genuinely-uncertain `targetUnderPressure` case still reaches this function.
+ */
+function unpressuredHandballPhrase(ctx: Ctx, carrier: string, receiver: string, _standingTheMark: boolean, targetUnderPressure: boolean): string {
+  void targetUnderPressure; // always true at every remaining call site — kept as a param so callers read unchanged
+  const phrases: ((c: string, r: string) => string)[] = [
+    (c, r) => `${c} looks for the outlet — ${r} is under pressure`,
+    (c, r) => `${c} finds ${r} with a handball, straight into pressure`,
+  ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
+}
+
+/**
+ * Round C140 — the same-tick collapsed counterpart to the OLD two-line pair "kick in flight, clean"
+ * (`unpressuredKickCleanPhrase`, deleted above) + "mark taken" (`runMarkingContest`'s own uncontested-
+ * mark success line). See `MARKING_DUEL_RANGE_DISTANCE`'s own doc comment for the disposal-volume fix
+ * this narrates (backlog #102): a kick landing beyond that radius is a GUARANTEED uncontested mark — no
+ * genuine defender was ever going to contest it (see `runMarkingContest`'s own doc comment for why a
+ * later re-check can't disagree) — so it now resolves on the SAME tick as the kick itself instead of
+ * spending a whole extra decision tick purely to narrate a foregone-conclusion catch. One flowing
+ * sentence naming both players, rather than firing the OLD two separate lines back-to-back on one tick
+ * (which read as an awkward, repetitive double-post — "leading into space... marks it, leading into
+ * space"). Genuinely contested/marginal marks (`markDistance <= MARKING_DUEL_RANGE_DISTANCE`) and missed
+ * long kicks are completely untouched by this round — they still resolve a full tick later via
+ * `runMarkingContest`, preserving round 24-27's reveal for outcomes that are actually in doubt.
+ * `standingTheMark`/`isLongKick` carry the exact same meaning as the deleted `unpressuredKickCleanPhrase`'s own axes.
+ */
+function unpressuredKickInstantMarkPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean, isLongKick: boolean): string {
+  const phrases: ((c: string, r: string) => string)[] = standingTheMark
+    ? isLongKick
       ? [
-          (c, r) => `${c} plays on with a handball, ${r} finds space`,
-          (c, r) => `${c} plays on from the mark and finds ${r} with a handball`,
+          (c, r) => `${c} plays on and finds ${r} deep with a long kick — an easy uncontested mark`,
+          (c, r) => `${c} plays on from the mark, going long to ${r}, who marks it untouched`,
         ]
       : [
-          (c, r) => `${c} handballs it off, ${r} finds space`,
-          (c, r) => `${c} has time to find the handball, ${r} finds space untouched`,
+          (c, r) => `${c} plays on and finds ${r} leading into space, who marks it cleanly`,
+          (c, r) => `${c} plays on, picks out ${r}, and he marks it with no one near him`,
+        ]
+    : isLongKick
+      ? [
+          (c, r) => `${c} kicks it long to ${r}, no one close enough to contest — an easy mark`,
+          (c, r) => `${c} finds the long option in ${r}, who marks it untouched`,
+        ]
+      : [
+          (c, r) => `${c} finds ${r} leading into space, who marks it cleanly`,
+          (c, r) => `${c} has all the time in the world, picks out ${r}, and he takes the easy mark`,
         ];
   return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
+}
+/** See `unpressuredKickInstantMarkPhrase`'s own doc comment — the pressured-carrier counterpart, replacing the deleted `pressuredKickCleanPhrase`. `defender` is the tackler the CARRIER evaded; unrelated to whether the RECEPTION itself (guaranteed clean here) is contested. */
+function pressuredKickInstantMarkPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string, isLongKick: boolean): string {
+  const phrases: ((c: string, d: string, r: string) => string)[] = isLongKick
+    ? [
+        (c, d, r) => `${c} gets it away long under pressure from ${d}, finding ${r} for an easy uncontested mark`,
+        (c, d, r) => `Under pressure from ${d}, ${c} still finds the long option — ${r} marks it untouched`,
+      ]
+    : [
+        (c, d, r) => `${c} gets it away under pressure from ${d} and finds ${r}, who marks it cleanly`,
+        (c, d, r) => `Under pressure from ${d}, ${c} still finds ${r} leading into space for an easy mark`,
+      ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
+}
+/**
+ * See `unpressuredKickInstantMarkPhrase`'s own doc comment — the handball counterpart, replacing the
+ * now-narrowed `unpressuredHandballPhrase`'s old "not under pressure" branches (both the
+ * `standingTheMark` and plain variants collapse into this same same-tick path, since both shared the
+ * identical `!targetUnderPressure` condition). Only ever called for a guaranteed-clean reception
+ * (`proximityWeight(handballPick.distance) === 0`).
+ */
+function unpressuredHandballInstantPhrase(ctx: Ctx, carrier: string, receiver: string, standingTheMark: boolean): string {
+  const phrases: ((c: string, r: string) => string)[] = standingTheMark
+    ? [
+        (c, r) => `${c} plays on with a handball, ${r} takes it cleanly in space`,
+        (c, r) => `${c} plays on from the mark and finds ${r} with a handball — taken untouched`,
+      ]
+    : [
+        (c, r) => `${c} handballs it off, ${r} takes it cleanly in space`,
+        (c, r) => `${c} has time to find the handball, ${r} takes it cleanly, untouched`,
+      ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
+}
+/** See `unpressuredKickInstantMarkPhrase`'s own doc comment — the pressured-carrier handball counterpart, replacing the now-narrowed `pressuredHandballPhrase`'s old "not under pressure" branch. */
+function pressuredHandballInstantPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string): string {
+  const phrases: ((c: string, d: string, r: string) => string)[] = [
+    (c, d, r) => `${c} gets a handball away under pressure from ${d}, ${r} takes it cleanly in space`,
+    (c, d, r) => `Under pressure from ${d}, ${c} still finds ${r} with a handball, taken untouched`,
+  ];
+  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
+}
+
+/**
+ * Round C140 — extracted from `runMarkingContest`'s own local `attemptUncontestedMark` closure (see
+ * that function's own doc comment for the full contested-vs-uncontested gate reasoning) so the exact
+ * same resolution can also run inline, one tick earlier, for a kick that's already a GUARANTEED
+ * uncontested mark at launch time (`markDistance > MARKING_DUEL_RANGE_DISTANCE`, checked before this
+ * function is ever reached — see backlog #102's disposal-volume diagnosis). `runMarkingContest` itself
+ * still calls this, unchanged, passing the ORIGINAL receiver-only success text and an empty
+ * `extraDeltas` — so its own two-tick path (genuinely contested/marginal receptions) is byte-for-byte
+ * unaffected by this round. See verify_roundC140_disposalvolume_scratch.ts for the parity check.
+ * `extraDeltas` is applied on BOTH the success and failure branches — matching the disposal's own
+ * `disposals`/`kicks` credit, which real AFL scoring attributes to the KICK's execution regardless of
+ * whether the reception itself is later held.
+ */
+function resolveUncontestedMarkOutcome(
+  ctx: Ctx,
+  zone: Zone,
+  possessingSide: Side,
+  receiver: Player,
+  defendingSide: Side,
+  defendingTeam: MatchTeam,
+  isShotChance: boolean,
+  successLabel: string,
+  successPlayerIds: number[],
+  extraDeltas: StatDelta[] = [],
+): State {
+  const executionRating =
+    computeContestRating(receiver, ["manMarking", "strengthOverhead", "verticalLeap"]) *
+    conditionMultiplierFor(ctx, possessingSide, receiver);
+  if (resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
+    lineFor(ctx, receiver).marks += 1;
+    const isMarkInside50 = isForward50(zone, possessingSide);
+    if (isMarkInside50) lineFor(ctx, receiver).marksInside50 += 1;
+    if (!isShotChance) standTheMark(ctx, receiver.PlayerID, possessingSide);
+    log(ctx, zone, possessingSide, "MARKING_CONTEST", successLabel, successPlayerIds, [
+      { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
+      ...(isMarkInside50 ? [{ playerId: receiver.PlayerID, stat: "marksInside50" as const, delta: 1 }] : []),
+      ...extraDeltas,
+    ]);
+    if (isShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver, shotContext: "mark" };
+    return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true, carrierStandingTheMark: true };
+  }
+  const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
+  snapZoneBlindPick(ctx, recoverer, zone, defendingTeam);
+  lineFor(ctx, receiver).turnovers += 1;
+  lineFor(ctx, receiver).clangers += 1;
+  ctx.lastEffectiveDisposal = null;
+  log(
+    ctx,
+    zone,
+    defendingSide,
+    "MARKING_CONTEST",
+    `${receiver.lname} can't hang onto it despite the space — ${recoverer.lname} reacts first to the loose ball`,
+    [receiver.PlayerID, recoverer.PlayerID],
+    [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }, { playerId: receiver.PlayerID, stat: "clangers", delta: 1 }, ...extraDeltas],
+  );
+  return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
+}
+
+/**
+ * See `resolveUncontestedMarkOutcome`'s own doc comment — the handball counterpart, extracted from
+ * `runHandballContest`'s own local `attemptCleanReceive` closure. `isPressured` defaults false (matching
+ * `runHandballContest`'s own call, which never sets it); the collapsed pressured-carrier call site
+ * passes `true` to preserve round 109's `isPressured`/`playerIds[1]`-as-defender convention for
+ * ground.ts's windup rendering — see `runGeneralPlay`'s own pressured handball branch for that
+ * convention's full doc comment. That flag is about the CARRIER's own pressure situation, unrelated to
+ * whether the RECEPTION collapses.
+ */
+function resolveUncontestedHandballOutcome(
+  ctx: Ctx,
+  zone: Zone,
+  possessingSide: Side,
+  receiver: Player,
+  defendingSide: Side,
+  defendingTeam: MatchTeam,
+  successLabel: string,
+  successPlayerIds: number[],
+  extraDeltas: StatDelta[] = [],
+  isPressured = false,
+): State {
+  const executionRating = computeContestRating(receiver, ["skill", "agility", "copeWithPressure"]) * conditionMultiplierFor(ctx, possessingSide, receiver);
+  if (resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
+    log(ctx, zone, possessingSide, "HANDBALL_CONTEST", successLabel, successPlayerIds, extraDeltas, false, undefined, isPressured);
+    return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
+  }
+  const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
+  snapZoneBlindPick(ctx, recoverer, zone, defendingTeam);
+  lineFor(ctx, receiver).turnovers += 1;
+  lineFor(ctx, receiver).clangers += 1;
+  ctx.lastEffectiveDisposal = null;
+  log(
+    ctx,
+    zone,
+    defendingSide,
+    "HANDBALL_CONTEST",
+    `${receiver.lname} spills the handball despite the space — ${recoverer.lname} reacts first to the loose ball`,
+    [receiver.PlayerID, recoverer.PlayerID],
+    [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }, { playerId: receiver.PlayerID, stat: "clangers", delta: 1 }, ...extraDeltas],
+  );
+  return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
 }
 
 /**
@@ -3038,11 +3202,24 @@ function resolveUnpressuredDisposal(
     const receiver = receiverPick.player;
     const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    // Round C140 — see MARKING_DUEL_RANGE_DISTANCE's own doc comment (backlog #102): a kick landing
+    // beyond that radius is a GUARANTEED uncontested mark — runMarkingContest's own gate would resolve
+    // it exactly this way one tick later regardless — so resolve it right here, same tick, instead of
+    // spending a whole extra decision tick narrating a catch nobody was ever going to contest. The
+    // genuinely contested/missed cases below are untouched: still a full tick later via
+    // MARKING_CONTEST, preserving round 24-27's reveal for outcomes that are actually in doubt.
+    if (!missed && markDistance > MARKING_DUEL_RANGE_DISTANCE) {
+      ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
+      return resolveUncontestedMarkOutcome(
+        ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, true,
+        unpressuredKickInstantMarkPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, isLongKick),
+        [carrier.PlayerID, receiver.PlayerID],
+        disposalDeltas,
+      );
+    }
     const kickLabel = missed
       ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname)
-      : proximityWeight(markDistance) === 0
-        ? unpressuredKickCleanPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, isLongKick)
-        : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
+      : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
     // launch, not reception — if the reception later fails, whichever site resolves that failure
     // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
@@ -3081,11 +3258,20 @@ function resolveUnpressuredDisposal(
     // independent weightedKickTarget call.
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    // Round C140 — see this function's own shot-chance branch above for the full "why": a kick landing
+    // beyond MARKING_DUEL_RANGE_DISTANCE is a guaranteed uncontested mark, resolved same-tick.
+    if (!missed && markDistance > MARKING_DUEL_RANGE_DISTANCE) {
+      ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
+      return resolveUncontestedMarkOutcome(
+        ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, false,
+        unpressuredKickInstantMarkPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, false),
+        [carrier.PlayerID, receiver.PlayerID],
+        disposalDeltas,
+      );
+    }
     const kickLabel = missed
       ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname)
-      : proximityWeight(markDistance) === 0
-        ? unpressuredKickCleanPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, false)
-        : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
+      : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], disposalDeltas, true);
@@ -3104,6 +3290,19 @@ function resolveUnpressuredDisposal(
   const handballPick = handballCandidate;
   const receiver = handballPick.player;
   const handballTargetUnderPressure = proximityWeight(handballPick.distance) !== 0;
+  // Round C140 — see MARKING_DUEL_RANGE_DISTANCE's own doc comment (backlog #102) for the kick side of
+  // this same fix. `!handballTargetUnderPressure` is exactly runHandballContest's own uncontested gate
+  // (proximityWeight(distance) === 0) — a guaranteed clean reception, resolved same-tick rather than
+  // spending an extra tick on a foregone-conclusion catch. Genuinely-pressured receptions are untouched.
+  if (!handballTargetUnderPressure) {
+    ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
+    return resolveUncontestedHandballOutcome(
+      ctx, newZone, state.possession, receiver, defendingSide, defendingTeam,
+      unpressuredHandballInstantPhrase(ctx, carrier.lname, receiver.lname, standingTheMark),
+      [carrier.PlayerID, receiver.PlayerID],
+      disposalDeltas,
+    );
+  }
   const handballLabel = unpressuredHandballPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, handballTargetUnderPressure);
   // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
   ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
@@ -3127,20 +3326,13 @@ function resolveUnpressuredDisposal(
  * function instead (see `runGeneralPlay`'s own top-of-function check), so a
  * genuinely pressured disposal (a live `defender` who just attempted a
  * tackle) can never also be a standing-the-mark one.
+ *
+ * Round C140 — `pressuredKickCleanPhrase` (the `isLongKick` clean-reception branch this doc comment
+ * originally anchored) is deleted: it covered exactly `proximityWeight(markDistance) === 0`, which is
+ * now a GUARANTEED uncontested mark resolved same-tick via `pressuredKickInstantMarkPhrase` instead —
+ * see `MARKING_DUEL_RANGE_DISTANCE`'s own doc comment (backlog #102).
  */
-function pressuredKickCleanPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string, isLongKick: boolean): string {
-  const phrases: ((c: string, d: string, r: string) => string)[] = isLongKick
-    ? [
-        (c, d, r) => `${c} gets it away long under pressure from ${d}, ${r} leading into space`,
-        (c, d, r) => `Under pressure from ${d}, ${c} still finds the long option — ${r} leading into space`,
-      ]
-    : [
-        (c, d, r) => `${c} gets it away under pressure from ${d} and finds ${r} leading into space`,
-        (c, d, r) => `Under pressure from ${d}, ${c} still finds ${r} leading into space`,
-      ];
-  return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
-}
-/** See `pressuredKickCleanPhrase`'s own doc comment. Covers the "strongly attended" contested-target branch. */
+/** See the Round C140 note above. Covers the "strongly attended" contested-target branch. */
 function pressuredKickContestedPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string): string {
   const phrases: ((c: string, d: string, r: string) => string)[] = [
     (c, d, r) => `${c} gets it away under pressure from ${d}, straight into a contest — ${r} is strongly attended`,
@@ -3156,17 +3348,22 @@ function pressuredKickMissedPhrase(ctx: Ctx, carrier: string, defender: string, 
   ];
   return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
 }
-/** See `pressuredKickCleanPhrase`'s own doc comment. `targetUnderPressure` is the receiver's own separate contest situation — same distinction `unpressuredHandballPhrase` draws — not to be confused with the carrier's own pressure from `defender`. */
-function pressuredHandballPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string, targetUnderPressure: boolean): string {
-  const phrases: ((c: string, d: string, r: string) => string)[] = targetUnderPressure
-    ? [
-        (c, d, r) => `${c} looks for the outlet under pressure from ${d} — ${r} is under pressure too`,
-        (c, d, r) => `Under pressure from ${d}, ${c} finds ${r} with a handball, straight into more pressure`,
-      ]
-    : [
-        (c, d, r) => `${c} gets a handball away under pressure from ${d}, ${r} finds space`,
-        (c, d, r) => `Under pressure from ${d}, ${c} still finds ${r} with a handball`,
-      ];
+/**
+ * See the Round C140 note above (`pressuredKickCleanPhrase`'s own doc comment, deleted). `targetUnderPressure`
+ * is the receiver's own separate contest situation — same distinction `unpressuredHandballPhrase` drew —
+ * not to be confused with the carrier's own pressure from `defender`.
+ *
+ * Round C140 — the `!targetUnderPressure` branch is gone: it covered exactly
+ * `proximityWeight(handballPick.distance) === 0`, now a GUARANTEED clean reception resolved same-tick
+ * via `pressuredHandballInstantPhrase` instead. Only the genuinely-uncertain `targetUnderPressure` case
+ * still reaches this function.
+ */
+function pressuredHandballPhrase(ctx: Ctx, carrier: string, defender: string, receiver: string, _targetUnderPressure: boolean): string {
+  void _targetUnderPressure; // always true at the one remaining call site — kept as a param so that call reads unchanged
+  const phrases: ((c: string, d: string, r: string) => string)[] = [
+    (c, d, r) => `${c} looks for the outlet under pressure from ${d} — ${r} is under pressure too`,
+    (c, d, r) => `Under pressure from ${d}, ${c} finds ${r} with a handball, straight into more pressure`,
+  ];
   return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, defender, receiver);
 }
 
@@ -3681,11 +3878,22 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     const receiver = receiverPick.player;
     const isLongKick = receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    // Round C140 — see MARKING_DUEL_RANGE_DISTANCE's own doc comment (backlog #102): same same-tick
+    // collapse as resolveUnpressuredDisposal's own shot-chance branch, for the pressured-carrier case.
+    // `defender` here is the tackler the CARRIER evaded — unrelated to whether the RECEPTION itself
+    // (guaranteed clean here) is contested.
+    if (!missed && markDistance > MARKING_DUEL_RANGE_DISTANCE) {
+      ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
+      return resolveUncontestedMarkOutcome(
+        ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, true,
+        pressuredKickInstantMarkPhrase(ctx, carrier.lname, defender.lname, receiver.lname, isLongKick),
+        [carrier.PlayerID, receiver.PlayerID, defender.PlayerID],
+        disposalDeltas,
+      );
+    }
     const kickLabel = missed
       ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname)
-      : proximityWeight(markDistance) === 0
-        ? pressuredKickCleanPhrase(ctx, carrier.lname, defender.lname, receiver.lname, isLongKick)
-        : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
+      : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
     // launch, not reception — if the reception later fails, whichever site resolves that failure
     // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
@@ -3722,11 +3930,19 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // independent weightedKickTarget call.
     const receiver = receiverPick.player;
     const { distance: markDistance, missed } = resolveLongKickExecution(ctx, carrier, receiverPick);
+    // Round C140 — see this function's own shot-chance branch above for the full "why".
+    if (!missed && markDistance > MARKING_DUEL_RANGE_DISTANCE) {
+      ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
+      return resolveUncontestedMarkOutcome(
+        ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, false,
+        pressuredKickInstantMarkPhrase(ctx, carrier.lname, defender.lname, receiver.lname, false),
+        [carrier.PlayerID, receiver.PlayerID, defender.PlayerID],
+        disposalDeltas,
+      );
+    }
     const kickLabel = missed
       ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname)
-      : proximityWeight(markDistance) === 0
-        ? pressuredKickCleanPhrase(ctx, carrier.lname, defender.lname, receiver.lname, false)
-        : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
+      : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID, defender.PlayerID], disposalDeltas, true);
@@ -3745,6 +3961,23 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   const handballPick = handballCandidate;
   const receiver = handballPick.player;
   const handballTargetUnderPressure = proximityWeight(handballPick.distance) !== 0;
+  // Round C140 — see MARKING_DUEL_RANGE_DISTANCE's own doc comment (backlog #102) for the kick side of
+  // this same fix. `!handballTargetUnderPressure` is runHandballContest's own uncontested gate
+  // (proximityWeight(distance) === 0) — a guaranteed clean reception, resolved same-tick. `isPressured:
+  // true` and `defender` at playerIds[1] are preserved unchanged from the deleted generic line's own
+  // round 109 convention (see the comment just below, kept for the still-live 2-tick branch) — that
+  // flag is about the CARRIER's own pressure situation for ground.ts's windup rendering, unrelated to
+  // whether the RECEPTION collapses.
+  if (!handballTargetUnderPressure) {
+    ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
+    return resolveUncontestedHandballOutcome(
+      ctx, newZone, state.possession, receiver, defendingSide, defendingTeam,
+      pressuredHandballInstantPhrase(ctx, carrier.lname, defender.lname, receiver.lname),
+      [carrier.PlayerID, defender.PlayerID, receiver.PlayerID],
+      disposalDeltas,
+      true,
+    );
+  }
   const handballLabel = pressuredHandballPhrase(ctx, carrier.lname, defender.lname, receiver.lname, handballTargetUnderPressure);
   // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
   ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
@@ -4260,54 +4493,24 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   // attacker-wins branch). Shared by the genuinely-in-the-clear branch below
   // and the (defensive-only, see this function's own doc comment)
   // nearbyDefenders fallback.
-  const attemptUncontestedMark = (): State => {
-    const executionRating =
-      computeContestRating(receiver, ["manMarking", "strengthOverhead", "verticalLeap"]) *
-      conditionMultiplierFor(ctx, possessingSide, receiver);
-    if (resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
-      lineFor(ctx, receiver).marks += 1;
-      // Aug 2026 round 54 — [[Season Stats and Records]]: reuses the existing zone system unchanged.
-      const isMarkInside50 = isForward50(zone, possessingSide);
-      if (isMarkInside50) lineFor(ctx, receiver).marksInside50 += 1;
-      // Aug 2026 round 92 — see standTheMark's own doc comment: never applied ahead of a SHOT, only
-      // the GENERAL_PLAY continuation below.
-      if (!state.markContestIsShotChance) standTheMark(ctx, receiver.PlayerID, possessingSide);
-      log(ctx, zone, possessingSide, "MARKING_CONTEST", `${receiver.lname} marks it, leading into space`, [receiver.PlayerID], [
-        { playerId: receiver.PlayerID, stat: "marks", delta: 1 },
-        ...(isMarkInside50 ? [{ playerId: receiver.PlayerID, stat: "marksInside50" as const, delta: 1 }] : []),
-      ]);
-      // Aug 2026 round 38 — Finding 3: see State.shotContext's own doc comment. Always "mark" — this function only ever resolves a kick reception, never a ground ball.
-      if (state.markContestIsShotChance) return { phase: "SHOT", zone, possession: possessingSide, carrier: receiver, shotContext: "mark" };
-      // Aug 2026 round 27 — a clean mark outside a shot chance simply
-      // continues general play, receiver as the new carrier. `carrierUncontested`
-      // matters here in a way it never did for this branch before this round:
-      // this return path used to always be `SHOT`, which never reads that
-      // flag, so it was never needed. See State.carrierUncontested's own doc
-      // comment for what reading it a tick later actually credits.
-      // Aug 2026 round 92 — `carrierStandingTheMark: true`, see that field's own doc comment.
-      return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true, carrierStandingTheMark: true };
-    }
-    const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
-    // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
-    // a genuine zone-blind pick, so lane needs the same fix, not just zone.
-    snapZoneBlindPick(ctx, recoverer, zone, defendingTeam);
-    // Aug 2026 round 55 — see resolveUncontestedGather's own identical-shaped comment for the full
-    // rationale (recoverer always defendingSide here -> always a turnover; no matching
-    // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
-    lineFor(ctx, receiver).turnovers += 1;
-    lineFor(ctx, receiver).clangers += 1;
-    ctx.lastEffectiveDisposal = null;
-    log(
+  //
+  // Round C140 — the actual resolution is now `resolveUncontestedMarkOutcome`, extracted so the SAME
+  // logic can also run inline, one tick earlier, for a kick that's already a guaranteed uncontested
+  // mark at launch time (see that function's own doc comment, and MARKING_DUEL_RANGE_DISTANCE's,
+  // backlog #102). This wrapper passes the ORIGINAL receiver-only text and no extra deltas, so this
+  // function's own two-tick path is byte-for-byte unchanged by that round.
+  const attemptUncontestedMark = (): State =>
+    resolveUncontestedMarkOutcome(
       ctx,
       zone,
+      possessingSide,
+      receiver,
       defendingSide,
-      "MARKING_CONTEST",
-      `${receiver.lname} can't hang onto it despite the space — ${recoverer.lname} reacts first to the loose ball`,
-      [receiver.PlayerID, recoverer.PlayerID],
-      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }, { playerId: receiver.PlayerID, stat: "clangers", delta: 1 }],
+      defendingTeam,
+      state.markContestIsShotChance ?? false,
+      `${receiver.lname} marks it, leading into space`,
+      [receiver.PlayerID],
     );
-    return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
-  };
 
   // Round C139 — MARKING_DUEL_RANGE_DISTANCE, not the shared PROXIMITY_RANGE_DISTANCE, decides
   // contested-vs-uncontested here — see that constant's own doc comment for the full diagnosis.
@@ -4525,34 +4728,22 @@ function runHandballContest(ctx: Ctx, state: State): State {
   // uses (CONTEST_EXECUTION_DIFFICULTY) — see that constant's own doc comment
   // for why a handball reception's contested case adds a separate pressure
   // term on top rather than branching to a different roll shape entirely.
-  const attemptCleanReceive = (): State => {
-    const executionRating =
-      computeContestRating(receiver, ["skill", "agility", "copeWithPressure"]) * conditionMultiplierFor(ctx, possessingSide, receiver);
-    if (resolveThreshold(executionRating, CONTEST_EXECUTION_DIFFICULTY, ctx.rng).success) {
-      log(ctx, zone, possessingSide, "HANDBALL_CONTEST", `${receiver.lname} takes the handball cleanly in space`, [receiver.PlayerID]);
-      return { phase: "GENERAL_PLAY", zone, possession: possessingSide, carrier: receiver, carrierUncontested: true };
-    }
-    const recoverer = weightedPlayerChoice(ctx.rng, defendingSide, defendingTeam, zone);
-    // Sep 2026 round 110 — see snapZoneBlindPick's own doc comment: this is
-    // a genuine zone-blind pick, so lane needs the same fix, not just zone.
-    snapZoneBlindPick(ctx, recoverer, zone, defendingTeam);
-    // Aug 2026 round 55 — see resolveUncontestedGather's own identical-shaped comment for the full
-    // rationale (recoverer always defendingSide here -> always a turnover; no matching
-    // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
-    lineFor(ctx, receiver).turnovers += 1;
-    lineFor(ctx, receiver).clangers += 1;
-    ctx.lastEffectiveDisposal = null;
-    log(
+  // Round C140 — delegates to `resolveUncontestedHandballOutcome` (extracted so a kick/handball that's
+  // already a guaranteed clean reception at launch time can resolve inline, one tick earlier — see that
+  // function's own doc comment and MARKING_DUEL_RANGE_DISTANCE's, backlog #102). Passing the ORIGINAL
+  // receiver-only text and no extra deltas keeps this function's own two-tick path byte-for-byte
+  // unchanged by that round.
+  const attemptCleanReceive = (): State =>
+    resolveUncontestedHandballOutcome(
       ctx,
       zone,
+      possessingSide,
+      receiver,
       defendingSide,
-      "HANDBALL_CONTEST",
-      `${receiver.lname} spills the handball despite the space — ${recoverer.lname} reacts first to the loose ball`,
-      [receiver.PlayerID, recoverer.PlayerID],
-      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }, { playerId: receiver.PlayerID, stat: "clangers", delta: 1 }],
+      defendingTeam,
+      `${receiver.lname} takes the handball cleanly in space`,
+      [receiver.PlayerID],
     );
-    return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
-  };
 
   if (proximityWeight(distance) === 0) return attemptCleanReceive();
 

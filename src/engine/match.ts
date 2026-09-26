@@ -470,7 +470,48 @@ export interface SimulateMatchOptions {
  * `TICK_RATE_MULTIPLIER` constant itself, not a literal bump to `DEFAULT_TICKS_PER_QUARTER`.
  */
 const TICK_RATE_MULTIPLIER = 5;
-const DEFAULT_TICKS_PER_QUARTER = 130;
+/**
+ * Phase 6 rebalancing pass — raised from the original 130 to 300
+ * (x2.31) after Tyler reported sims finishing ~46-9 with a 20-disposal top
+ * game, both ~40% under real AFL norms, and named record-breaking games as
+ * something that should stay rare, not routine. Confirmed via
+ * `scripts/calibrate_phase6_ticks.ts` (a throwaway calibration run trying
+ * several candidate values against real simulated output, per Tyler's own
+ * steer to nail the number down before touching this file) that decision-tick
+ * volume is the actual bottleneck — every individual probability (contest
+ * win rates, shot geometry, archetype bonuses) was already correctly
+ * calibrated in rounds 41-108, there just weren't enough total decision
+ * events in a match for realistic per-player/per-team totals to emerge.
+ *
+ * The calibration run surfaced a genuine tension, not solved by this number
+ * alone: team SCORES scale roughly as ticksPerQuarter^1.23 (more, longer
+ * possession chains compound into disproportionately more scoring shots),
+ * while DISPOSALS scale almost exactly linearly with ticksPerQuarter. A
+ * multiplier that lands scores at real AFL norms (~mid-80s per team) — this
+ * one — leaves team disposal totals still well under the real ~380-400
+ * (this build lands ~220 per team), even though PER-PLAYER disposal
+ * DISTRIBUTION already looks right at this same value (avg top disposal-
+ * getter ~26, occasional real 40-disposal games — Tyler's own "rare, not
+ * routine" ask, met). Getting team disposal TOTALS the rest of the way to
+ * real levels would need roughly x4 instead of x2.31, which would overshoot
+ * scores to 150+ per team. Tyler's own steer (asked directly once this
+ * tension was found): fix scores now with this number, treat the remaining
+ * team-disposal-total gap as its own future round rather than solve both
+ * with one lever — a second, independent mechanism (e.g. how many decision
+ * events resolve as a genuine disposal vs. a contest/stoppage) is the
+ * correct next lever, not more raw tick volume. See [[Phase 6 Rebalancing
+ * Pass]] for the full calibration numbers and reasoning.
+ *
+ * `TACKLE_HOLD_DOWN_TICKS`, `RUCK_TAP_HOLD_DOWN_TICKS`,
+ * `FITNESS_CHECK_INTERVAL_TICKS`, `MIN_BENCH_REST_TICKS`,
+ * `ON_GROUND_FITNESS_DRAIN`, and `BENCH_FITNESS_RECOVERY` are all keyed on
+ * this same `ctx.tick` axis (per round 106's own doc comment above,
+ * confirming which constants would need rescaling if this value ever
+ * changed) — all six rescaled by this same x2.31 ratio alongside this
+ * constant, in the same round, so their real-world "how many possessions/
+ * how much match time does this represent" meaning is unchanged.
+ */
+const DEFAULT_TICKS_PER_QUARTER = 300;
 
 // --- Placeholder probabilities — "deliberately roughed in" per Engine.md's own framing of
 // every other tactics/game-style number, and exactly what the balance simulator (see
@@ -994,7 +1035,9 @@ const TACKLE_ATTEMPT_HANDICAP = 37;
  * dropping a mark/ground-ball gather, isn't the same physical moment as being
  * pulled to ground, so neither leaves anyone grounded.
  */
-const TACKLE_HOLD_DOWN_TICKS = 2;
+// Phase 6 rebalancing pass: rescaled 2 -> 5 (x2.31, same ratio as DEFAULT_TICKS_PER_QUARTER's own 130->300 change)
+// so this still represents the same real slice of a match — see that constant's own doc comment.
+const TACKLE_HOLD_DOWN_TICKS = 5;
 
 /**
  * Aug 2026 round 48 — [[Interchange Rotation]]. Tyler: "During the match sim
@@ -1015,15 +1058,23 @@ const TACKLE_HOLD_DOWN_TICKS = 2;
  * them — see this section's own top doc comment.
  */
 /** How often (in ticks) automatic rotation is even considered — not every tick, so a swap reads as a periodic, deliberate-feeling interchange rather than a jittery tick-by-tick fitness chase. Comfortably more than one full check needs to land inside a quarter (DEFAULT_TICKS_PER_QUARTER = 130) to feel "periodic... during the match", not just "once at the very end". */
-export const FITNESS_CHECK_INTERVAL_TICKS = 15;
+// Phase 6 rebalancing pass: rescaled 15 -> 35 (x2.31, same ratio as DEFAULT_TICKS_PER_QUARTER's own 130->300 change)
+// so a check still lands about as often relative to a quarter's length as before.
+export const FITNESS_CHECK_INTERVAL_TICKS = 35;
 /** Fitness lost per tick spent on-ground. Calibrated so a fresh (100) player run flat-out for a whole quarter with no rotation at all lands in the high-50s — comfortably below FITNESS_ROTATION_THRESHOLD, never actually reaching FITNESS_FLOOR on its own within one quarter. */
-export const ON_GROUND_FITNESS_DRAIN = 0.3;
+// Phase 6 rebalancing pass: rescaled 0.3 -> 0.13 (divided by the same x2.31 ratio as DEFAULT_TICKS_PER_QUARTER's own
+// 130->300 change, since more ticks per quarter means drain-per-tick must shrink to keep the same
+// total drain across a full quarter — see that constant's own doc comment).
+export const ON_GROUND_FITNESS_DRAIN = 0.13;
 /** Fitness recovered per tick spent on the bench — several times the drain rate, Tyler's own "give him a moment to recharge": a real rest stint should visibly matter within the span of a few checks, not merely edge ahead of continuing to play. */
-export const BENCH_FITNESS_RECOVERY = 1.2;
+// Phase 6 rebalancing pass: rescaled 1.2 -> 0.52 (divided by the same x2.31 ratio, same reasoning as
+// ON_GROUND_FITNESS_DRAIN's own rescale above).
+export const BENCH_FITNESS_RECOVERY = 0.52;
 /** Below this, a group's lowest on-ground player becomes a genuine automatic-rotation candidate (subject to an eligible, sufficiently-rested bench replacement actually being available — see `rotateSideForFitness`). */
 export const FITNESS_ROTATION_THRESHOLD = 70;
 /** Minimum ticks a player must have spent on the bench before being eligible to rotate back on — stops an immediate ping-pong swap-back the very next check once they've barely recovered. Deliberately more than one FITNESS_CHECK_INTERVAL_TICKS cycle. */
-export const MIN_BENCH_REST_TICKS = 25;
+// Phase 6 rebalancing pass: rescaled 25 -> 58 (x2.31, same ratio as DEFAULT_TICKS_PER_QUARTER's own 130->300 change).
+export const MIN_BENCH_REST_TICKS = 58;
 /** A floor so a player stuck on-ground with no eligible replacement available degrades, not breaks — same "meaningfully worse, never zeroed out" spirit as progression.ts's MIN_CONDITION. */
 export const FITNESS_FLOOR = 20;
 
@@ -2122,8 +2173,8 @@ function runThrowIn(ctx: Ctx, zone: Zone, displaySide: Side): State {
  * who contests or how; see its own inline comment for why it can't just
  * reuse `useSecondaryRuck`.
  */
-/** Aug 2026 round 92 — see the ruck-tap hold-down's own doc comment (inside this function, at the `ctx.groundedUntilTick.set(ruckWinner...)` call) for the full "why". Deliberately short: just long enough to skip the one immediately-following clearance. */
-const RUCK_TAP_HOLD_DOWN_TICKS = 1;
+/** Aug 2026 round 92 — see the ruck-tap hold-down's own doc comment (inside this function, at the `ctx.groundedUntilTick.set(ruckWinner...)` call) for the full "why". Deliberately short: just long enough to skip the one immediately-following clearance. Phase 6 rebalancing round: rescaled 1 -> 2 (x2.31, same ratio as DEFAULT_TICKS_PER_QUARTER's own 130->300 change — see that constant's own doc comment). */
+const RUCK_TAP_HOLD_DOWN_TICKS = 2;
 
 function resolveRuckTap(ctx: Ctx, zone: Zone, displaySide: Side, useSecondaryRuck: boolean, stoppageType: "centreBounce" | "throwIn"): State {
   // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Both a centre bounce

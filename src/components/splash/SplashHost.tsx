@@ -3,9 +3,12 @@ import { clubById, clubByName } from "../../types/club";
 import { getPlayerById } from "../../data/loadPlayers";
 import { playerFullName } from "../../types/player";
 import { groundForMatch } from "../../data/clubGrounds";
-import { STADIUM_CONFIGS } from "../../data/stadiums";
+import { STADIUM_CONFIGS, type AFLStadium } from "../../data/stadiums";
 import { SPECIAL_EVENTS } from "../../data/specialEvents";
 import { finalsPlayed, type Season } from "../../engine/season";
+import { awardsFor } from "../../engine/medalVotes";
+import type { MatchResult } from "../../engine/match";
+import type { MatchTeam } from "../../engine/team";
 import { buildSplash, type SpecialMatch } from "../../narrative/splashData";
 import type { NarrativeHistory } from "../../narrative/phraseEngine";
 import { useCareerStore, DEFAULT_COACH_NAME } from "../../store/useCareerStore";
@@ -103,6 +106,78 @@ export function SplashHost({
       onClose={onClose ? leave(onClose) : undefined}
     />
   );
+}
+
+/**
+ * Big Game Splash — Grand Final exhibition variant (round 133). Round 128's GF exhibition mode
+ * deliberately has no season/finals fixture entry for `findSpecialMatch` to find (see that round's own
+ * doc comment in `LiveMatch.tsx`'s `kickOffGrandFinal`) — it's an isolated one-off match that never
+ * touches `useSeasonStore`. So this builds a fully synthetic, ephemeral `SpecialMatch` + `SplashVM`
+ * directly from the exhibition's own result, in memory only: no `markSplashSeen`, no phrase-history
+ * write-back, and no season/save mutation of any kind. `applyBigGameHonours` (which writes medals/
+ * premiership-player flags to player career records) only ever walks `season.played`/`season.finals`,
+ * so an exhibition match that's never added to season state already can't reach it — nothing extra to
+ * guard against there. If no season is loaded at all, this renders nothing (matching `SplashHost`'s own
+ * `if (!season || !match) return null`), and the exhibition falls through to its ordinary full-time
+ * screen instead of a broken splash.
+ */
+export function ExhibitionSplashHost({
+  result,
+  home,
+  away,
+  venue,
+  gfSide,
+  seed,
+  onContinue,
+  onReplay,
+}: {
+  result: MatchResult;
+  home: MatchTeam;
+  away: MatchTeam;
+  venue: AFLStadium;
+  /** The real club name the coach is playing as in the exhibition. */
+  gfSide: string;
+  seed: number | null;
+  onContinue: () => void;
+  onReplay?: () => void;
+}) {
+  const season = useSeasonStore((s) => s.season);
+  const seasonArchives = useSaveStore((s) => s.seasonArchives);
+  const year = useSaveStore((s) => s.year);
+  const myClubId = clubByName(gfSide)?.ClubID ?? -1;
+
+  // Built once per match, same "picked once, don't reshuffle under the coach" rule as SplashHost's own
+  // `vm` — but never written back anywhere, since there's no season match record to attach picks to.
+  const [vm] = useState(() => {
+    if (!season) return null;
+    const homeClubId = clubByName(home.name)?.ClubID ?? -1;
+    const awayClubId = clubByName(away.name)?.ClubID ?? -1;
+    const awards = awardsFor({
+      event: "grandFinal",
+      matchId: `gf-exhibition:${seed ?? 0}:${homeClubId}-${awayClubId}`,
+      result,
+      home,
+      away,
+      stadium: venue,
+    });
+    const match: SpecialMatch = { key: "GF", homeClubId, awayClubId, result, awards, splashSeen: false };
+    const career = useCareerStore.getState();
+    const history = structuredClone(career.narrative.history) as NarrativeHistory;
+    return buildSplash({
+      match,
+      myClubId,
+      season,
+      seasonArchives,
+      year,
+      coach: career.coach ?? { name: DEFAULT_COACH_NAME },
+      saveId: career.saveId ?? "legacy",
+      venue: venue.commonName,
+      history,
+    });
+  });
+
+  if (!vm) return null;
+  return <BigGameSplash vm={vm} myAbbr={clubById(myClubId)?.abbreviation ?? ""} onContinue={onContinue} onReplay={onReplay} />;
 }
 
 /** "Medal" chip for a match report the coach's club played in: reopens the splash. */

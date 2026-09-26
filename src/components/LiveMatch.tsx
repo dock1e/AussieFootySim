@@ -46,7 +46,7 @@ import { LiveBoard, MoversWidget, PlayByPlayWidget, DangerMenWidget, baselineFpA
 import { useMatchStoryStore } from "../store/useMatchStoryStore";
 import { generateMatchCoachesVotes } from "../engine/coachesVotes";
 import { FullTimeResult } from "./FullTimeResult";
-import { SplashHost, findSpecialMatch } from "./splash/SplashHost";
+import { SplashHost, findSpecialMatch, ExhibitionSplashHost } from "./splash/SplashHost";
 import type { CoachesVoteMatchRef } from "../store/useSeasonStore";
 import { QuarterTimeDecisionRoom } from "./QuarterTimeDecisionRoom";
 import { PlayerMatchDrawer } from "./PlayerMatchDrawer";
@@ -666,6 +666,32 @@ export function LiveMatch({
         {stepper}
         <SplashHost
           matchRef={specialRef!}
+          onContinue={() => setSplashDismissed(true)}
+          onReplay={() => {
+            setSplashDismissed(true);
+            playback.restart();
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Round 133 — the GF exhibition (round 128) never sets `special: true` (by design, see
+  // `kickOffGrandFinal`'s own doc comment), so the branch above never fires for it. This is a separate
+  // gate, keyed on `gfSide` (only ever non-null for a GF exhibition match) rather than `active.special`,
+  // that shows the same Big Game Splash built from a fully synthetic, ephemeral match record instead of
+  // a season-recorded one — see `ExhibitionSplashHost`'s own doc comment for why that's safe.
+  if (atFullTime && result && gfSide && !splashDismissed) {
+    return (
+      <div className="flex flex-col gap-3">
+        {stepper}
+        <ExhibitionSplashHost
+          result={result}
+          home={homeTeam}
+          away={awayTeam}
+          venue={venue}
+          gfSide={gfSide}
+          seed={lastSeed}
           onContinue={() => setSplashDismissed(true)}
           onReplay={() => {
             setSplashDismissed(true);

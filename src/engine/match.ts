@@ -3,7 +3,7 @@ import type { Archetype, Position } from "../types/archetype.ts";
 import type { Rng } from "./rng.ts";
 import { computeContestRating, resolveContest, resolveThreshold } from "./contest.ts";
 import type { ContestType } from "./contestTypes.ts";
-import { advanceZone, isForward50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
+import { advanceZone, isForward50, isDefensive50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
 import { bestByRating, onGroundPlayers, benchPlayers } from "./team.ts";
 import { weightedPlayerChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
@@ -190,6 +190,43 @@ export interface BoxScoreLine {
    * (`engine/development.ts`), aggregated directly off `season.played[].result.boxScore`.
    */
   brownlowVotes: number;
+  // --- Round 135, [[Season Statistics Balance Pass]] — 5 stats Tyler asked to see in the season
+  // trend review that turned out to have NO counter anywhere in the engine at all (a structural gap,
+  // not a miscalibration): inside50s, one-percenters, rebound50s, bounces, clangers. 6 fields for 5
+  // stats — `smothers` is the new sub-mechanism `onePercenters` rolls up from, mirroring the existing
+  // spoils/interceptMarks/interceptPossessions pattern (a detail stat plus its own umbrella total).
+  /** A kick (or a Run and Carry bounce-through) that moves the ball from outside this side's attacking
+   * 50 to inside it — Champion Data's own "Inside 50" definition, credited to whoever executed the
+   * entry. NOT the same stat as `marksInside50` (a mark taken once already inside 50) — see
+   * `zoneEntryDeltas`'s own doc comment for exactly where this is credited. */
+  inside50s: number;
+  /** The mirror of `inside50s`: a kick (or bounce-through) that moves the ball OUT of this side's own
+   * defensive 50, credited to whoever executed the clearance. */
+  rebound50s: number;
+  /** A Run and Carry tick that actually fires (see `P_RUN_AND_CARRY_BASE`) — the loop's own existing
+   * flavour text already narrates "bouncing along the way" per successful tick; this is the first
+   * stat field that reads it. */
+  bounces: number;
+  /** A defensive win in a groundBall-type contest (never a marking contest — that's `spoils`'s own
+   * territory) that's rolled to be a genuine smother/knock-on rather than a plain contested-possession
+   * win — see `P_GROUNDBALL_WIN_IS_SMOTHER`'s own doc comment. Additive: doesn't change the existing
+   * contestedPoss/interceptPossessions crediting for that same win, just tags some of those wins with
+   * this extra, more specific signal. */
+  smothers: number;
+  /** Real AFL's "one percenters" umbrella — smothers, spoils, knock-ons, and shepherds combined per
+   * Champion Data's own definition. This engine only has smothers and spoils as discrete defensive
+   * events (no shepherd/genuine-knock-on mechanic exists), so `onePercenters` is deliberately scoped
+   * as `spoils + smothers` here, credited alongside each at the moment either fires — a disclosed
+   * simplification, not the full real-AFL definition. */
+  onePercenters: number;
+  /** Real AFL's "clangers" umbrella — this engine's `turnovers` field already covers the possession-
+   * error half faithfully (see that field's own doc comment); `clangers` is `turnovers` passed through
+   * unconditionally, PLUS a new, separately-rolled "missed a gettable shot" credit for a straight,
+   * close-range shot that still misses everything — see `runShot`'s own `clangerTend`-scaled roll for
+   * exactly which misses qualify. Deliberately does NOT touch or re-roll any existing turnover/shot
+   * probability — see this stat's own design note for why that's scoped separately, as calibration
+   * work rather than bookkeeping. */
+  clangers: number;
 }
 
 function emptyLine(): BoxScoreLine {
@@ -230,6 +267,12 @@ function emptyLine(): BoxScoreLine {
     goalAssists: 0,
     coachesVotes: 0,
     brownlowVotes: 0,
+    inside50s: 0,
+    rebound50s: 0,
+    bounces: 0,
+    smothers: 0,
+    onePercenters: 0,
+    clangers: 0,
   };
 }
 
@@ -839,6 +882,18 @@ const FAVOURED_SIDE_CLEARANCE_BONUS = 1.3;
 /** See its own use in `runShot` — the share of a shot that "misses everything" (not a behind) that goes out of bounds for a throw-in, gap #73. */
 const P_MISS_BECOMES_THROW_IN = 0.5;
 /**
+ * Round 135 — [[Season Statistics Balance Pass]]: `runShot`'s own clangers mechanism. A "gettable"
+ * shot is a set shot close enough and straight enough that missing it entirely is a genuine miscue,
+ * not bad luck on a long, angled attempt — `shotGeometry`'s `depth` (real metres, floor 2/cap 60)
+ * and `angleSeverity` (0 = dead square, toward 1 = boundary-tight) are already computed by the time
+ * this fires, reused unchanged. Reasoned thresholds, not derived from any cited source — same
+ * disclosed-placeholder status as every other named probability/threshold in this file.
+ */
+const CLANGER_GETTABLE_DEPTH_MAX = 25;
+const CLANGER_GETTABLE_ANGLE_MAX = 0.2;
+/** See `CLANGER_GETTABLE_DEPTH_MAX`'s own doc comment — the base chance a gettable miss gets logged as a clanger, scaled by `shooter.clangerTend / 50` (50 = the default tendency, so a default player sees exactly this base rate). */
+const P_GETTABLE_MISS_IS_CLANGER_BASE = 0.4;
+/**
  * Real Free Kick logic, Aug 2026 round 19 (Tyler: "Let's develop the Free
  * Kick logic into the game, these should be included in the statistics").
  * Grounded in the AFL's own free-kick categories (Wikipedia, "Free kick
@@ -1118,6 +1173,20 @@ const CONTEST_EXECUTION_DIFFICULTY = -22;
  * for the balance simulator later if real data suggests otherwise.
  */
 const P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK = 0.35;
+/**
+ * Round 135 — [[Season Statistics Balance Pass]]: real AFL "one percenters" are smothers, spoils,
+ * knock-ons, and shepherds combined (Champion Data's own definition) — `spoils` already existed here,
+ * but only `runContest`'s marking-type defensive wins ever rolled for it; a groundBall-type defensive
+ * win (the branch immediately below this constant's own call site) previously got NO further split at
+ * all, just the plain `contestedPoss`/`interceptPossessions` credit every defensive win gets. This
+ * constant is additive, not a replacement: it doesn't change whether/how often a defender wins a
+ * groundBall contest, only whether that already-resolved win ALSO gets tagged as a smother — so it
+ * can't perturb `contestedPoss`'s own long-stable distribution, matching the same additive precedent
+ * `P_DEFENSIVE_MARKING_WIN_IS_CLEAN_MARK` itself set for spoils/intercept marks. Reasoned, not derived
+ * from any cited source — same disclosed-placeholder status as that constant and the other named
+ * probabilities in this file (P_FORWARD_MARK_IS_LEAD, P_SET_SHOT_VS_SNAP, etc.).
+ */
+const P_GROUNDBALL_WIN_IS_SMOTHER = 0.25;
 
 /**
  * Aug 2026 round 27 — `runHandballContest`'s own pressure term, added on top
@@ -1912,6 +1981,17 @@ const INTERCEPT_MARK_PHRASES: ((defender: string) => string)[] = [
 function describeInterceptMark(ctx: Ctx, defenderName: string): string {
   return INTERCEPT_MARK_PHRASES[Math.floor(ctx.rng() * INTERCEPT_MARK_PHRASES.length)](defenderName);
 }
+/** Round 135 — [[Season Statistics Balance Pass]]: a groundBall-type defensive win rolled to be a
+ * genuine smother/knock-on rather than a plain contested-possession win — see
+ * `P_GROUNDBALL_WIN_IS_SMOTHER`'s own doc comment. */
+const SMOTHER_PHRASES: ((defender: string) => string)[] = [
+  (d) => `${d} smothers the disposal at the source`,
+  (d) => `${d} charges down the kick before it even gets away`,
+  (d) => `${d} gets a hand to it and knocks it clear`,
+];
+function describeSmother(ctx: Ctx, defenderName: string): string {
+  return SMOTHER_PHRASES[Math.floor(ctx.rng() * SMOTHER_PHRASES.length)](defenderName);
+}
 
 export interface State {
   phase: Phase;
@@ -2705,6 +2785,30 @@ function unpressuredHandballPhrase(ctx: Ctx, carrier: string, receiver: string, 
   return phrases[Math.floor(ctx.rng() * phrases.length)](carrier, receiver);
 }
 
+/**
+ * Round 135 — [[Season Statistics Balance Pass]]: `inside50s`/`rebound50s` are Champion Data stats
+ * crediting the specific disposal (or Run and Carry bounce-through — see that loop's own call site)
+ * that moves the ball across the relevant zone boundary, not every zone-advance in the file. Pure —
+ * no rng, no log() call — so every call site owns its own line mutation the same way every other
+ * StatDelta site does; this only decides WHETHER a credit is due and returns the deltas for the
+ * caller to merge into whichever array actually reaches `log()`. All 3 real call sites
+ * (`resolveUnpressuredDisposal`'s kick branch, `runGeneralPlay`'s pressured-disposal kick branch, and
+ * Run and Carry's own bounce-through) share this one function rather than triplicating the
+ * isForward50/isDefensive50 diff logic.
+ */
+function zoneEntryDeltas(ctx: Ctx, carrier: Player, side: Side, oldZone: Zone, newZone: Zone): StatDelta[] {
+  const deltas: StatDelta[] = [];
+  if (!isForward50(oldZone, side) && isForward50(newZone, side)) {
+    lineFor(ctx, carrier).inside50s += 1;
+    deltas.push({ playerId: carrier.PlayerID, stat: "inside50s", delta: 1 });
+  }
+  if (isDefensive50(oldZone, side) && !isDefensive50(newZone, side)) {
+    lineFor(ctx, carrier).rebound50s += 1;
+    deltas.push({ playerId: carrier.PlayerID, stat: "rebound50s", delta: 1 });
+  }
+  return deltas;
+}
+
 function resolveUnpressuredDisposal(
   ctx: Ctx,
   state: State,
@@ -2744,6 +2848,11 @@ function resolveUnpressuredDisposal(
   if (isKick) line.kicks += 1;
   else line.handballs += 1;
   const newZone = isKick ? newZoneIfKick : state.zone;
+  // Round 135 — see zoneEntryDeltas' own doc comment. Only a kick (not a handball, which never
+  // advances the zone here) can ever cross the forward50/defensive50 boundary this function decides.
+  // Deliberately NOT credited on the free-kick-out-of-bounds branch just below (the kick never
+  // actually completed its delivery) — a disclosed simplification, not the full real-AFL definition.
+  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
 
   if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
     const newSide = otherSide(state.possession);
@@ -2756,6 +2865,13 @@ function resolveUnpressuredDisposal(
     // Aug 2026 round 55 — [[Season Stats and Records]]: literally "sprayed a disposal out of
     // bounds," the design note's own third named turnover example.
     lineFor(ctx, carrier).turnovers += 1;
+    // Round 135 — [[Season Statistics Balance Pass]]: `clangers` is `turnovers` passed through
+    // unconditionally at every one of this field's 11 crediting sites (this is the first) — see
+    // that field's own doc comment. Deliberately mechanical, not a new roll: doesn't touch or
+    // re-derive whether a turnover happens, only mirrors the already-decided credit onto the new
+    // field, so it can't perturb `turnovers`' own long-stable distribution. `runShot`'s own
+    // missed-gettable-shot roll is the one genuinely new clangers-only mechanism this round adds.
+    lineFor(ctx, carrier).clangers += 1;
     ctx.lastEffectiveDisposal = null;
     // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
     // taker's own attacking 50 can now roll straight into a shot at goal.
@@ -2775,6 +2891,7 @@ function resolveUnpressuredDisposal(
         { playerId: carrier.PlayerID, stat: "freeKicksAgainst", delta: 1 },
         { playerId: freeKickTaker.PlayerID, stat: "freeKicksFor", delta: 1 },
         { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
       ],
     );
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
@@ -2790,6 +2907,7 @@ function resolveUnpressuredDisposal(
     ...gatherDeltas,
     { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
     { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
+    ...zoneDeltas,
   ];
 
   // Round 46 — receiver (and, only for a genuine forward-50 entry,
@@ -2987,6 +3105,17 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     );
     if (ctx.rng() < runChance) {
       const newZone = advanceZone(state.zone, state.possession);
+      // Round 135 — [[Season Statistics Balance Pass]]: this function's own flavour text already
+      // narrates "bouncing along the way" every time this branch fires; this is the first stat field
+      // that reads it. One `bounces` credit per successful Run and Carry tick (not per whole burst —
+      // `runTicksSoFar` already increments per tick, so a longer run naturally credits more bounces).
+      lineFor(ctx, carrier).bounces += 1;
+      gatherDeltas.push({ playerId: carrier.PlayerID, stat: "bounces", delta: 1 });
+      // A carry can cross the same forward50/defensive50 boundaries a kick can — see
+      // zoneEntryDeltas' own doc comment. Eligibility above already guarantees state.zone isn't
+      // forward50 yet, so only the inside50 (not rebound50) half of that helper can ever fire here,
+      // but reusing the shared helper is still correct and one line cheaper than hand-rolling it.
+      gatherDeltas.push(...zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone));
       const verb = runTicksSoFar === 0 ? "finds space and runs it forward, bouncing along the way" : "keeps running, another bounce";
       // Round 36 — carrierPos itself now prefers the carrier's real
       // movement.ts-tracked position over the stateless carrierPosition
@@ -3064,6 +3193,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
           // carrier's own side loses the ball outright — the design note's own "tackled into a
           // clanger" turnover example, verbatim.
           lineFor(ctx, carrier).turnovers += 1;
+          lineFor(ctx, carrier).clangers += 1;
           ctx.lastEffectiveDisposal = null;
           log(
             ctx,
@@ -3078,6 +3208,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
               { playerId: chaser.PlayerID, stat: "tackleAttempts", delta: 1 },
               { playerId: chaser.PlayerID, stat: "tackleWins", delta: 1 },
               { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+              { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
             ],
           );
           const newSide = otherSide(state.possession);
@@ -3222,6 +3353,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // Aug 2026 round 55 — see this function's own persistent-chase tackle branch above for the
     // full rationale — the same "tackled into a clanger" turnover, just the non-chase tackle path.
     lineFor(ctx, carrier).turnovers += 1;
+    lineFor(ctx, carrier).clangers += 1;
     ctx.lastEffectiveDisposal = null;
     log(
       ctx,
@@ -3236,6 +3368,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
         { playerId: defender.PlayerID, stat: "tackleWins", delta: 1 },
         { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
       ],
     );
     const newSide = otherSide(state.possession);
@@ -3292,9 +3425,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     const extraDeltas: StatDelta[] = [];
     if (winner.side !== state.possession) {
       lineFor(ctx, carrier).turnovers += 1;
+      lineFor(ctx, carrier).clangers += 1;
       lineFor(ctx, winner.player).interceptPossessions += 1;
       extraDeltas.push(
         { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
         { playerId: winner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
       );
       ctx.lastEffectiveDisposal = null;
@@ -3351,6 +3486,8 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // Kicks alone advance the zone; a handball keeps play, and the receiver
   // pool below, right where it already was.
   const newZone = isKick ? newZoneIfKick : state.zone;
+  // Round 135 — see zoneEntryDeltas' own doc comment / resolveUnpressuredDisposal's identical site.
+  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
 
   // Out on the Full — Aug 2026 round 19, see P_KICK_GOES_OUT_ON_FULL's own
   // doc comment. Only a kick can literally sail out on the full; the
@@ -3370,6 +3507,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // Aug 2026 round 55 — [[Season Stats and Records]]: literally "sprayed a disposal out of
     // bounds," the design note's own third named turnover example.
     lineFor(ctx, carrier).turnovers += 1;
+    lineFor(ctx, carrier).clangers += 1;
     ctx.lastEffectiveDisposal = null;
     // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
     // taker's own attacking 50 can now roll straight into a shot at goal.
@@ -3390,6 +3528,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: carrier.PlayerID, stat: "freeKicksAgainst", delta: 1 },
         { playerId: freeKickTaker.PlayerID, stat: "freeKicksFor", delta: 1 },
         { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+        { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
       ],
     );
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
@@ -3406,6 +3545,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     { playerId: carrier.PlayerID, stat: "disposals", delta: 1 },
     { playerId: carrier.PlayerID, stat: isKick ? "kicks" : "handballs", delta: 1 },
     { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
+    ...zoneDeltas,
   ];
 
   // Aug 2026: a shot can only ever come off a kick (Tyler: "A shot on goal
@@ -3585,6 +3725,7 @@ function resolveUncontestedGather(
     // a maybe. No matching interceptPossessions for the recoverer — deliberately consistent with
     // this branch's own pre-existing "the recoverer gets no contest stat at all" design, just above.
     lineFor(ctx, attackerRep).turnovers += 1;
+    lineFor(ctx, attackerRep).clangers += 1;
     ctx.lastEffectiveDisposal = null;
     const fumbleLabel = contestType === "groundBall" ? "can't hang onto the ground ball" : "spills the mark";
     log(
@@ -3597,6 +3738,7 @@ function resolveUncontestedGather(
       [
         { playerId: attackerRep.PlayerID, stat: fields.attempts, delta: 1 },
         { playerId: attackerRep.PlayerID, stat: "turnovers", delta: 1 },
+        { playerId: attackerRep.PlayerID, stat: "clangers", delta: 1 },
       ],
     );
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: defendingSide, carrier: recoverer };
@@ -3788,9 +3930,11 @@ function runContest(ctx: Ctx, state: State): State {
       const extraDeltas: StatDelta[] = [];
       if (looseBallWinner.side !== attackingSide) {
         lineFor(ctx, attackerRep).turnovers += 1;
+        lineFor(ctx, attackerRep).clangers += 1;
         lineFor(ctx, looseBallWinner.player).interceptPossessions += 1;
         extraDeltas.push(
           { playerId: attackerRep.PlayerID, stat: "turnovers", delta: 1 },
+          { playerId: attackerRep.PlayerID, stat: "clangers", delta: 1 },
           { playerId: looseBallWinner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
         );
         ctx.lastEffectiveDisposal = null;
@@ -3893,8 +4037,17 @@ function runContest(ctx: Ctx, state: State): State {
       isInterceptMark = true;
     } else {
       line.spoils += 1;
-      spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "spoils", delta: 1 });
+      line.onePercenters += 1;
+      spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "spoils", delta: 1 }, { playerId: defenderRep.PlayerID, stat: "onePercenters", delta: 1 });
     }
+  } else if (ctx.rng() < P_GROUNDBALL_WIN_IS_SMOTHER) {
+    // Round 135 — see P_GROUNDBALL_WIN_IS_SMOTHER's own doc comment: the one new mechanism this round
+    // adds rather than just re-tagging an existing one — a groundBall defensive win previously had no
+    // further split at all.
+    line.smothers += 1;
+    line.onePercenters += 1;
+    spoilDeltas.push({ playerId: defenderRep.PlayerID, stat: "smothers", delta: 1 }, { playerId: defenderRep.PlayerID, stat: "onePercenters", delta: 1 });
+    spoilLabel = describeSmother(ctx, defenderRep.lname);
   }
   ctx.lastEffectiveDisposal = null;
   // Aug 2026 round 92 — an intercept mark is still a mark: Tyler's own ask was unconditional ("when
@@ -4024,6 +4177,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     // rationale (recoverer always defendingSide here -> always a turnover; no matching
     // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
     lineFor(ctx, receiver).turnovers += 1;
+    lineFor(ctx, receiver).clangers += 1;
     ctx.lastEffectiveDisposal = null;
     log(
       ctx,
@@ -4032,7 +4186,7 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       "MARKING_CONTEST",
       `${receiver.lname} can't hang onto it despite the space — ${recoverer.lname} reacts first to the loose ball`,
       [receiver.PlayerID, recoverer.PlayerID],
-      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }],
+      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }, { playerId: receiver.PlayerID, stat: "clangers", delta: 1 }],
     );
     return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
   };
@@ -4102,9 +4256,11 @@ function runMarkingContest(ctx: Ctx, state: State): State {
       const extraDeltas: StatDelta[] = [];
       if (looseBallWinner.side !== possessingSide) {
         lineFor(ctx, receiver).turnovers += 1;
+        lineFor(ctx, receiver).clangers += 1;
         lineFor(ctx, looseBallWinner.player).interceptPossessions += 1;
         extraDeltas.push(
           { playerId: receiver.PlayerID, stat: "turnovers", delta: 1 },
+          { playerId: receiver.PlayerID, stat: "clangers", delta: 1 },
           { playerId: looseBallWinner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
         );
         ctx.lastEffectiveDisposal = null;
@@ -4187,7 +4343,8 @@ function runMarkingContest(ctx: Ctx, state: State): State {
     spoilLabel = describeInterceptMark(ctx, defender.lname);
   } else {
     defenderLine.spoils += 1;
-    spoilDeltas.push({ playerId: defender.PlayerID, stat: "spoils", delta: 1 });
+    defenderLine.onePercenters += 1;
+    spoilDeltas.push({ playerId: defender.PlayerID, stat: "spoils", delta: 1 }, { playerId: defender.PlayerID, stat: "onePercenters", delta: 1 });
   }
   ctx.lastEffectiveDisposal = null;
   if (isInterceptMark) standTheMark(ctx, defender.PlayerID, defendingSide);
@@ -4263,6 +4420,7 @@ function runHandballContest(ctx: Ctx, state: State): State {
     // rationale (recoverer always defendingSide here -> always a turnover; no matching
     // interceptPossessions, matching this branch's own pre-existing no-stat-for-recoverer design).
     lineFor(ctx, receiver).turnovers += 1;
+    lineFor(ctx, receiver).clangers += 1;
     ctx.lastEffectiveDisposal = null;
     log(
       ctx,
@@ -4271,7 +4429,7 @@ function runHandballContest(ctx: Ctx, state: State): State {
       "HANDBALL_CONTEST",
       `${receiver.lname} spills the handball despite the space — ${recoverer.lname} reacts first to the loose ball`,
       [receiver.PlayerID, recoverer.PlayerID],
-      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }],
+      [{ playerId: receiver.PlayerID, stat: "turnovers", delta: 1 }, { playerId: receiver.PlayerID, stat: "clangers", delta: 1 }],
     );
     return { phase: "GENERAL_PLAY", zone, possession: defendingSide, carrier: recoverer };
   };
@@ -4317,9 +4475,11 @@ function runHandballContest(ctx: Ctx, state: State): State {
   const extraDeltas: StatDelta[] = [];
   if (looseBallWinner.side !== possessingSide) {
     lineFor(ctx, receiver).turnovers += 1;
+    lineFor(ctx, receiver).clangers += 1;
     lineFor(ctx, looseBallWinner.player).interceptPossessions += 1;
     extraDeltas.push(
       { playerId: receiver.PlayerID, stat: "turnovers", delta: 1 },
+      { playerId: receiver.PlayerID, stat: "clangers", delta: 1 },
       { playerId: looseBallWinner.player.PlayerID, stat: "interceptPossessions", delta: 1 },
     );
     ctx.lastEffectiveDisposal = null;
@@ -4526,6 +4686,18 @@ function runShot(ctx: Ctx, state: State): State {
       isSetShot,
     );
   } else {
+    // Round 135 — [[Season Statistics Balance Pass]]: the one genuinely new clangers-only mechanism
+    // this round adds (every other clangers-crediting site in this file is just `turnovers` passed
+    // through unconditionally — see that field's own doc comment). Real AFL's clanger definition
+    // includes a missed EASY set shot, not every miss — gated on a close, straight geometry (never
+    // touching the goal/behind/miss roll itself; `onTarget`/`goalChance` above are byte-identical to
+    // before this round) so this only classifies an already-decided miss, and scaled by
+    // `shooter.clangerTend` (the 0-100ish tendency scale, default 50, that was defined in the data
+    // model from the start but never once read anywhere in the engine until now) so a sloppier
+    // player is more likely to have this specific kind of miss actually logged as a clanger.
+    const missedGettableShot = isSetShot && depth < CLANGER_GETTABLE_DEPTH_MAX && angleSeverity < CLANGER_GETTABLE_ANGLE_MAX;
+    const isClangerMiss = missedGettableShot && ctx.rng() < P_GETTABLE_MISS_IS_CLANGER_BASE * (shooter.clangerTend / 50);
+    if (isClangerMiss) lineFor(ctx, shooter).clangers += 1;
     log(
       ctx,
       state.zone,
@@ -4533,7 +4705,7 @@ function runShot(ctx: Ctx, state: State): State {
       "SHOT",
       nearby ? `${shooter.lname}'s snap under pressure from ${nearby.player.lname} misses everything` : `${shooter.lname}'s shot misses everything`,
       playerIds,
-      [{ playerId: shooter.PlayerID, stat: "shotsAtGoal", delta: 1 }],
+      [{ playerId: shooter.PlayerID, stat: "shotsAtGoal", delta: 1 }, ...(isClangerMiss ? [{ playerId: shooter.PlayerID, stat: "clangers" as const, delta: 1 }] : [])],
       false,
       isSetShot,
     );

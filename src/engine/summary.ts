@@ -107,6 +107,14 @@ function emptyLine(): BoxScoreLine {
     // Sep 2026 round 91 — kept in sync with engine/match.ts's own emptyLine(), same convention as
     // the coachesVotes comment directly above (always 0 here / per-quarter, baked on whole-of-match).
     brownlowVotes: 0,
+    // Round 135 — kept in sync with engine/match.ts's own emptyLine(), same convention as the
+    // brownlowVotes comment directly above.
+    inside50s: 0,
+    rebound50s: 0,
+    bounces: 0,
+    smothers: 0,
+    onePercenters: 0,
+    clangers: 0,
   };
 }
 

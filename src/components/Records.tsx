@@ -166,10 +166,15 @@ const POS_GROUP_PLURAL: Record<PosGroup, string> = { MID: "midfielders", FWD: "f
 
 /** Stat groups for the season table's Stat group select — Tyler's round-58 groups, every group led by Games so the denominator is always on screen. */
 const GROUPS: { key: Exclude<GroupKey, "all">; label: string; cats: RecordCategory[] }[] = [
-  { key: "disposal", label: "Disposals", cats: ["disposals", "kicks", "handballs", "marks", "contestedPoss", "uncontestedPoss", "turnovers", "freeKicksFor", "freeKicksAgainst"] },
-  { key: "scoring", label: "Scoring", cats: ["goals", "behinds", "shotsAtGoal", "goalAssists", "marksInside50", "markLeadWins"] },
+  // Round 135, [[Season Statistics Balance Pass]]: bounces/clangers slot into Disposals (ball-in-hand
+  // running stat, and the mistake-counterpart to turnovers, respectively); inside50s into Scoring
+  // (attacking zone entries, alongside the existing marksInside50); rebound50s/smothers/onePercenters
+  // into Defence (rebound50s is the defensive mirror of inside50s, smothers/onePercenters extend the
+  // existing spoils/interceptMarks/interceptPossessions detail-plus-umbrella pattern).
+  { key: "disposal", label: "Disposals", cats: ["disposals", "kicks", "handballs", "marks", "contestedPoss", "uncontestedPoss", "turnovers", "freeKicksFor", "freeKicksAgainst", "bounces", "clangers"] },
+  { key: "scoring", label: "Scoring", cats: ["goals", "behinds", "shotsAtGoal", "goalAssists", "marksInside50", "markLeadWins", "inside50s"] },
   { key: "stoppage", label: "Stoppages", cats: ["clearances", "hitouts", "hitoutsToAdvantage"] },
-  { key: "defence", label: "Defence", cats: ["tackles", "spoils", "interceptMarks", "interceptPossessions"] },
+  { key: "defence", label: "Defence", cats: ["tackles", "spoils", "interceptMarks", "interceptPossessions", "rebound50s", "smothers", "onePercenters"] },
   { key: "general", label: "General", cats: ["fantasyPoints", "coachesVotes", "finalsAppearances"] },
 ];
 
@@ -183,7 +188,7 @@ function colsFor(group: GroupKey): RecordCategory[] {
 /** Always shown as a season total — a per-game average of games played (or of finals appearances) is meaningless. */
 const TOTAL_ONLY = new Set<RecordCategory>(["gamesPlayed", "finalsAppearances"]);
 /** Benchmarked lower-is-better. */
-const LOWER_IS_BETTER = new Set<RecordCategory>(["turnovers", "freeKicksAgainst"]);
+const LOWER_IS_BETTER = new Set<RecordCategory>(["turnovers", "freeKicksAgainst", "clangers"]);
 /** No "good" direction, so no benchmark shading. */
 const UNBENCHMARKED = new Set<RecordCategory>(["gamesPlayed", "finalsAppearances", "behinds"]);
 
@@ -221,6 +226,13 @@ const CATEGORY_SHORT: Record<RecordCategory, string> = {
   spoils: "SP",
   interceptMarks: "IM",
   interceptPossessions: "IP",
+  // Round 135, [[Season Statistics Balance Pass]] — same convention as the columns above.
+  inside50s: "I50",
+  rebound50s: "R50",
+  onePercenters: "1%",
+  smothers: "SM",
+  bounces: "BO",
+  clangers: "CG",
 };
 
 /** Reuses the Dashboard's own `ALL_LEAGUE_STATS` labels (plus `gamesPlayed`/`finalsAppearances`, which aren't `LeagueStat`s) so a stat's name can never drift between the two surfaces. */

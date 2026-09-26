@@ -170,6 +170,13 @@ const CATEGORY_WRITEUP_META: Record<RecordCategory, { verb: string; noun: string
   fantasyPoints: { verb: "racking up", noun: "fantasy points" },
   // Sep 2026 round 90, [[Coaches Votes and MVP Award]].
   coachesVotes: { verb: "polling", noun: "coaches votes" },
+  // Round 135, [[Season Statistics Balance Pass]] — same convention as the categories above.
+  inside50s: { verb: "generating", noun: "inside 50s" },
+  rebound50s: { verb: "generating", noun: "rebound 50s" },
+  onePercenters: { verb: "racking up", noun: "one percenters" },
+  smothers: { verb: "laying", noun: "smothers" },
+  bounces: { verb: "breaking away with", noun: "bounces" },
+  clangers: { verb: "committing", noun: "clangers" },
 };
 
 /**

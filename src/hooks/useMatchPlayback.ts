@@ -93,6 +93,14 @@ function emptyLine(): BoxScoreLine {
     // Sep 2026 round 91 — kept in sync with engine/match.ts's own emptyLine(), same convention as
     // the round 54/55/90 fields' own comments above.
     brownlowVotes: 0,
+    // Round 135 — kept in sync with engine/match.ts's own emptyLine(), same convention as the
+    // round 54/55/90 fields' own comments above.
+    inside50s: 0,
+    rebound50s: 0,
+    bounces: 0,
+    smothers: 0,
+    onePercenters: 0,
+    clangers: 0,
   };
 }
 

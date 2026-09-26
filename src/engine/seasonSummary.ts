@@ -136,6 +136,16 @@ export const LEADERBOARD_STAT_FIELDS = [
   // comment. Added here (not hand-rolled elsewhere) so the season/all-time/career-total pipeline
   // and the Statistics tab's stat picker pick it up for free, same as every stat above it.
   "coachesVotes",
+  // Round 135, [[Season Statistics Balance Pass]] — the 5 stats that had no counter anywhere in the
+  // engine at all (6 fields for 5 stats: onePercenters is the umbrella `spoils + smothers` total,
+  // mirroring the existing spoils/interceptMarks/interceptPossessions detail-plus-umbrella pattern
+  // above). Same free-for-the-whole-pipeline reasoning as coachesVotes above.
+  "inside50s",
+  "rebound50s",
+  "bounces",
+  "smothers",
+  "onePercenters",
+  "clangers",
 ] as const satisfies readonly (keyof BoxScoreLine)[];
 
 /** Every leaderboard-eligible stat — the 22 real `BoxScoreLine` fields above, plus `fantasyPoints` (derived via `fantasyPointsFor`, not a stored field itself, same special-case the original 4-stat version already had). */
@@ -173,6 +183,12 @@ export const ALL_LEAGUE_STATS: { key: LeagueStat; label: string }[] = [
   { key: "turnovers", label: "Turnovers" },
   { key: "hitouts", label: "Hitouts" },
   { key: "hitoutsToAdvantage", label: "Hitouts to Advantage" },
+  { key: "inside50s", label: "Inside 50s" },
+  { key: "rebound50s", label: "Rebound 50s" },
+  { key: "onePercenters", label: "One Percenters" },
+  { key: "smothers", label: "Smothers" },
+  { key: "bounces", label: "Bounces" },
+  { key: "clangers", label: "Clangers" },
 ];
 
 /**
@@ -200,8 +216,9 @@ function emptyTotals(playerId: number): SeasonPlayerTotals {
  * into this file's own `SeasonPlayerTotals` shape, so any consumer that already works in terms of
  * `SeasonPlayerTotals` (per-year display, per-game averaging, percentile benchmarking) can treat a
  * real pre-save season identically to a simulated one. `shotsAtGoal` is derived (goals+behinds);
- * the 5 fields afltables' classic tables don't carry (markLeadWins, hitoutsToAdvantage, spoils,
- * interceptMarks, interceptPossessions, turnovers) are `0` — see `realSeasonHistory.ts`'s own doc
+ * the fields afltables' classic tables don't carry (markLeadWins, hitoutsToAdvantage, spoils,
+ * interceptMarks, interceptPossessions, turnovers, and — round 135 — inside50s, rebound50s,
+ * bounces, smothers, onePercenters, clangers) are `0` — see `realSeasonHistory.ts`'s own doc
  * comment for why that's an honest gap, not a fabricated zero.
  *
  * Round 64/67: originally private to `PlayerProfileModal.tsx`, feeding only that screen's

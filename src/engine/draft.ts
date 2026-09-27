@@ -1,5 +1,5 @@
 import { mulberry32 } from "./rng.ts";
-import { potentialCeilingFor } from "./progression.ts";
+import { potentialCeilingFor, clampCeilingToOwnAttributes } from "./progression.ts";
 import { reSign, type ReSignTerms } from "./contracts.ts";
 import type { ClubStrategy } from "./listNeeds.ts";
 import { ARCHETYPE_LINE, summariseLines, bandForGap, type Line } from "../data/lines.ts";
@@ -373,8 +373,13 @@ function generatePotential(rng: () => number): number {
 
 function buildProspect(id: number, archetype: Archetype, age: number, year: number, means: Record<RatedAttribute, number>, rng: () => number): Player {
   const attrs = generateAttributes(means, age, rng);
-  const potentialTall = generatePotential(rng);
-  const potentialMid = generatePotential(rng);
+  // Round C152 Priority 1 — clamp each ceiling to at least this prospect's own just-generated
+  // archetype-primary attributes + margin (see progression.ts's `clampCeilingToOwnAttributes` doc
+  // comment) — a prospect's raw RNG-generated attributes can, rarely, already sit above a
+  // low-rolled `generatePotential` draw, same root cause as the population-wide bug this round
+  // repairs for existing players.
+  const potentialTall = clampCeilingToOwnAttributes(generatePotential(rng), attrs, archetype);
+  const potentialMid = clampCeilingToOwnAttributes(generatePotential(rng), attrs, archetype);
   const name = generateName(rng);
   const homeState = weightedPick(STATE_WEIGHTS, rng);
   const tall = TALL_ARCHETYPES.has(archetype);
@@ -521,8 +526,11 @@ function buildRealProspect(id: number, record: RealProspectRecord, year: number,
   // behaves sensibly (a real named prospect's scouted floor still floors their potential above the
   // generic random roll) — just not on the exact same rescaled units a from-scratch migration would
   // use. Flagged rather than silently left implicit.
-  const potentialTall = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 40, 110);
-  const potentialMid = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 40, 110);
+  // Round C152 Priority 1 — same clamp as buildProspect above, applied AFTER the existing
+  // bonus/prose-floor logic (never before it — this only ever raises the result further if this
+  // real prospect's own generated attributes already exceed it, never overrides the scouted floor).
+  const potentialTall = clampCeilingToOwnAttributes(clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 40, 110), attrs, archetype);
+  const potentialMid = clampCeilingToOwnAttributes(clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 40, 110), attrs, archetype);
 
   const { first, last } = splitRealName(record.name);
   const tall = TALL_ARCHETYPES.has(archetype);

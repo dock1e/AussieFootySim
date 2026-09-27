@@ -9,6 +9,7 @@ import type { DraftPickRecord } from "./draft.ts";
 import type { CombineTestResult } from "./combine.ts";
 import { runOffSeason } from "./progression.ts";
 import { developmentMultipliersFor } from "./development.ts";
+import { skillEmphasesFor } from "./skillEmphasis.ts";
 import { archiveSeason, type SeasonArchiveEntry } from "./seasonSummary.ts";
 import type { DisgruntlementState } from "./disgruntlement.ts";
 import { seedDraftPickInventory, type DraftPick } from "./draftPicks.ts";
@@ -485,9 +486,12 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   // let every AI club (not myClub) spend on its own facility upgrade for next season.
   const advancedClubFinance = advanceClubFinances(save.clubFinance, save.players, save.seasonArchives, save.year);
   const nextClubFinance = simulateAiFacilityInvestment(advancedClubFinance, save.myClub, save.year);
+  // Round C152 Priority 3 — same "compute from the season about to be archived, before anyone ages"
+  // timing as developmentMultipliers above. See engine/skillEmphasis.ts's own doc comment.
+  const skillEmphases = skillEmphasesFor(save.players, save.season);
   return {
     ...save,
-    players: runOffSeason(save.players, developmentMultipliers),
+    players: runOffSeason(save.players, developmentMultipliers, skillEmphases),
     year: save.year + 1,
     season: null,
     combineWindow: null,

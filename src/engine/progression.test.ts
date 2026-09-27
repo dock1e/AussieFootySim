@@ -254,7 +254,7 @@ describe("runOffSeason", () => {
 
   it("is exactly the composition of ageOnePlayer then recomputeOVR against the aged population", () => {
     const pool = makePool();
-    const expected = recomputeOVR(pool.map(ageOnePlayer));
+    const expected = recomputeOVR(pool.map((p) => ageOnePlayer(p)));
     const actual = runOffSeason(pool);
     expect(actual).toEqual(expected);
   });

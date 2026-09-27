@@ -89,8 +89,21 @@ export interface OvrTrajectory {
  * converting each resulting attribute set to an OVR-shaped number via `ovrRawComposite`/
  * `ovrFromRawComposite` frozen against `populationStats` (today's league, computed once by the caller
  * via `populationOvrStats` — see this file's own doc comment for why that's a disclosed
- * approximation). `developmentMultiplier` defaults to `1` (no coach/performance boost assumed for a
- * hypothetical future with no known coach or performance signal yet).
+ * approximation). The `1` passed to `ageOnePlayer` below is still the BASELINE `developmentMultiplier`
+ * scenario (no coach/performance boost assumed for a hypothetical future with no known coach or
+ * performance signal yet) — left as a flagged followup, not fixed this round: the audit note asked
+ * whether this chart should compute a realistic multiplier from the player's actual current
+ * club/coach/facility state instead. Checked the call site (`CareerProfile.tsx`) — it doesn't currently
+ * carry `myClub`/`developmentCoach`/`lineCoaches`/`clubFinance`/`isBest22` (the real inputs
+ * `developmentMultipliersFor` needs) into scope, only `player`/`currentYear`/`populationStats`, so
+ * wiring a "realistic" multiplier through would mean threading that whole save-state shape into a
+ * component that doesn't otherwise need it — bigger than it looks, deliberately left for a future
+ * round rather than scope-creeping this one. **Round C152 Priority 2 note**: this chart's BASELINE
+ * scenario itself already changes as of this round regardless — `ageOnePlayer`'s new youth taper
+ * (`youthTaperFor`, progression.ts) multiplies whatever `developmentMultiplier` it's given, including
+ * this hardcoded `1`, so a young big-headroom player's projected trajectory here now shows real
+ * taper-driven growth even under the "no coach" baseline, not just when a real save's own multiplier
+ * is passed elsewhere.
  */
 export function projectOvrTrajectory(player: Player, currentYear: number, populationStats: { mean: number; stdDev: number }, yearsForward = 10): OvrTrajectory {
   const years: ProjectedYear[] = [];

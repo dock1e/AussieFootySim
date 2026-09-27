@@ -5,6 +5,38 @@ import { ARCHETYPE_PRIMARY_ATTRIBUTES, META_ATTRIBUTE_WEIGHTS } from "../types/a
 import { prestigeBonusFor } from "./prestige.ts";
 
 /**
+ * Round C152 — [[Growth and Progression Engine — Audit and Recommendations]] Priority 1. The audit's
+ * confirmed root cause #1: `potentialTall`/`potentialMid` (the REAL growth ceiling `ageOnePlayer`
+ * reads via `potentialCeilingFor`, below) was generated (`draft.ts`'s `generatePotential`) as a flat,
+ * archetype-agnostic roll, completely independent of the player's own generated `RATED_ATTRIBUTES` —
+ * so nothing ever guaranteed a player's own current best attributes stayed under their own ceiling.
+ * A population scan (`scripts/scratch_growth_audit.ts`, 2026-09-27) found 128/698 active players
+ * (18.3%) already breaching their own ceiling on at least one archetype-primary attribute, including
+ * Sam Darcy (`potentialTall` 82, vs `strengthOverhead`/`manMarking`/`verticalLeap` all already 84-88) —
+ * `potentialHeadroom` (below) floors at exactly 0 for a breached attribute, guaranteeing stagnation
+ * regardless of age, coaching or performance.
+ *
+ * `clampCeilingToOwnAttributes` is the one shared fix, called both at generation time (`draft.ts`'s
+ * `buildProspect`/`buildRealProspect`, AFTER attributes are generated in the same function) and by the
+ * one-off population repair (`scripts/refreshRoundC152.ts`) across all 825 existing players. Margin
+ * (`POTENTIAL_CEILING_MARGIN`) is deliberately mid-range of the audit note's own suggested 5-10 band —
+ * large enough that a player who's already AT their own primary-attribute peak still reads as having
+ * *some* real headroom (a flat +5 margin, on a rescaled 40-110 attribute scale where a single off-season
+ * step is only ever a few points, would fully exhaust itself in 1-2 seasons for a player already close to
+ * the old ceiling), small enough that this stays a genuine consistency repair, not a second, silent
+ * potential-inflation mechanism riding along with it. Only ever RAISES a ceiling, never lowers one — a
+ * player whose ceiling already sits comfortably above their own attributes is left exactly as generated.
+ */
+export const POTENTIAL_CEILING_MARGIN = 8;
+
+/** See `POTENTIAL_CEILING_MARGIN`'s doc comment. `attrs` only needs the player's OWN archetype-primary attributes (`ARCHETYPE_PRIMARY_ATTRIBUTES`) — the same attributes `potentialHeadroom`/Priority 2's youth taper (below) already treat as "the ones that matter" for this player's growth. Clipped to the same `[40, 110]` scale every other rated quantity uses. */
+export function clampCeilingToOwnAttributes(ceiling: number, attrs: Pick<Player, RatedAttribute>, archetype: Archetype): number {
+  const primaryAttrs = ARCHETYPE_PRIMARY_ATTRIBUTES[archetype];
+  const maxPrimary = Math.max(...primaryAttrs.map((a) => attrs[a]));
+  return Math.max(ceiling, Math.min(110, maxPrimary + POTENTIAL_CEILING_MARGIN));
+}
+
+/**
  * Season/career progression — Engine.md "Season/career progression":
  *
  * > Off-season step: for each of the 15 skills, `new_rating = old_rating +
@@ -61,8 +93,8 @@ import { prestigeBonusFor } from "./prestige.ts";
 
 // --- Off-season attribute step ----------------------------------------------------------------
 
-/** Engine.md's own "Attribute -> contest mapping" table, keyed by discrete skill — see this file's doc comment point 1. Two discrete skills sharing one table row (e.g. markLead/spoilLead) get the identical attribute list. */
-const SKILL_ATTRIBUTES: Record<DiscreteSkill, readonly RatedAttribute[]> = {
+/** Engine.md's own "Attribute -> contest mapping" table, keyed by discrete skill — see this file's doc comment point 1. Two discrete skills sharing one table row (e.g. markLead/spoilLead) get the identical attribute list. Exported (Round C152) so `engine/skillEmphasis.ts` can document its own real-stat-to-skill table's relationship to this one without duplicating it. */
+export const SKILL_ATTRIBUTES: Record<DiscreteSkill, readonly RatedAttribute[]> = {
   markLead: ["manMarking", "verticalLeap", "speed", "strengthManOnMan"],
   spoilLead: ["manMarking", "verticalLeap", "speed", "strengthManOnMan"],
   markContested: ["manMarking", "strengthOverhead", "verticalLeap", "courage"],
@@ -112,6 +144,68 @@ export function potentialHeadroom(oldRating: number, ceiling: number): number {
 }
 
 /**
+ * Round C152 — [[Growth and Progression Engine — Audit and Recommendations]] Priority 2, Tyler's
+ * chosen option (b): a "youth taper" on `developmentMultiplier` — the mirror image of
+ * `engine/development.ts`'s existing `eliteTaperFor`, which REDUCES the performance half of the
+ * multiplier as a player's current OVR climbs toward the elite band. This does the opposite at the
+ * OTHER end: it INCREASES the effective multiplier's pull on the `imp_` (improvement) side while a
+ * player's OWN archetype-primary attributes still sit well below their (now Priority-1-consistent)
+ * ceiling — "a young player with a lot of real room to grow develops faster than the flat multiplier
+ * alone implies."
+ *
+ * Deliberately built as its own independent factor, not a change to `PROGRESSION_SCALE` (Tyler's
+ * explicitly NOT-chosen option (a) — that would also speed up decline via `age_factor`, since
+ * `PROGRESSION_SCALE` multiplies both sides of the formula) and not a change to `imp_`/`deg_`
+ * generation itself (not-chosen option (c)). Reads `potentialHeadroom` averaged across the player's
+ * own `ARCHETYPE_PRIMARY_ATTRIBUTES` — the same attributes Priority 1's ceiling clamp and `OVR`'s own
+ * composite already treat as "the ones that matter" for this player — rather than all 20
+ * `RATED_ATTRIBUTES`, so a player who's already maxed their primary attributes but has stray
+ * headroom left on a secondary attribute doesn't get treated as "young" by this taper.
+ *
+ * Shape: flat `1` (no change) below `YOUTH_TAPER_HEADROOM_START` — a player with only modest,
+ * ordinary headroom left gets none of this; linearly ramps to `1 + YOUTH_TAPER_BOOST_CAP` at/above
+ * `YOUTH_TAPER_HEADROOM_FULL`. A veteran or a player already at/past their ceiling has
+ * `meanHeadroom` at or near 0 and reads exactly `1` here — no change to established/declining players,
+ * per Tyler's own scope.
+ *
+ * **These values are a disclosed compromise, not a value that gets Watson all the way to his own
+ * ceiling — measured, not guessed.** Calibrated against `scripts/scratch_growth_audit.ts`'s real
+ * Watson/Darcy full-career re-run (see that script's own run log and this round's Schema.md entry for
+ * the actual before/after trajectories): a MUCH larger `YOUTH_TAPER_BOOST_CAP` (tried up to `3.5`
+ * during this round's own tuning pass) gets Watson's realistic peak OVR into the low-to-mid 80s —
+ * genuinely closer to his POT 95 / Tyler's own 88 guess — but the SAME population-wide ceiling-scan
+ * pass this round's brief asked for (re-run at that larger cap) found it also let several players with
+ * a genuinely modest scouted ceiling (POT in the 60s-70s) climb into the low-to-mid 90s OVR over a
+ * normal career, purely because their OWN `potentialTall`/`potentialMid` happened to roll unusually
+ * high independently of their POT (a real, separate, PRE-EXISTING data inconsistency this round's
+ * Priority 1 scope does NOT cover — Priority 1 only ever RAISES a ceiling that sits below current
+ * attributes; it has no mechanism for a ceiling that sits unrealistically ABOVE a player's own POT).
+ * That's exactly the "12 generational talents" failure mode Round 91-93's original tuning was built to
+ * avoid — re-surfacing here via a different mechanism than the one it was originally guarded against.
+ * The values actually shipped are the moderate end of that tradeoff: population-wide, they add ZERO new
+ * players to the >=100 OVR tier beyond the population's own already-legitimate high-POT prospects (see
+ * `scripts/verify_roundC152_scratch.ts`'s own population-ripple check), while still giving Watson (and
+ * Darcy, once Priority 1 raises his ceiling) genuine, real growth instead of stagnation-or-decline. A
+ * few modest-POT players still climb further than their own scouted expectation would suggest (a
+ * residual, disclosed risk of the pre-existing ceiling/POT disconnect, not something this taper itself
+ * introduces) — flagged as a real follow-up candidate (extending Priority 1's clamp to also bound a
+ * ceiling from ABOVE relative to POT), not silently absorbed into this round's tuning.
+ */
+export const YOUTH_TAPER_HEADROOM_START = 0.1;
+export const YOUTH_TAPER_HEADROOM_FULL = 0.45;
+export const YOUTH_TAPER_BOOST_CAP = 1.5;
+
+/** See `YOUTH_TAPER_HEADROOM_START`'s doc comment. Returns the multiplier to apply on top of `developmentMultiplier`'s existing `imp_`-side effect — `1` for a player with little/no real headroom left, up to `1 + YOUTH_TAPER_BOOST_CAP` for a player with large real headroom on their own primary attributes. */
+export function youthTaperFor(p: Player): number {
+  const ceiling = potentialCeilingFor(p);
+  const primaryAttrs = ARCHETYPE_PRIMARY_ATTRIBUTES[p.archetype as Archetype];
+  const meanHeadroom = primaryAttrs.reduce((sum, a) => sum + potentialHeadroom(p[a], ceiling), 0) / primaryAttrs.length;
+  if (meanHeadroom <= YOUTH_TAPER_HEADROOM_START) return 1;
+  const t = Math.min(1, (meanHeadroom - YOUTH_TAPER_HEADROOM_START) / (YOUTH_TAPER_HEADROOM_FULL - YOUTH_TAPER_HEADROOM_START));
+  return 1 + t * YOUTH_TAPER_BOOST_CAP;
+}
+
+/**
  * Deliberately roughed in (see doc comment point 2). Only multiplies the
  * `deg_` (decline) side of the formula, matching exactly what Engine.md
  * wrote — improvement is gated by `potential_headroom` instead, so a young
@@ -150,18 +244,34 @@ export const PROGRESSION_SCALE = 0.12;
  *
  * `developmentMultiplier` (round 91, default `1`) scales only the improvement half of each delta —
  * see this file's own top doc comment and `engine/development.ts` for where a real value comes from.
+ *
+ * Round C152 additions, both scoped to the improvement (`imp_`) half only, same as
+ * `developmentMultiplier` itself — `deg_`/decline is untouched by either:
+ * - **Priority 2**: `youthTaperFor(p)` (see its own doc comment) multiplies `developmentMultiplier`
+ *   itself, so it applies uniformly regardless of the caller's own multiplier (including
+ *   `careerProjection.ts`'s hardcoded `1` — a young big-headroom player's projected trajectory now
+ *   shows real taper-driven growth even in that baseline-multiplier scenario, not just when a real
+ *   save's coach/facility multiplier is passed).
+ * - **Priority 3**: `skillEmphasis` (optional, default none — every skill reads `1`, i.e. today's
+ *   unmodified uniform distribution) is a per-`DiscreteSkill` weight multiplier on that skill's own
+ *   `imp_` term specifically — see `engine/skillEmphasis.ts` for where a real season-derived value
+ *   comes from and its own anti-snowball bounds. Applied INSIDE the per-skill loop (each skill's own
+ *   `imp` reweighted before it's averaged into its attributes), never on `deg_`, and never touching
+ *   `developmentMultiplier`/`PROGRESSION_SCALE` themselves — this only changes WHERE the same overall
+ *   improvement budget lands, not how much of it there is.
  */
-export function ageOnePlayer(p: Player, developmentMultiplier = 1): Player {
+export function ageOnePlayer(p: Player, developmentMultiplier = 1, skillEmphasis?: Partial<Record<DiscreteSkill, number>>): Player {
   const ceiling = potentialCeilingFor(p);
   const af = ageFactor(p.Age);
+  const effectiveDevelopmentMultiplier = developmentMultiplier * youthTaperFor(p);
   const contributions: Partial<Record<RatedAttribute, number[]>> = {};
 
   for (const skill of DISCRETE_SKILLS) {
-    const imp = p[`imp_${skill}`];
+    const imp = p[`imp_${skill}`] * (skillEmphasis?.[skill] ?? 1);
     const deg = p[`deg_${skill}`];
     for (const attr of SKILL_ATTRIBUTES[skill]) {
       const headroom = potentialHeadroom(p[attr], ceiling);
-      const delta = imp * headroom * developmentMultiplier * PROGRESSION_SCALE - deg * af * PROGRESSION_SCALE;
+      const delta = imp * headroom * effectiveDevelopmentMultiplier * PROGRESSION_SCALE - deg * af * PROGRESSION_SCALE;
       (contributions[attr] ??= []).push(delta);
     }
   }
@@ -365,9 +475,15 @@ export function recomputeOVR(players: readonly Player[]): Player[] {
  * `engine/development.ts`'s `developmentMultipliersFor`, called from `saveGame.ts`'s
  * `runOffSeasonOnSave` before this function runs. A player missing from the map (or no map at all)
  * ages at the default `1` multiplier, i.e. exactly today's behaviour.
+ *
+ * `skillEmphases` (Round C152 Priority 3, optional) is a `PlayerID -> (DiscreteSkill -> weight)` map —
+ * see `engine/skillEmphasis.ts`'s `skillEmphasesFor`, called from the same `saveGame.ts` call site,
+ * same "computed from the season that's about to be archived, before anyone ages" timing as
+ * `developmentMultipliers`. A player missing from the map ages with no emphasis at all, i.e. every
+ * skill at its default uniform `1` weight — today's unmodified behaviour.
  */
-export function runOffSeason(players: readonly Player[], developmentMultipliers?: ReadonlyMap<number, number>): Player[] {
-  const aged = players.map((p) => ageOnePlayer(p, developmentMultipliers?.get(p.PlayerID) ?? 1));
+export function runOffSeason(players: readonly Player[], developmentMultipliers?: ReadonlyMap<number, number>, skillEmphases?: ReadonlyMap<number, Partial<Record<DiscreteSkill, number>>>): Player[] {
+  const aged = players.map((p) => ageOnePlayer(p, developmentMultipliers?.get(p.PlayerID) ?? 1, skillEmphases?.get(p.PlayerID)));
   return recomputeOVR(aged);
 }
 

@@ -22,6 +22,21 @@
  * state after Round C143d's 147 flagged players, before Round C143e's 1 additional row — Darcy
  * Macpherson), same reason again.
  *
+ * Updated again in Round C143f, which is the FIRST sub-round of this series to also run
+ * `refreshPlayerStats2026.ts` (not just `applyRosterMovements.ts`) — a new real `real2026SeasonStats.ts`
+ * row for "Bailey J. Williams" was added, resolving a Round C143d data-completeness gap, and that
+ * script was re-run to apply it. `refreshPlayerStats2026.ts`'s own z-score fairness pass
+ * (`recomputeOVRWithShrinkage`) legitimately ripples small OVR/POT/RATED_ATTRIBUTES changes across
+ * the FULL 751-player population whenever the reference population changes (documented in that
+ * script's own header) — so checks 6/7 below, which used to assert byte-identical stat_* and attrs
+ * and OVR/POT for literally everyone, are now split into two stages: `ROSTER_BACKUP_PATH` (before
+ * `applyRosterMovements.ts` ran this round) isolates that script's effect (should ONLY touch the 4
+ * real-status columns, and this round only the Darcy Macpherson row's `realStatusYear`/reason/
+ * source); `STATS_BACKUP_PATH` (after roster movements, before `refreshPlayerStats2026.ts` ran)
+ * isolates the stats-refresh script's effect (should ONLY touch `stat_*` for the one newly-matched
+ * player, "Bailey J. Williams", and OVR/POT/RATED_ATTRIBUTES/`clangerTend` for any player — the
+ * documented population-wide ripple — never any other column for anyone).
+ *
  * Run with: `node --experimental-strip-types scripts/verify_roundC143_scratch.ts`
  */
 import { readFileSync } from "node:fs";
@@ -35,11 +50,16 @@ import type { Player } from "../src/types/player.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = join(__dirname, "..", "data", "players_master.csv");
-const BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143e.csv");
+// Isolates applyRosterMovements.ts's effect this round (before that script ran).
+const ROSTER_BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143f.csv");
+// Isolates refreshPlayerStats2026.ts's effect this round (after roster movements, before the stats refresh).
+const STATS_BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143f-statsRefresh.csv");
+const BACKUP_PATH = STATS_BACKUP_PATH;
 
 const players: Player[] = parseCsvToObjects(readFileSync(CSV_PATH, "utf-8")).map(coerceRow);
 const before: Player[] = parseCsvToObjects(readFileSync(BACKUP_PATH, "utf-8")).map(coerceRow);
-console.log(`Loaded ${players.length} players from players_master.csv, ${before.length} from the pre-round backup`);
+const rosterBefore: Player[] = parseCsvToObjects(readFileSync(ROSTER_BACKUP_PATH, "utf-8")).map(coerceRow);
+console.log(`Loaded ${players.length} players from players_master.csv, ${before.length} from the pre-stats-refresh backup, ${rosterBefore.length} from the pre-roster-movement backup`);
 
 let fail = 0;
 function check(label: string, cond: boolean) {
@@ -101,46 +121,54 @@ check("no player has more than one conflicting status reason", conflicts === 0);
 const hasBaileyCollision = REAL_ROSTER_MOVEMENTS.some((e) => e.realFullName === "Bailey Williams" || e.realFullName === "Bailey J. Williams");
 check('"Bailey Williams" / "Bailey J. Williams" have no roster-movement entry (both confirmed real, distinct, Active players)', !hasBaileyCollision);
 
-// 6. stat_*/RATED_ATTRIBUTES/OVR/POT/archetype are byte-identical to the pre-round backup — this
-// round's script must ONLY have touched the 4 new real-status columns.
+// 6 (Round C143f revision). Isolate applyRosterMovements.ts's effect this round: comparing the
+// pre-stats-refresh snapshot against the pre-roster-movement snapshot, ONLY the 4 real-status
+// columns may differ, and only for Darcy Macpherson (his year/reason/source correction — the
+// non-Active head-count doesn't change, so no other row should differ at all).
+const rosterBeforeByName = new Map(rosterBefore.map((p) => [p.realFullName ?? `${p.fname} ${p.lname}`, p]));
+const REAL_STATUS_COLUMNS = new Set(["realStatus", "realStatusYear", "realStatusReason", "realStatusSource"]);
+let rosterScopeViolations = 0;
+for (const p of before) {
+  const name = p.realFullName ?? `${p.fname} ${p.lname}`;
+  const rb = rosterBeforeByName.get(name);
+  if (!rb) continue;
+  for (const col of Object.keys(p) as (keyof Player)[]) {
+    if (REAL_STATUS_COLUMNS.has(col as string)) continue;
+    if ((p as unknown as Record<string, unknown>)[col] !== (rb as unknown as Record<string, unknown>)[col]) rosterScopeViolations++;
+  }
+}
+check("applyRosterMovements.ts this round touched ONLY the 4 real-status columns (nothing else, for any player)", rosterScopeViolations === 0);
+
+// 7 (Round C143f revision). Isolate refreshPlayerStats2026.ts's effect this round: comparing the
+// current CSV against the pre-stats-refresh snapshot, stat_* fields may ONLY differ for "Bailey J.
+// Williams" (the one newly-matched player this round), and NO column outside
+// stat_*/RATED_ATTRIBUTES/OVR/POT/clangerTend may differ for ANYONE — the population-wide
+// OVR/POT/RATED_ATTRIBUTES ripple from the z-score fairness pass re-running against a changed
+// reference population is expected and documented in refreshPlayerStats2026.ts's own header.
 const beforeByName = new Map(before.map((p) => [p.realFullName ?? `${p.fname} ${p.lname}`, p]));
 const STAT_FIELDS = ["stat_GM", "stat_DI", "stat_KI", "stat_HB", "stat_MK", "stat_TK", "stat_CL", "stat_GL", "stat_HO", "stat_CM", "stat_CP", "stat_UP", "stat_1pct"] as const;
-let untouchedMismatches = 0;
+const STATS_REFRESH_ALLOWED = new Set<string>([...STAT_FIELDS, ...RATED_ATTRIBUTES, "OVR", "POT", "clangerTend"]);
+let unexpectedStatFieldChange = 0;
+let outOfScopeChange = 0;
 for (const p of players) {
   const name = p.realFullName ?? `${p.fname} ${p.lname}`;
   const b = beforeByName.get(name);
   if (!b) continue;
   for (const f of STAT_FIELDS) {
-    if (p[f] !== b[f]) untouchedMismatches++;
+    if (p[f] !== b[f] && name !== "Bailey J. Williams") unexpectedStatFieldChange++;
   }
-  for (const a of RATED_ATTRIBUTES) {
-    if (p[a] !== b[a]) untouchedMismatches++;
+  for (const col of Object.keys(p) as (keyof Player)[]) {
+    if (STATS_REFRESH_ALLOWED.has(col as string) || REAL_STATUS_COLUMNS.has(col as string)) continue;
+    if ((p as unknown as Record<string, unknown>)[col] !== (b as unknown as Record<string, unknown>)[col]) outOfScopeChange++;
   }
-  if (p.OVR !== b.OVR || p.POT !== b.POT) untouchedMismatches++;
-  if (p.archetype !== b.archetype || p.archetype_reason !== b.archetype_reason) untouchedMismatches++;
 }
-check("stat_*/RATED_ATTRIBUTES/OVR/POT/archetype are byte-identical to the pre-round backup for all 751 players", untouchedMismatches === 0);
+check("refreshPlayerStats2026.ts this round changed stat_* ONLY for Bailey J. Williams", unexpectedStatFieldChange === 0);
+check("refreshPlayerStats2026.ts this round touched no column outside stat_*/RATED_ATTRIBUTES/OVR/POT/clangerTend for anyone", outOfScopeChange === 0);
 
-// 7. Every OTHER CSV column (everything except the 4 new real-status columns) is also
-// byte-identical, field-for-field, confirming this round's write touched nothing beyond its
-// disclosed scope.
-const NEW_COLUMNS = new Set(["realStatus", "realStatusYear", "realStatusReason", "realStatusSource"]);
-const csvText = readFileSync(CSV_PATH, "utf-8");
-const [header] = csvText.split("\n");
-const allColumns = header.split(",");
-let fullRowMismatches = 0;
-for (const p of players) {
-  const name = p.realFullName ?? `${p.fname} ${p.lname}`;
-  const b = beforeByName.get(name);
-  if (!b) continue;
-  for (const col of allColumns) {
-    if (NEW_COLUMNS.has(col)) continue;
-    const pv = (p as unknown as Record<string, unknown>)[col];
-    const bv = (b as unknown as Record<string, unknown>)[col];
-    if (pv !== bv) fullRowMismatches++;
-  }
-}
-check("every non-real-status CSV column is byte-identical to the pre-round backup for all 751 players", fullRowMismatches === 0);
+// 7b. Bailey J. Williams specifically now has a real 2026 stat row applied (no longer part of the
+// data-completeness gap Round C143d flagged).
+const bjw = players.find((p) => p.realFullName === "Bailey J. Williams");
+check("Bailey J. Williams now has real 2026 stats applied (stat_GM = 19)", bjw?.stat_GM === 19);
 
 // 8. Players with no entry in the event log stay implicitly Active (blank realStatus).
 let unexpectedlyFlagged = 0;

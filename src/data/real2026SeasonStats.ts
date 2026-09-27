@@ -29,8 +29,13 @@
  * `realFullName` already disambiguates him from Western Bulldogs' "Bailey Williams" (`fname:
  * "Bailey"`, which DOES have a row below) via the "J." — the two were never at risk of colliding in
  * `real2026StatsFor`'s lookup. See `realRosterMovements.ts`'s Round C143d addendum for the full
- * writeup. Not fixed here (no full 23-column per-game stat line was captured this round) — flagged
- * as a scoped follow-up: re-pull his row from the same "AFL 2026 Players DB" source Round C142 used.
+ * writeup.
+ *
+ * ROUND C143f RESOLUTION: the gap above is now fixed — a real "Bailey J. Williams" row has been
+ * added (West Coast block below), sourced directly from footywire.com (basic stats "Season 2026
+ * Totals/Averages" table, the "Advanced Stats" toggle, and the "Career" tab's per-season table,
+ * which independently corroborates the basic totals plus a 2026 Brownlow vote). This is no longer a
+ * scoped follow-up.
  */
 
 export interface Real2026SeasonStats {
@@ -597,6 +602,11 @@ const RAW_ROWS: RawRow[] = [
   ["Jack Graham", 13, 128, 29, 108, 236, 4, 0, 0, 81, 21, 37, 38, 48, 18, 23, 0, 94, 149, 0, 1, 3, 0, 9],
   ["Brady Hough", 23, 157, 100, 135, 292, 6, 2, 0, 58, 45, 27, 15, 41, 15, 22, 0, 81, 218, 2, 2, 44, 0, 5],
   ["Elijah Hewett", 6, 33, 17, 36, 69, 0, 1, 0, 16, 5, 7, 6, 17, 2, 6, 0, 24, 45, 1, 0, 1, 0, 2],
+  // Round C143f: added from footywire.com direct research (basic stats + Advanced Stats toggle +
+  // Career tab) — see file-level Round C143f note above. Resolves the Round C143d data-completeness
+  // gap for West Coast's "Bailey J. Williams" (distinct realFullName from Western Bulldogs' "Bailey
+  // Williams" row below, in that club's own block).
+  ["Bailey J. Williams", 19, 141, 39, 110, 251, 8, 7, 570, 57, 27, 49, 99, 57, 35, 22, 1, 188, 71, 21, 6, 50, 0, 10],
   ["Reuben Ginbey", 13, 107, 57, 64, 171, 0, 0, 0, 28, 34, 13, 4, 17, 10, 4, 0, 70, 98, 8, 0, 80, 7, 2],
   ["Tom Cole", 17, 124, 66, 86, 210, 9, 6, 0, 42, 9, 39, 10, 36, 13, 16, 0, 66, 147, 3, 6, 25, 8, 7],
   ["Jamie Cripps", 5, 31, 17, 20, 51, 4, 5, 0, 9, 2, 11, 2, 9, 2, 3, 0, 15, 35, 0, 2, 5, 0, 2],

@@ -224,6 +224,27 @@
  * doesn't mistake it for having the same evidentiary strength as the dated rows around it.
  *
  * Total after Round C143e: 148 non-Active players (112 Delisted, 21 Injured, 15 Retired) of 751.
+ *
+ * ROUND C143f CORRECTION to the above: the `year: 2026` inferred-from-absence estimate for Darcy
+ * Macpherson was wrong. Tyler confirmed directly that he was delisted in 2024, not 2026 — the row's
+ * `year` has been corrected to 2024 and its `source` updated accordingly (see the entry itself).
+ * This doesn't change the non-Active head-count (still 148 of 751; he was already counted as
+ * Delisted), only the year on this one row.
+ *
+ * ROUND C143f ADDENDUM (fringe-player cohort closure, no new `RosterMovementEntry` rows): Tyler
+ * directly confirmed (2026-09-27) the following 8 names — the remaining entries from Round C143d's
+ * "genuinely unexplained" gap-set list, EXCLUDING Lance Collard (documented separate partial-
+ * suspension explanation) and Bailey J. Williams (data-completeness gap, resolved this round in
+ * `real2026SeasonStats.ts` instead) — as: "Consider each of these players fringe players who didn't
+ * manage to play an AFL game in 2026." They are real, currently-active AFL list players (confirmed
+ * present on footywire.com's live current-players list as of Round C143d) who simply have very few
+ * career games and did not get a senior game in the real 2026 season — NOT retirements, delistings,
+ * or injuries. Per Tyler's instruction this is a closed, explained category: **Alex Dodson, Clay
+ * Hall, Cooper Simpson, Hugh Davies, Josh Draper, Lucca Grego, Luke Beecken, Tyrell Dewar.**
+ * Deliberately NO `RosterMovementEntry` is added for any of these 8 — they remain `'Active'`
+ * (`realStatus` blank/undefined), same as any other player with no recorded movement. This note
+ * exists purely so a future round doesn't re-open this as an open research item: it's closed,
+ * documentation-only, no data change.
  */
 
 export type RosterMovementType =
@@ -457,7 +478,7 @@ export const REAL_ROSTER_MOVEMENTS: RosterMovementEntry[] = [
   // unlike the draftguru-sourced or bio-dated entries above, no more specific date is available for
   // this one, because the method is "absence from a live current-roster snapshot," which carries no
   // date information the way a dated bio quote or a per-year retirements table does.
-  { realFullName: "Darcy Macpherson", type: "Delisted", year: 2026, club: "Gold Coast", detail: "delisted (inferred from absence, not a dated source)", source: "footywire.com current-players list (https://www.footywire.com/afl/footy/ft_players) — absent as of Sep 2026, per Tyler's absence-implies-delisted rule for this round; no specific delisting date available, unlike the draftguru-sourced or bio-dated entries elsewhere in this file." },
+  { realFullName: "Darcy Macpherson", type: "Delisted", year: 2024, club: "Gold Coast", detail: "delisted in 2024", source: "confirmed by Tyler directly (2026-09-27 correction) — delisted in 2024, not 2026 as originally inferred from footywire absence." },
 ];
 
 let byName: Map<string, RosterMovementEntry[]> | null = null;

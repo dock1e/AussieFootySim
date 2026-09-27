@@ -97,7 +97,26 @@
  *   hand-off) retains that information — a small proof-of-concept for the "revisit the original
  *   per-year pages directly" follow-up Round C143 itself proposed above.
  *
- * Total after Round C143b: 119 non-Active players (96 Delisted, 18 Injured, 5 Retired) of 751.
+ * ROUND C143c ADDENDUM (23 more confirmed entries, cross-referencing the SAME draftguru.com.au 2024
+ * page already used for Round C143b, this time a fuller pass): Tyler cross-referenced all 38
+ * players Round C143b left as genuinely unresolved against the same
+ * `https://www.draftguru.com.au/years/2024/retirements-delistings` page (no new research, no new
+ * source — same page, fuller pass, matches identified by exact line position: the Retirements table
+ * is every row before the page's "Delistings" heading, the Delistings table is every row after it)
+ * and found 23 more exact `realFullName` matches with precise per-name dates and clubs: Alex Keath,
+ * Brandon Ellis, Charlie Dixon, Dustin Martin, Dylan Grimes, Jaidyn Stephenson, Jarryd Lyons, Joe
+ * Daniher, Marlion Pickett, and Tom Hawkins (all `'Retired'`, 2024), and Brandan Parfitt, Ethan
+ * Hughes, Gary Rohan, Jamaine Jones, Josh Rotham, Lachlan Gollant, Luke Edwards, Matthew Taberner,
+ * Ned McHenry, Patrick Parnell, Sebastian Ross, Tom Emmett, and Will Hamill (all `'Delisted'`,
+ * 2024). Notably this resolves several names Round C143's own doc comment had flagged as "more
+ * likely a `real2026SeasonStats.ts` extraction/name-matching gap than a genuine absence" (Joe
+ * Daniher, Dustin Martin, Tom Hawkins) — they turn out to be genuine real-world retirements after
+ * all, not extraction gaps; that speculation is superseded by this round's confirmed source rows.
+ * Like the Round C143b 7, these entries carry a real per-name year (2024) and a real
+ * Retired-vs-Delisted split (not the generic `'Delisted'`/`year: 2026` placeholder the original 93
+ * Round C143 rows use).
+ *
+ * Total after Round C143c: 142 non-Active players (109 Delisted, 18 Injured, 15 Retired) of 751.
  */
 
 export type RosterMovementType =
@@ -155,6 +174,36 @@ export const REAL_ROSTER_MOVEMENTS: RosterMovementEntry[] = [
   { realFullName: "Curtis Taylor", type: "Delisted", year: 2024, club: "North Melbourne", source: "draftguru.com.au 2024 delistings, Sep 20 2024" },
   { realFullName: "Zane Trew", type: "Delisted", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 delistings, Sep 18 2024" },
   { realFullName: "Alex Witherden", type: "Delisted", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 delistings, Oct 18 2024" },
+
+  // --- Round C143c: 23 additional confirmed entries (see file-level Round C143c addendum above) ---
+  // Same draftguru.com.au 2024 `/years/2024/retirements-delistings` page Round C143b already used,
+  // a fuller pass over the SAME page rather than new research: cross-referenced all 38 players
+  // Round C143b left genuinely unresolved and found these 23 as exact realFullName matches, with
+  // table membership (Retired vs. Delisted) determined by line position on the page — Retirements
+  // table = every row before the "Delistings" heading, Delistings table = every row after it.
+  { realFullName: "Alex Keath", type: "Retired", year: 2024, club: "Western Bulldogs", source: "draftguru.com.au 2024 retirements, Oct 21 2024" },
+  { realFullName: "Brandon Ellis", type: "Retired", year: 2024, club: "Gold Coast", source: "draftguru.com.au 2024 retirements, Jul 31 2024" },
+  { realFullName: "Charlie Dixon", type: "Retired", year: 2024, club: "Port Adelaide", source: "draftguru.com.au 2024 retirements, Sep 25 2024" },
+  { realFullName: "Dustin Martin", type: "Retired", year: 2024, club: "Richmond", source: "draftguru.com.au 2024 retirements, Aug 6 2024" },
+  { realFullName: "Dylan Grimes", type: "Retired", year: 2024, club: "Richmond", source: "draftguru.com.au 2024 retirements, Aug 20 2024" },
+  { realFullName: "Jaidyn Stephenson", type: "Retired", year: 2024, club: "North Melbourne", source: "draftguru.com.au 2024 retirements, Oct 29 2024" },
+  { realFullName: "Jarryd Lyons", type: "Retired", year: 2024, club: "Brisbane", source: "draftguru.com.au 2024 retirements, Sep 13 2024" },
+  { realFullName: "Joe Daniher", type: "Retired", year: 2024, club: "Brisbane", source: "draftguru.com.au 2024 retirements, Oct 3 2024" },
+  { realFullName: "Marlion Pickett", type: "Retired", year: 2024, club: "Richmond", source: "draftguru.com.au 2024 retirements, Aug 22 2024" },
+  { realFullName: "Tom Hawkins", type: "Retired", year: 2024, club: "Geelong", source: "draftguru.com.au 2024 retirements, Aug 6 2024" },
+  { realFullName: "Brandan Parfitt", type: "Delisted", year: 2024, club: "Geelong", source: "draftguru.com.au 2024 delistings, Sep 24 2024" },
+  { realFullName: "Ethan Hughes", type: "Delisted", year: 2024, club: "Fremantle", source: "draftguru.com.au 2024 delistings, Sep 11 2024" },
+  { realFullName: "Gary Rohan", type: "Delisted", year: 2024, club: "Geelong", source: "draftguru.com.au 2024 delistings, Sep 24 2024" },
+  { realFullName: "Jamaine Jones", type: "Delisted", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 delistings, Sep 18 2024" },
+  { realFullName: "Josh Rotham", type: "Delisted", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 delistings, Oct 21 2024" },
+  { realFullName: "Lachlan Gollant", type: "Delisted", year: 2024, club: "Adelaide", source: "draftguru.com.au 2024 delistings, Oct 4 2024" },
+  { realFullName: "Luke Edwards", type: "Delisted", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 delistings, Oct 31 2024" },
+  { realFullName: "Matthew Taberner", type: "Delisted", year: 2024, club: "Fremantle", source: "draftguru.com.au 2024 delistings, Sep 11 2024" },
+  { realFullName: "Ned McHenry", type: "Delisted", year: 2024, club: "Adelaide", source: "draftguru.com.au 2024 delistings, Oct 4 2024" },
+  { realFullName: "Patrick Parnell", type: "Delisted", year: 2024, club: "Adelaide", source: "draftguru.com.au 2024 delistings, Oct 4 2024" },
+  { realFullName: "Sebastian Ross", type: "Delisted", year: 2024, club: "St Kilda", source: "draftguru.com.au 2024 delistings, Aug 29 2024" },
+  { realFullName: "Tom Emmett", type: "Delisted", year: 2024, club: "Fremantle", source: "draftguru.com.au 2024 delistings, Oct 25 2024" },
+  { realFullName: "Will Hamill", type: "Delisted", year: 2024, club: "Adelaide", source: "draftguru.com.au 2024 delistings, Oct 4 2024" },
 
 
   // --- 18 confirmed real 2026 season-ending injuries ---

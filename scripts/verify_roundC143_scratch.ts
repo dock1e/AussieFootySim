@@ -10,6 +10,10 @@
  * true pre-Round-C143 original — `applyRosterMovements.ts`'s own backup path was re-pointed the
  * same way, so this file stays in sync with what that script actually wrote against.
  *
+ * Updated again in Round C143c to compare against `players_master.pre-roundC143c.csv` (the CSV
+ * state after Round C143b's 119 flagged players, before Round C143c's 23 additional rows), for the
+ * same reason — `applyRosterMovements.ts`'s `BACKUP_PATH` was re-pointed the same way this round.
+ *
  * Run with: `node --experimental-strip-types scripts/verify_roundC143_scratch.ts`
  */
 import { readFileSync } from "node:fs";
@@ -23,7 +27,7 @@ import type { Player } from "../src/types/player.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = join(__dirname, "..", "data", "players_master.csv");
-const BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143b.csv");
+const BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143c.csv");
 
 const players: Player[] = parseCsvToObjects(readFileSync(CSV_PATH, "utf-8")).map(coerceRow);
 const before: Player[] = parseCsvToObjects(readFileSync(BACKUP_PATH, "utf-8")).map(coerceRow);

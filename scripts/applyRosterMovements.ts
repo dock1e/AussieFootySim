@@ -28,11 +28,12 @@ import type { Player } from "../src/types/player.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = join(__dirname, "..", "data", "players_master.csv");
-// Round C143b: incremented backup filename so re-running this script doesn't clobber the true
-// pre-Round-C143 original backup (players_master.pre-roundC143.csv, 0 real-status rows) with a
-// mid-round state. This backup captures the CSV as it stood after Round C143 (111 flagged) and
-// before Round C143b's 8 additional rows.
-const BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143b.csv");
+// Round C143c: incremented backup filename again, same reason as Round C143b's own increment —
+// re-running this script must not clobber either players_master.pre-roundC143.csv (the true
+// pre-Round-C143 original, 0 real-status rows) or players_master.pre-roundC143b.csv (captured
+// after Round C143's 111 flagged, before Round C143b's 8 additions). This new backup captures the
+// CSV as it stood after Round C143b (119 flagged) and before Round C143c's 23 additional rows.
+const BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143c.csv");
 
 function csvField(value: unknown): string {
   if (value === undefined || value === null) return "";

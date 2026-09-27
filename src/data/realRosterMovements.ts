@@ -55,7 +55,10 @@
  *    per-name year preserved. Refining both the Retired/Delisted split and the real per-name year
  *    is an open follow-up, noted in the design note addendum and ROADMAP.md.
  *
- * KNOWN NAME-COLLISION, DELIBERATELY SKIPPED: "Bailey Williams" / "Bailey J. Williams" — Schema.md
+ * KNOWN NAME-COLLISION, DELIBERATELY SKIPPED (see the Round C143d addendum below for how this was
+ * actually resolved — it was never a real join-key collision in this file's own `realFullName`
+ * key, just an unexplained gap until footywire research closed it out): "Bailey Williams" /
+ * "Bailey J. Williams" — Schema.md
  * (the "SuperCoach trend recalibration" section) already documents that `players_master.csv`
  * genuinely contains two different real Bailey Williamses (West Coast's "Bailey J. Williams" and
  * Western Bulldogs' "Bailey Williams") that a prior round deliberately left unmatched rather than
@@ -116,7 +119,91 @@
  * Retired-vs-Delisted split (not the generic `'Delisted'`/`year: 2026` placeholder the original 93
  * Round C143 rows use).
  *
- * Total after Round C143c: 142 non-Active players (109 Delisted, 18 Injured, 15 Retired) of 751.
+ * ROUND C143d ADDENDUM (footywire.com research on the final 15 names Round C143c left unresolved):
+ * Tyler used footywire.com's live current-players list (https://www.footywire.com/afl/footy/
+ * ft_players) plus individual player profile/bio pages to research all 15 remaining names,
+ * including the "Bailey J. Williams" collision case. A first, useful negative result: ALL 15 names
+ * are present on footywire's current 2026 roster list — none of them have actually left the league
+ * (no undiscovered retirement/delisting among the 15). Four came back as genuine, sourceable
+ * `RosterMovementEntry` cases:
+ *
+ * - **Lachlan Sholl (Adelaide)** — Delisted, 2026. footywire's own player-biography page (dated
+ *   Thu 17 Sep 2026) reads: "Adelaide delists Chayce Jones, Lachie Sholl and Tyler Welsh." This is
+ *   a real, very recent (post-2026-season) Adelaide delisting batch that fell in the tail of the
+ *   2026 draftguru delistings table Round C143's original flat-list fetch was already suspected of
+ *   truncating before reaching Adelaide's section — this footywire find confirms that suspicion
+ *   rather than resolving it via draftguru itself. The same bio names two more Adelaide delistings
+ *   the same day:
+ *   - **Chayce Jones** — also added below as Delisted, 2026, Adelaide, same source. He DOES already
+ *     carry a real 2026 `real2026SeasonStats.ts` row (3 games) — not a contradiction: a player can
+ *     genuinely play part of a season and still be delisted at its end. `applyRosterMovements.ts`
+ *     only ever writes the 4 real-status columns, never touching `stat_*`, so this is safe.
+ *   - **Tyler Welsh** — checked against `players_master.csv` by exact name and NOT found at all (no
+ *     row under that name). Not added; skipped rather than guessed at. If this player belongs in the
+ *     751-player pool under a different name spelling, that's a separate future join-gap, not
+ *     assumed here.
+ * - **Sam Sturt (Fremantle)** — Injured, 2026, hamstring. footywire's live player-profile "Status"
+ *   field reads "Hamstring injury, Expected return: TBC," and his stats page shows 0 games played
+ *   for the 2026 season — treated as season-ending in effect (out all year) even though footywire's
+ *   own return-estimate field says "TBC" rather than an explicit "Season" designation the way the
+ *   SEN Injury Hub sources phrase it elsewhere in this file. Round C143's own doc comment had
+ *   already flagged his listing as "hamstring | TBC, not season-ending" and left him unresolved —
+ *   this footywire profile page is the missing piece that closes that out.
+ * - **Sid Draper (Adelaide)** — Injured, 2026, groin. footywire's player-biography page (dated Thu
+ *   15 Jan 2026) quotes Crows coaching director Murray Davis: "Sid Draper remains on light training
+ *   duties as he continues to rehab a groin issue," and his stats page shows 0 games played in 2026
+ *   — consistent with a season-long injury.
+ * - **Tom Doedee (Brisbane Lions)** — Injured, `year: 2024` (when the injury actually happened, not
+ *   2026), knee/ACL. footywire's bio: a third ACL reconstruction in March 2024 ("Tom Doedee's AFL
+ *   comeback is cruelly denied... tore his anterior cruciate ligament for a third time"), with a
+ *   follow-up March 2025 bio entry saying he was "on the verge of returning to play in his first
+ *   game in over a year" — but he still shows 0 games played in 2026, meaning that comeback kept
+ *   being delayed and he remains out as of this round (see this row's own `detail` field for that
+ *   2026-still-out note). Unlike every other `'Injured'` row in this file (all season-scoped to
+ *   2026), this is this file's first genuinely multi-year chronic-injury case — `year` records when
+ *   the injury itself occurred, not an implied single season out.
+ *
+ * **Lance Collard (St Kilda) — deliberately left WITHOUT a `RosterMovementEntry`.** footywire's bio
+ * page reveals a real, already-adjudicated 2026 AFL Tribunal/Appeals Board disciplinary matter (a
+ * guilty finding for a homophobic slur toward an opponent, a sought 10-game suspension for a second
+ * such offence reduced on appeal to a 4-match suspension with 2 of those 4 suspended into the
+ * following year) — stated here factually and neutrally as a matter of public record, not
+ * editorialized. A 4-match suspension, however, only partially explains his 0 games played across
+ * the ~19+ rounds of the 2026 season — he'd still have been available for the other rounds — so
+ * this is disclosed as a partial explanation only, not treated as a resolved case. `RosterMovementType`
+ * has no `'Suspended'` case, and inventing one for this single, partially-explanatory data point
+ * isn't warranted; he stays implicitly `'Active'` (no entry) pending whatever actually explains the
+ * rest of his season.
+ *
+ * **"Bailey Williams" / "Bailey J. Williams" — the apparent collision is RESOLVED, not just
+ * re-confirmed.** footywire confirms both are real, distinct, fully active 2026 players who each
+ * played all 19 games of the season: Bailey Williams (Western Bulldogs, #34, born 10 Oct 1997,
+ * 2015 National Draft pick 48, 193 career games) and Bailey J. Williams (West Coast, #32, born 17
+ * Apr 2000, 2018 National Draft pick 35, 107 career games). Investigating `players_master.csv`
+ * itself (not just Schema.md's prior SuperCoach-spreadsheet note) found the "collision" was never
+ * actually present in THIS project's own join key: the CSV already carries them as two distinct
+ * rows with two distinct `fname` values — West Coast's row has `fname: "Bailey J."` and Western
+ * Bulldogs' has `fname: "Bailey"` — so `realFullName` (`fname + " " + lname`) is already
+ * "Bailey J. Williams" vs. "Bailey Williams", two different strings, not one ambiguous name. Every
+ * lookup in this codebase (`real2026StatsFor`, `rosterMovementsFor`) is keyed on exact `realFullName`
+ * string match, so neither one was ever at risk of resolving to the other player's data — nothing
+ * a club-aware tiebreaker needed to fix. Schema.md's prior note describes a DIFFERENT, narrower
+ * problem: an external SuperCoach spreadsheet's own "Bailey J. Williams" row couldn't be safely
+ * matched against the CSV using name alone in THAT pass, so it was left unmatched there — a
+ * one-off external-source join gap, not a defect in this project's own `realFullName` key. The real,
+ * remaining reason West Coast's "Bailey J. Williams" still shows up in the `real2026SeasonStats.ts`
+ * 157-player gap set is a plain data-completeness gap: he has no row in that file at all, despite
+ * playing all 19 real 2026 games per footywire — an extraction gap in the Round C142 stat pull, not
+ * a name-collision bug. Deliberately NOT fixed by fabricating a stats row this round (footywire's
+ * profile page confirms games played but this round didn't capture his full 23-column per-game stat
+ * line) — flagged as a concrete, scoped follow-up for a future round (re-pull his row from the same
+ * "AFL 2026 Players DB" spreadsheet Round C142 used, or footywire's own per-game stats table) rather
+ * than left as a vague "collision." No `RosterMovementEntry` is added for either name — both are
+ * confirmedly `'Active'` — so he mechanically still appears in any "157-gap-set minus
+ * `rosterMovementsFor`" computation; that's now a documented, understood data-completeness gap, not
+ * an unexplained one.
+ *
+ * Total after Round C143d: 147 non-Active players (111 Delisted, 21 Injured, 15 Retired) of 751.
  */
 
 export type RosterMovementType =
@@ -322,6 +409,16 @@ export const REAL_ROSTER_MOVEMENTS: RosterMovementEntry[] = [
   { realFullName: "Willie Rioli", type: "Delisted", year: 2026, source: RETIREMENT_DELISTING_SOURCE },
   { realFullName: "Zaine Cordy", type: "Delisted", year: 2026, source: RETIREMENT_DELISTING_SOURCE },
   { realFullName: "Zak Jones", type: "Delisted", year: 2026, source: RETIREMENT_DELISTING_SOURCE },
+
+  // --- Round C143d: 4 additional confirmed entries from footywire.com research on the final 15
+  // names Round C143c left unresolved (see file-level Round C143d addendum above for full detail,
+  // including why "Bailey Williams"/"Bailey J. Williams" and Lance Collard deliberately get NO
+  // entry here). ---
+  { realFullName: "Lachlan Sholl", type: "Delisted", year: 2026, club: "Adelaide", source: "footywire.com player biography, Thu 17 Sep 2026: 'Adelaide delists Chayce Jones, Lachie Sholl and Tyler Welsh'" },
+  { realFullName: "Chayce Jones", type: "Delisted", year: 2026, club: "Adelaide", source: "footywire.com player biography, Thu 17 Sep 2026: 'Adelaide delists Chayce Jones, Lachie Sholl and Tyler Welsh' (he also has a real 2026 real2026SeasonStats.ts row — 3 games — played part of the season before being delisted at its end, not a contradiction)" },
+  { realFullName: "Sam Sturt", type: "Injured", year: 2026, club: "Fremantle", detail: "hamstring (footywire Status field: 'Expected return: TBC', treated as season-ending — 0 games played in 2026)", source: "footywire.com player profile, live Status field + 2026 season stats page (0 games)" },
+  { realFullName: "Sid Draper", type: "Injured", year: 2026, club: "Adelaide", detail: "groin (season-ending)", source: "footywire.com player biography, Thu 15 Jan 2026: Crows coaching director Murray Davis — 'Sid Draper remains on light training duties as he continues to rehab a groin issue'" },
+  { realFullName: "Tom Doedee", type: "Injured", year: 2024, club: "Brisbane Lions", detail: "knee/ACL — third ACL reconstruction, suffered March 2024; a March 2025 bio update said he was 'on the verge of returning' but he still shows 0 games played in 2026, so he remains out as of this round", source: "footywire.com player biography (March 2024 and March 2025 entries)" },
 ];
 
 let byName: Map<string, RosterMovementEntry[]> | null = null;

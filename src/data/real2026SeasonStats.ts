@@ -22,6 +22,15 @@
  *
  * Matched against `Player.realFullName` (frozen `fname + " " + lname`, round 68) by
  * `real2026StatsFor` below — same join-key discipline as `realDraftHistory.ts`/`realSeasonHistory.ts`.
+ *
+ * ROUND C143d NOTE: West Coast's "Bailey J. Williams" (`players_master.csv` `fname: "Bailey J."`)
+ * has no row in this file despite footywire.com confirming he played all 19 real 2026 games — a
+ * plain data-completeness gap in this file's original extraction pass, not a name-collision bug.
+ * `realFullName` already disambiguates him from Western Bulldogs' "Bailey Williams" (`fname:
+ * "Bailey"`, which DOES have a row below) via the "J." — the two were never at risk of colliding in
+ * `real2026StatsFor`'s lookup. See `realRosterMovements.ts`'s Round C143d addendum for the full
+ * writeup. Not fixed here (no full 23-column per-game stat line was captured this round) — flagged
+ * as a scoped follow-up: re-pull his row from the same "AFL 2026 Players DB" source Round C142 used.
  */
 
 export interface Real2026SeasonStats {

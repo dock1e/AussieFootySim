@@ -14,6 +14,10 @@
  * state after Round C143b's 119 flagged players, before Round C143c's 23 additional rows), for the
  * same reason — `applyRosterMovements.ts`'s `BACKUP_PATH` was re-pointed the same way this round.
  *
+ * Updated again in Round C143d to compare against `players_master.pre-roundC143d.csv` (the CSV
+ * state after Round C143c's 142 flagged players, before Round C143d's 5 additional rows), same
+ * reason again.
+ *
  * Run with: `node --experimental-strip-types scripts/verify_roundC143_scratch.ts`
  */
 import { readFileSync } from "node:fs";
@@ -27,7 +31,7 @@ import type { Player } from "../src/types/player.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = join(__dirname, "..", "data", "players_master.csv");
-const BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143c.csv");
+const BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143d.csv");
 
 const players: Player[] = parseCsvToObjects(readFileSync(CSV_PATH, "utf-8")).map(coerceRow);
 const before: Player[] = parseCsvToObjects(readFileSync(BACKUP_PATH, "utf-8")).map(coerceRow);
@@ -86,9 +90,12 @@ for (const [name, types] of movementsByName) {
 }
 check("no player has more than one conflicting status reason", conflicts === 0);
 
-// 5. The known Bailey Williams collision is NOT present anywhere in the event log.
+// 5. Neither Bailey Williams is present anywhere in the event log. Round C143d resolved the
+// underlying "collision" question (both are real, distinct, active players — see that round's
+// addendum in realRosterMovements.ts — and `realFullName` already tells them apart via the "J."
+// in West Coast's `fname`), but no RosterMovementEntry is warranted for either: both are Active.
 const hasBaileyCollision = REAL_ROSTER_MOVEMENTS.some((e) => e.realFullName === "Bailey Williams" || e.realFullName === "Bailey J. Williams");
-check('"Bailey Williams" / "Bailey J. Williams" collision case is excluded from realRosterMovements.ts', !hasBaileyCollision);
+check('"Bailey Williams" / "Bailey J. Williams" have no roster-movement entry (both confirmed real, distinct, Active players)', !hasBaileyCollision);
 
 // 6. stat_*/RATED_ATTRIBUTES/OVR/POT/archetype are byte-identical to the pre-round backup — this
 // round's script must ONLY have touched the 4 new real-status columns.

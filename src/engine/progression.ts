@@ -178,46 +178,89 @@ export function ageOnePlayer(p: Player, developmentMultiplier = 1): Player {
 }
 
 /**
- * The raw (pre-z-score) side of Schema.md's `OVR` formula: mean of the 20 `RATED_ATTRIBUTES`, each
- * weighted x3 if it's one of the player's archetype's `ARCHETYPE_PRIMARY_ATTRIBUTES`, x1 otherwise.
- * Extracted as its own export (round 118, [[Club Theme System]] Player Career screen) so a forward
- * OVR projection can re-run this exact formula against a hypothetically-aged player without
- * duplicating it — `recomputeOVR` below is now just this function plus the population z-score step.
+ * Round C149 — [[End-of-2026 Player Database Refresh]]: a genuine redesign of the raw-composite
+ * weighting mechanism, replacing the flat x3/x1.5/x1 multiplier scheme every earlier round used.
  *
- * **Round C144 — three-tier weighting, not two.** Per the [[AFL Archetype and Role Fluidity -
- * Scoping Note]] (Tier 2), an attribute's weight is now: **x3** if it's a primary attribute for the
- * player's own archetype (`ARCHETYPE_PRIMARY_ATTRIBUTES`, unchanged mechanism); else **x1.5** if it's
- * a universal `META_ATTRIBUTE_WEIGHTS` entry (today, just `consistancy`); else **x1**. A primary-
- * archetype match wins over a meta weight if an attribute is ever both (checked first, in that
- * order) — though as of this round no archetype lists `consistancy` as primary any more, so that
- * tie-break is currently never exercised in practice, just defensively ordered.
+ * **Confirmed root cause (see `scripts/diagnose_roundC149_scratch.ts`'s own dumped numbers before
+ * this round's fix)**: Round C147/C148 repeatedly flagged, but never root-caused, a systematic
+ * undersell for Ruck/Key-Forward/small-forward archetypes relative to Inside Mid. The actual
+ * mechanism was TWO compounding, confirmed effects, not one:
  *
- * `consistancy` moved here from being Medium Defender's own ×3 primary attribute: it's a
- * psychological trait that affects performance variance for every player, not a skill specific to
- * one defensive archetype, which was the scoping note's single strongest critique of the old table.
- * Universal weighting reads its effect on `OVR` as positional-independent, matching what it actually
- * represents.
+ * 1. **Attribute-COUNT dilution.** The old scheme was `weightedSum / weightTotal` — a weighted MEAN
+ *    over all 20 attributes. An archetype listing MORE primary (x3) attributes gets a mechanically
+ *    LARGER share of its own composite driven by ITS strengths, independent of how good those
+ *    strengths actually are: Inside Mid's 5 primary attributes carried 15 of its 30.5 total weight
+ *    units (49%) pre-fix; Ruck's 3 primary attributes carried only 9 of 26.5 (34%) — a real,
+ *    confirmed 15-point weight-SHARE gap that has nothing to do with real quality, purely an
+ *    artifact of Inside Mid's own primary list happening to be longer. Medium Forward (3 primary)
+ *    and Small Forward (4 primary) showed the identical pattern.
+ * 2. **Input-mismatch inside the primary list itself.** Several of Ruck/Key Forward/Small Forward's
+ *    OWN x3-weighted attributes were, before this round, generated from real-stat inputs that
+ *    structurally under-reward that archetype's actual game — e.g. Ruck's `endurance` partly read
+ *    `disposalsPg` (a workrate proxy rucks structurally post low numbers on despite playing heavy
+ *    minutes), and `verticalLeap` diluted `hitoutsPg` — the one stat a Ruck genuinely dominates the
+ *    league on — to an equal 1/3 share alongside two marking stats rucks are merely average at. See
+ *    `attributeGeneration.ts`'s own new doc comments for the specific per-attribute fixes (verticalLeap
+ *    hitout weighting, endurance/confidence/xFactor input swaps) — a genuinely deeper root cause than
+ *    archetype weighting alone, per this round's own brief, fixed at the generation layer directly
+ *    rather than patched around here.
  *
- * **Round C147 — `prestigeBonus` added.** [[End-of-2026 Player Database Refresh]] Step 3, Tyler's
- * binding decision #2: a bounded, documented nudge from real named honours/draft pedigree/career
- * milestones (`engine/prestige.ts`'s `prestigeBonusFor`, capped at +/-8 raw-composite points) is
- * added directly to the weighted-mean composite, BEFORE the population z-score step
- * (`ovrFromRawComposite` below) — i.e. it moves a player's z-score by a bounded amount, exactly the
- * same mechanism a real extra attribute point would, rather than being a separate co-equal input to
- * `OVR`. A synthetic player with no `realFullName`/real draft record (draft prospects, test
- * fixtures) gets `prestigeBonusFor === 0` and is completely unaffected. See `prestige.ts`'s own doc
- * comment for the full input list, weights, and why the cap is +/-8.
+ * **The fix for #1**: `ovrRawComposite` no longer computes one flat weighted mean over all 20
+ * attributes. It now blends TWO separately-computed means at a FIXED ratio
+ * (`PRIMARY_ATTRIBUTE_SHARE`), regardless of how many primary attributes the archetype happens to
+ * list: `primaryMean` (the unweighted mean of ONLY the archetype's own `ARCHETYPE_PRIMARY_ATTRIBUTES`
+ * — 3, 4, or 5 of them, doesn't matter, it's always just their own mean) and `overallMean` (the
+ * `META_ATTRIBUTE_WEIGHTS`-weighted mean across all 20, i.e. exactly the old formula's "everyone,
+ * unweighted-by-archetype" baseline). This makes an archetype's `OVR` depend on how strong its OWN
+ * best attributes read, not on how long its primary list happens to be — Ruck's 3 primary attributes
+ * now carry exactly the same 50% composite share Inside Mid's 5 do.
+ *
+ * `PRIMARY_ATTRIBUTE_SHARE = 0.5` was chosen (not derived) to land close to the OLD scheme's own
+ * historical ~49% share for a 5-primary-attribute archetype (Inside Mid, Outside Mid, Hybrid Mid
+ * Forward, Key Forward, Half Back Flanker) — i.e. the archetypes the old formula was already treating
+ * roughly fairly keep roughly the same `OVR` behaviour, while every archetype with FEWER than 5
+ * primary attributes gets a genuine, mechanical lift instead of a mechanical penalty. See
+ * `scripts/verify_roundC149_scratch.ts` for the actual before/after archetype-average numbers this
+ * produced across the full 825-player population.
+ *
+ * **Round C147's original `ovrRawComposite` doc comment, for history**: mean of the 20
+ * `RATED_ATTRIBUTES`, each weighted x3 if primary for the archetype, x1.5 if a universal
+ * `META_ATTRIBUTE_WEIGHTS` entry (today, just `consistancy`), else x1 — extracted as its own export
+ * (round 118) so a forward OVR projection can re-run this exact formula without duplicating it.
+ * `consistancy`'s universal (non-archetype-specific) weighting is unchanged by this round — it still
+ * lives only in the `overallMean` half of the new blend, never in any archetype's `primaryMean`.
+ *
+ * **Round C147 — `prestigeBonus`, unchanged mechanism.** A bounded, documented nudge from real named
+ * honours/draft pedigree/career milestones (`engine/prestige.ts`'s `prestigeBonusFor`, capped at
+ * +/-8 raw-composite points) is still added directly to the composite, BEFORE the population z-score
+ * step (`ovrFromRawComposite` below).
  */
-export function ovrRawComposite(p: Player): number {
-  const primary = new Set(ARCHETYPE_PRIMARY_ATTRIBUTES[p.archetype as Archetype]);
+export const PRIMARY_ATTRIBUTE_SHARE = 0.5;
+
+/**
+ * The archetype-weighted attribute composite ONLY (no prestige) — extracted so
+ * `historicalOvrReconstruction.ts` can reuse the exact same mechanism against a reconstructed past
+ * season's attribute set (where prestige has to be computed as-of a different year, not today's),
+ * rather than maintaining a second, driftable copy of this formula.
+ */
+export function rawAttributeCompositeFor(attrs: Pick<Player, RatedAttribute>, archetype: Archetype): number {
+  const primaryAttrs = ARCHETYPE_PRIMARY_ATTRIBUTES[archetype];
+  const primaryMean = primaryAttrs.reduce((s, a) => s + attrs[a], 0) / primaryAttrs.length;
+
   let weightedSum = 0;
   let weightTotal = 0;
   for (const attr of RATED_ATTRIBUTES) {
-    const weight = primary.has(attr) ? 3 : (META_ATTRIBUTE_WEIGHTS[attr] ?? 1);
-    weightedSum += p[attr] * weight;
+    const weight = META_ATTRIBUTE_WEIGHTS[attr] ?? 1;
+    weightedSum += attrs[attr] * weight;
     weightTotal += weight;
   }
-  return weightedSum / weightTotal + prestigeBonusFor(p);
+  const overallMean = weightedSum / weightTotal;
+
+  return PRIMARY_ATTRIBUTE_SHARE * primaryMean + (1 - PRIMARY_ATTRIBUTE_SHARE) * overallMean;
+}
+
+export function ovrRawComposite(p: Player): number {
+  return rawAttributeCompositeFor(p, p.archetype as Archetype) + prestigeBonusFor(p);
 }
 
 /**

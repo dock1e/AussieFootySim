@@ -4,10 +4,9 @@ import { AttributeZScorer } from "./attributeGeneration.ts";
 import { REAL_2026_SEASON_STATS } from "../data/real2026SeasonStats.ts";
 import { careerHistoryFor } from "../data/realCareerHistory.ts";
 import { recencyWeightedSeasonStats } from "./recencyForm.ts";
-import { RATED_ATTRIBUTES, type RatedAttribute } from "../types/player.ts";
-import { ARCHETYPE_PRIMARY_ATTRIBUTES, META_ATTRIBUTE_WEIGHTS } from "../types/archetype.ts";
+import { type RatedAttribute } from "../types/player.ts";
 import { honoursScoreFor } from "./prestige.ts";
-import { OVR_Z_MULTIPLIER } from "./progression.ts";
+import { OVR_Z_MULTIPLIER, rawAttributeCompositeFor } from "./progression.ts";
 
 /**
  * Round C148 — [[End-of-2026 Player Database Refresh]] deliverable 1: reconstruct what a real
@@ -45,16 +44,15 @@ export interface ReconstructionBaseline {
   stdDev: number;
 }
 
+/**
+ * Round C149 — reuses `progression.ts`'s `rawAttributeCompositeFor` (the fixed-share
+ * primary/overall blend, see that function's own doc comment) instead of maintaining a second,
+ * driftable copy of the composite formula here. Previously this file re-implemented the OLD flat
+ * x3/x1.5/x1 weighted-mean formula inline — confirmed still in sync today only by construction, not
+ * by any shared code, which is exactly the kind of duplication this round's fix removes.
+ */
 function rawCompositeFromAttributes(attrs: Record<RatedAttribute, number>, archetype: Archetype, prestige: number): number {
-  const primary = new Set(ARCHETYPE_PRIMARY_ATTRIBUTES[archetype]);
-  let weightedSum = 0;
-  let weightTotal = 0;
-  for (const attr of RATED_ATTRIBUTES) {
-    const weight = primary.has(attr) ? 3 : (META_ATTRIBUTE_WEIGHTS[attr] ?? 1);
-    weightedSum += attrs[attr] * weight;
-    weightTotal += weight;
-  }
-  return weightedSum / weightTotal + prestige;
+  return rawAttributeCompositeFor(attrs, archetype) + prestige;
 }
 
 /** One reconstructed real season's OVR-shaped read for one player. */

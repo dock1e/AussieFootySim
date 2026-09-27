@@ -61,8 +61,28 @@ export type Archetype = (typeof ARCHETYPES)[number];
  * mechanism. Medium Defender's list drops to `strengthManOnMan`/`positioning` only; no other archetype
  * has ever listed `consistancy` as primary (confirmed by grep across this table).
  */
+/**
+ * **Round C149 addendum — Inside Mid trimmed from 5 primary attributes to 3 ([[End-of-2026 Player
+ * Database Refresh]], the archetype-weighting bias fix).** Confirmed by a fresh grep of
+ * `attributeGeneration.ts`'s own formulas (`scripts/diagnose_roundC149_scratch.ts`'s dumped
+ * breakdown): the OLD 5-attribute list (`strengthGroundLevel`, `tenacity`, `courage`, `readPlay`,
+ * `copeWithPressure`) reads `contestedPossPg` (directly, or via `readPlay`'s `totalPossPg`, which
+ * SUMS `contestedPossPg`) in ALL FIVE of its own primary attributes, and `tacklesPg` in three of
+ * five (`tenacity`, `courage`, `copeWithPressure`) — meaning the list wasn't really 5 independent
+ * signals of quality, it was the SAME 1-2 real stats (contested-possession and tackle volume)
+ * counted five times over, then each copy weighted into the composite again. No other archetype's
+ * primary list repeats a single underlying real stat across literally all of its entries this way
+ * (Outside Mid's `bouncesPg`/`inside50sPg` repeat across 3 of 5, a real but smaller version of the
+ * same issue — left as-is this round since Bailey Smith, this round's own "already correct, don't
+ * move" Outside-Mid calibration anchor, would be directly affected by touching it). Trimmed to the 3
+ * LEAST-overlapping of the original 5 (`tenacity`, `readPlay`, `skill` — `skill` reads
+ * `disposalsPg`/`kicksPg`/`clangersPg`, a genuinely different real-stat mix from the contested/tackle
+ * cluster the other four all shared) rather than removing the redundant duplicates piecemeal, so
+ * Inside Mid's primary list is a real 3-independent-signal set like every other trimmed archetype,
+ * not a shorter list that still secretly triple-counts the same stat.
+ */
 export const ARCHETYPE_PRIMARY_ATTRIBUTES: Record<Archetype, readonly RatedAttribute[]> = {
-  "Inside Mid": ["strengthGroundLevel", "tenacity", "courage", "readPlay", "copeWithPressure"],
+  "Inside Mid": ["tenacity", "readPlay", "skill"],
   "Outside Mid": ["endurance", "speed", "agility", "skill", "acceleration"],
   "Pressure Forward": ["tenacity", "aggression", "strengthManOnMan", "courage", "acceleration"],
   "Hybrid Mid Forward": ["skill", "xFactor", "confidence", "courage", "readPlay"],

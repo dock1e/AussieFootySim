@@ -202,6 +202,17 @@ export class AttributeZScorer {
 
   private computeAttributes(z: (k: RateKey) => number, archetype: Archetype): Record<RatedAttribute, number> {
     const avg = (...vs: number[]) => vs.reduce((a, b) => a + b, 0) / vs.length;
+    // Round C149 — [[End-of-2026 Player Database Refresh]]: a weighted-average helper, alongside
+    // the existing unweighted `avg`, so a specific input can be given more than 1/n share of an
+    // attribute's z-score without inventing a whole second averaging convention. Used below only
+    // where this round's diagnosis found a genuinely mismatched equal-weighting (see this file's
+    // own new doc paragraph on the archetype-weighting bias fix for the full reasoning) — every
+    // other attribute keeps its existing unweighted `avg` untouched.
+    const wavg = (pairs: readonly [number, number][]) => {
+      let sum = 0, weight = 0;
+      for (const [v, w] of pairs) { sum += v * w; weight += w; }
+      return sum / weight;
+    };
 
     const isDefender = DEFENDER_ARCHETYPES.includes(archetype);
     const isForward = FORWARD_ARCHETYPES.includes(archetype);
@@ -214,20 +225,45 @@ export class AttributeZScorer {
 
     const out: Record<RatedAttribute, number> = {
       manMarking: this.rescale(avg(z("marksPg"), z("contestedMarksPg"))),
-      verticalLeap: this.rescale(avg(z("contestedMarksPg"), z("marksInside50Pg"), z("hitoutsPg"))),
+      // Round C149: hitoutsPg now weighted 2x within verticalLeap (was an equal 1/3 share with
+      // contestedMarksPg/marksInside50Pg) — see this file's own new doc paragraph below for why:
+      // hitouts is THE real-stat signal a Ruck/Key-Forward-relief-ruck actually dominates, and
+      // diluting it to an equal third alongside two marking stats rucks are mediocre at (they're
+      // not the competition's best overhead markers, they're the competition's best tap players)
+      // was actively suppressing the one archetype this attribute is supposed to anchor for.
+      verticalLeap: this.rescale(wavg([[z("contestedMarksPg"), 1], [z("marksInside50Pg"), 1], [z("hitoutsPg"), 2]])),
       tenacity: this.rescale(avg(z("tacklesPg"), z("contestedPossPg"))),
       skill: this.rescale(avg(z("disposalsPg"), z("kicksPg"), -z("clangersPg"))),
       agility: this.rescale(avg(z("uncontestedPossPg"), z("bouncesPg"), z("inside50sPg"))),
       courage: this.rescale(avg(z("contestedPossPg"), z("tacklesPg"), z("freesAgainstPg"))),
       aggression: this.rescale(avg(z("tacklesPg"), z("freesAgainstPg"), z("clangersPg"))),
-      xFactor: this.rescale(avg(z("brownlowVotesPg"), z("goalAssistsPg"), z("contestedMarksPg"))),
+      // Round C149: contestedMarksPg -> tacklesPg. xFactor is a primary (x3) attribute for Small
+      // Forward and Hybrid Mid Forward, and contestedMarksPg structurally punishes small,
+      // ground-level players for not being tall overhead markers — the opposite of what
+      // "x-factor" is supposed to reward for that archetype. tacklesPg (relentless tackling
+      // pressure/turnover creation) is the real small-forward "x-factor" signal media/scouting
+      // actually describes (see this file's own `ARCHETYPE_TACTICAL_PHRASES` Small Forward entry:
+      // "snapping opportunistically and locking it inside forward 50 with relentless tackling").
+      xFactor: this.rescale(avg(z("brownlowVotesPg"), z("goalAssistsPg"), z("tacklesPg"))),
       strengthGroundLevel: this.rescale(avg(z("contestedPossPg"), z("handballsPg"))),
       strengthOverhead: this.rescale(avg(z("contestedMarksPg"), z("marksPg"))),
       strengthManOnMan: this.rescale(avg(z("onePercentersPg"), z("tacklesPg"))),
       acceleration: this.rescale(avg(z("bouncesPg"), z("inside50sPg"), z("rebound50sPg"))),
       speed: this.rescale(avg(z("bouncesPg"), z("rebound50sPg"), z("inside50sPg"))),
-      endurance: this.rescale(avg(z("games"), z("disposalsPg"))),
-      confidence: this.rescale(avg(z("goalsPg"), z("brownlowVotesPg"), z("disposalsPg"))),
+      // Round C149: disposalsPg -> hitoutsPg added alongside it (not replacing it — endurance's
+      // "workrate" half should recognise ANY high-value repeated real work, not only touch
+      // volume). Old formula structurally read Rucks as low-endurance purely because rucks
+      // register fewer disposals per game than midfielders, despite rucks routinely playing the
+      // most total minutes/highest work-rate role on the ground — the exact "goal/hitout volume
+      // under-rewarded relative to disposal volume" gap this round's brief named directly.
+      endurance: this.rescale(avg(z("games"), z("disposalsPg"), z("hitoutsPg"))),
+      // Round C149: disposalsPg -> goalAssistsPg. confidence is a primary (x3) attribute for Key
+      // Forward, Hybrid Mid Forward, Small Forward and Medium Forward — every one of them a
+      // goal-scoring-focused archetype whose real disposal COUNT is structurally low next to a
+      // midfielder's, despite genuine scoreboard-impact quality. goalAssistsPg keeps confidence's
+      // documented "goals/g, Brownlow votes/g" scoring-impact spine intact while swapping its
+      // third input for another real scoring-adjacent signal instead of raw touch volume.
+      confidence: this.rescale(avg(z("goalsPg"), z("brownlowVotesPg"), z("goalAssistsPg"))),
       readPlay: this.rescale(avg(z("totalPossPg"), z("inside50sPg"))),
       consistancy: this.rescale(z("games")),
       positioning: this.rescale(positioningZ),

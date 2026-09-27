@@ -73,6 +73,31 @@
  * absence — also disclosed as open, not guessed at. None of these players are given a
  * `RosterMovementEntry` here; they stay implicitly `'Active'` (no entry = no status change) until a
  * future round resolves them one way or the other.
+ *
+ * ROUND C143b ADDENDUM (8 more confirmed entries, same day): Tyler supplied one directly-confirmed
+ * fact and 7 more sourced from a full (not flat-merged) fetch of draftguru.com.au's 2024
+ * `/years/2024/retirements-delistings` page:
+ *
+ * - **Nat Fyfe (Fremantle, retired 2025)** is the one directly-confirmed case, and it surfaced a
+ *   real join-failure worth flagging for future rounds: Round C143's flat-list join required an
+ *   EXACT `realFullName` string match and missed him because draftguru.com.au's source page lists
+ *   him as **"Nathan Fyfe"**, while `players_master.csv`'s `realFullName` for this player is
+ *   **"Nat Fyfe"** (confirmed directly against the CSV, not assumed). This is a genuine name-variant
+ *   mismatch, not a data-quality bug — legal/formal first name vs. common name is a real class of
+ *   join failure this exact-match strategy will keep hitting (other likely variants: "Nathan"/"Nat",
+ *   "Bradley"/"Brad", "Anthony"/"Tony", etc.). Flagged here as a candidate for a future
+ *   fuzzy-match or alias-table pass — deliberately NOT built this round, just documented so it isn't
+ *   rediscovered from scratch later.
+ * - **7 more exact-realFullName matches** — Brad Crouch, Andrew Gaff, Dyson Heppell, Zach Tuohy
+ *   (all `'Retired'`, 2024), and Curtis Taylor, Zane Trew, Alex Witherden (all `'Delisted'`, 2024) —
+ *   found by fetching the 2024 draftguru.com.au page directly (not the flat multi-year merge Round
+ *   C143 used) and cross-referencing by exact name against the `real2026SeasonStats.ts` gap set.
+ *   Unlike the 93 Round C143 rows, these 7 preserve a real per-name year (2024) and a real
+ *   Retired-vs-Delisted split, because the direct per-year page fetch (rather than the flat merged
+ *   hand-off) retains that information — a small proof-of-concept for the "revisit the original
+ *   per-year pages directly" follow-up Round C143 itself proposed above.
+ *
+ * Total after Round C143b: 119 non-Active players (96 Delisted, 18 Injured, 5 Retired) of 751.
  */
 
 export type RosterMovementType =
@@ -111,6 +136,27 @@ const INJURY_HUB_SOURCE = "SEN Injury Hub 04/08/2026 (cross-checked AFL.com.au M
 const RETIREMENT_DELISTING_SOURCE = "draftguru.com.au 2024-2026 retirements/delistings (year/type sub-classification not preserved in this round's flat source list)";
 
 export const REAL_ROSTER_MOVEMENTS: RosterMovementEntry[] = [
+  // --- Round C143b: 8 additional confirmed entries (see file-level Round C143b addendum below) ---
+  // Nat Fyfe's real-world retirement was confirmed directly by Tyler, but the original Round C143
+  // flat-list join (which required an EXACT `realFullName` string match, no fuzzy/nickname
+  // matching) missed him: draftguru.com.au's source page lists him as "Nathan Fyfe", while
+  // `players_master.csv`'s `realFullName` for this player is "Nat Fyfe" (confirmed by direct CSV
+  // lookup below). This is a genuine name-variant mismatch, not a data error — flagged here as a
+  // known class of future join failure (full legal first name vs. common name, "Nathan" vs. "Nat",
+  // etc.) worth a fuzzy/alias-table pass in a future round; not built now, just documented.
+  { realFullName: "Nat Fyfe", type: "Retired", year: 2025, club: "Fremantle", source: "draftguru.com.au 2025 retirements (listed as 'Nathan Fyfe')" },
+  // 7 more confirmed via a full fetch (not the flat merged list) of draftguru.com.au's 2024
+  // `/years/2024/retirements-delistings` page, cross-referenced by exact `realFullName` against the
+  // real2026SeasonStats.ts 157-player gap set — genuine exact-name matches, not fuzzy.
+  { realFullName: "Brad Crouch", type: "Retired", year: 2024, club: "St Kilda", source: "draftguru.com.au 2024 retirements, Nov 26 2024 (also listed Oct 31 2024 across two site edits)" },
+  { realFullName: "Andrew Gaff", type: "Retired", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 retirements, Aug 7 2024" },
+  { realFullName: "Dyson Heppell", type: "Retired", year: 2024, club: "Essendon", source: "draftguru.com.au 2024 retirements, Aug 13 2024" },
+  { realFullName: "Zach Tuohy", type: "Retired", year: 2024, club: "Geelong", source: "draftguru.com.au 2024 retirements, Aug 21 2024" },
+  { realFullName: "Curtis Taylor", type: "Delisted", year: 2024, club: "North Melbourne", source: "draftguru.com.au 2024 delistings, Sep 20 2024" },
+  { realFullName: "Zane Trew", type: "Delisted", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 delistings, Sep 18 2024" },
+  { realFullName: "Alex Witherden", type: "Delisted", year: 2024, club: "West Coast", source: "draftguru.com.au 2024 delistings, Oct 18 2024" },
+
+
   // --- 18 confirmed real 2026 season-ending injuries ---
   { realFullName: "Tom Green", type: "Injured", year: 2026, club: "GWS Giants", detail: "knee (season-ending)", source: `${INJURY_HUB_SOURCE} — also confirmed directly by Tyler` },
   { realFullName: "Josh Kelly", type: "Injured", year: 2026, club: "GWS Giants", detail: "hip (season-ending)", source: `${INJURY_HUB_SOURCE} — also confirmed directly by Tyler` },

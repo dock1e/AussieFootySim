@@ -277,6 +277,33 @@ export interface Player extends ImprovementRates, DeclineRates {
   sc_trend_z?: string;
   /** Comma-joined years the trend was computed from, e.g. "2023,2024,2025,2026". Optional, same reasoning as `sc_trend_z`. */
   sc_trend_years?: string;
+
+  // --- Real-world roster status (added Round C143) ---
+  // See [[End-of-2026 Player Database Refresh]]'s Round C143 addendum and
+  // `data/realRosterMovements.ts` for the full design note. These 4 fields are the CSV-facing
+  // surface of a generalized "roster movement" event log built to make future real 2026
+  // draft/trade/free-agency ingestion (still upcoming in the real world as of this round) a
+  // matter of adding rows to that event log and re-running `scripts/applyRosterMovements.ts`,
+  // not writing a new one-off script every time. All 4 follow the same sparse-field idiom
+  // `sc_trend_z`/`sc_trend_years` already use: kept as CSV strings (not parsed further here,
+  // "" when absent) rather than typed numbers/enums, because `realStatusYear` is
+  // numeric-looking but not consumed by any engine formula — same reasoning `sc_trend_z`'s own
+  // doc comment gives for staying a string despite looking like a number. Optional for the same
+  // reason as `realFullName`/`sc_trend_z`: synthetic players built by hand (draft.ts's
+  // generated prospects, testUtils/makePlayer.ts's test fixtures) have no CSV row at all.
+  /**
+   * Real-world AFL list status, joined against `realFullName` by `applyRosterMovements.ts`.
+   * Deliberately left "" (undefined) for a normal active real player — matches this project's
+   * sparse-field convention (see `sc_trend_z` above) of only ever writing the exceptional case,
+   * so "" here means "Active", not "unknown." Never literally set to the string "Active".
+   */
+  realStatus?: "Retired" | "Delisted" | "Injured";
+  /** The real-world year `realStatus` took effect (e.g. "2026"). "" if `realStatus` is unset. */
+  realStatusYear?: string;
+  /** Short human-readable reason, e.g. "knee (season-ending)", "delisted", "retired". "" if `realStatus` is unset. */
+  realStatusReason?: string;
+  /** Short source citation, e.g. "draftguru.com.au 2026 delistings" or "SEN Injury Hub 04/08/2026". "" if `realStatus` is unset. */
+  realStatusSource?: string;
 }
 
 /** The exact 20 rated attributes OVR is computed from — see Schema.md "Rated attributes". */

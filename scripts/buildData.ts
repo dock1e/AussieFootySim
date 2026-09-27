@@ -45,6 +45,15 @@ const STRING_FIELDS = new Set([
   // error below if left off this list. Both are "" for players with no SuperCoach match.
   "sc_trend_z",
   "sc_trend_years",
+  // Round C143 — [[End-of-2026 Player Database Refresh]] roster-movement backfill (see
+  // `data/realRosterMovements.ts` / `scripts/applyRosterMovements.ts`). Same treatment as
+  // sc_trend_z/sc_trend_years just above: realStatusYear is numeric-looking but kept a string
+  // (a provenance field, not consumed by engine logic) so a blank "" for an Active player never
+  // throws the numeric-coercion error below.
+  "realStatus",
+  "realStatusYear",
+  "realStatusReason",
+  "realStatusSource",
 ]);
 
 // Round 126 — closes gap #37. Stored in the CSV as "1"/"0" (buildData.ts's numeric-coercion

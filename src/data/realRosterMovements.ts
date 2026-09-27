@@ -204,6 +204,26 @@
  * an unexplained one.
  *
  * Total after Round C143d: 147 non-Active players (111 Delisted, 21 Injured, 15 Retired) of 751.
+ *
+ * ROUND C143e ADDENDUM (1 additional entry, Darcy Macpherson — the one name Round C143d's own
+ * footywire research brief accidentally missed from the 15-name unresolved list, disclosed in that
+ * round's addendum above): checked directly against footywire.com's current 2026 players list
+ * (https://www.footywire.com/afl/footy/ft_players) via a JS search across every `pp-` player-profile
+ * link on the page — confirmed absent, with the fetch itself corroborated as working correctly by
+ * other similar names ("Davies, Hugh", "Draper, Josh") resolving fine in the same pass. Per Tyler's
+ * own stated rule for this round — "if they're not on this page then they're no longer active and
+ * were delisted" — added as `'Delisted'`, club Gold Coast (per `players_master.csv`), `year: 2026`
+ * as a disclosed best estimate (he was presumably still active earlier in 2026, per his presence in
+ * the `real2026SeasonStats.ts`/gap-set data derived from mid-2026 sources, so the delisting itself
+ * is real but its precise date is not known). This is a NEW, THIRD sourcing method for this file,
+ * distinct from the other two: unlike a draftguru.com.au retirements/delistings table (which names a
+ * player directly) or a footywire.com bio page (which states a reason in prose), this entry's only
+ * evidence is the player's ABSENCE from a live current-roster snapshot — no dated quote, no explicit
+ * "delisted" statement anywhere. Every other entry in this file can point to a source that names the
+ * player; this one infers status from silence. Flagged here, not blended in, so a future reader
+ * doesn't mistake it for having the same evidentiary strength as the dated rows around it.
+ *
+ * Total after Round C143e: 148 non-Active players (112 Delisted, 21 Injured, 15 Retired) of 751.
  */
 
 export type RosterMovementType =
@@ -419,6 +439,25 @@ export const REAL_ROSTER_MOVEMENTS: RosterMovementEntry[] = [
   { realFullName: "Sam Sturt", type: "Injured", year: 2026, club: "Fremantle", detail: "hamstring (footywire Status field: 'Expected return: TBC', treated as season-ending — 0 games played in 2026)", source: "footywire.com player profile, live Status field + 2026 season stats page (0 games)" },
   { realFullName: "Sid Draper", type: "Injured", year: 2026, club: "Adelaide", detail: "groin (season-ending)", source: "footywire.com player biography, Thu 15 Jan 2026: Crows coaching director Murray Davis — 'Sid Draper remains on light training duties as he continues to rehab a groin issue'" },
   { realFullName: "Tom Doedee", type: "Injured", year: 2024, club: "Brisbane Lions", detail: "knee/ACL — third ACL reconstruction, suffered March 2024; a March 2025 bio update said he was 'on the verge of returning' but he still shows 0 games played in 2026, so he remains out as of this round", source: "footywire.com player biography (March 2024 and March 2025 entries)" },
+
+  // --- Round C143e: 1 additional entry, via a DIFFERENT sourcing method than every row above.
+  // Every other 'Delisted'/'Retired' row in this file is sourced either from a draftguru.com.au
+  // retirements/delistings table (which names a specific player as retired/delisted, sometimes with
+  // a precise date) or from a footywire.com bio page that explicitly states a delisting/injury in
+  // prose. Darcy Macpherson is different: he was accidentally omitted from Round C143d's 15-name
+  // footywire research brief (a disclosed miss in that round's own addendum), so this round checked
+  // him directly against footywire.com's current 2026 players list
+  // (https://www.footywire.com/afl/footy/ft_players) and confirmed — via a JS search across every
+  // `pp-` player-profile link on the page, with the page load itself corroborated by other names
+  // ("Davies, Hugh", "Draper, Josh") resolving correctly in the same fetch — that he is NOT present
+  // anywhere on that current-players list. Per Tyler's own stated rule for this round ("if they're
+  // not on this page then they're no longer active and were delisted"), his absence itself is the
+  // evidence, not a bio page or a retirements/delistings table naming him. `year: 2026` here is a
+  // disclosed best estimate (the year this absence was detected), not a precise delisting date —
+  // unlike the draftguru-sourced or bio-dated entries above, no more specific date is available for
+  // this one, because the method is "absence from a live current-roster snapshot," which carries no
+  // date information the way a dated bio quote or a per-year retirements table does.
+  { realFullName: "Darcy Macpherson", type: "Delisted", year: 2026, club: "Gold Coast", detail: "delisted (inferred from absence, not a dated source)", source: "footywire.com current-players list (https://www.footywire.com/afl/footy/ft_players) — absent as of Sep 2026, per Tyler's absence-implies-delisted rule for this round; no specific delisting date available, unlike the draftguru-sourced or bio-dated entries elsewhere in this file." },
 ];
 
 let byName: Map<string, RosterMovementEntry[]> | null = null;

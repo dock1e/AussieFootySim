@@ -91,7 +91,13 @@ describe("ageOnePlayer", () => {
     expect(aged.age_year).toBe(2001);
   });
 
-  it("keeps every rated attribute within [1, 99]", () => {
+  it("keeps every rated attribute within [40, 110]", () => {
+    // Round C153: this assertion's bounds were stale leftovers from before Round C147's rescale
+    // (attributes generate on a 40-110 scale, not 1-99 — see attributeGeneration.ts's `rescale()`).
+    // `ageOnePlayer`'s own growth clamp still read `Math.max(1, Math.min(99, ...))` until this round,
+    // which would have silently dragged 23/825 real players' already->99 attributes down to 99 the
+    // next time they aged — a confirmed, now-fixed bug (see progression.ts's `ageOnePlayer` doc
+    // comment and scripts/diagnose_roundC153_scratch.ts section 4).
     // A young, high-headroom, high-imp_ player pushing hard at the ceiling.
     const risingStar = makePlayer({ Age: 19, potentialTall: 99, potentialMid: 99, archetype: "Key Forward" });
     for (const skill of DISCRETE_SKILLS) (risingStar as unknown as Record<string, number>)[`imp_${skill}`] = 99;
@@ -101,8 +107,8 @@ describe("ageOnePlayer", () => {
 
     const agedStar = ageOnePlayer(risingStar);
     const agedVeteran = ageOnePlayer(veteran);
-    expect(RATED_ATTRIBUTES.every((a) => agedStar[a] >= 1 && agedStar[a] <= 99)).toBe(true);
-    expect(RATED_ATTRIBUTES.every((a) => agedVeteran[a] >= 1 && agedVeteran[a] <= 99)).toBe(true);
+    expect(RATED_ATTRIBUTES.every((a) => agedStar[a] >= 40 && agedStar[a] <= 110)).toBe(true);
+    expect(RATED_ATTRIBUTES.every((a) => agedVeteran[a] >= 40 && agedVeteran[a] <= 110)).toBe(true);
   });
 
   it("a young player with headroom and strong imp_ rates trends up on average", () => {
@@ -184,10 +190,16 @@ describe("recomputeOVR", () => {
     );
   }
 
-  it("clips every OVR to [28, 99]", () => {
+  it("clips every OVR to [40, 110]", () => {
+    // Round C153: bounds updated to match Round C147's rescale (`ovrFromRawComposite` clips to
+    // [40,110], not the pre-C147 [28,99] — see progression.ts). Pre-existing stale assertion found
+    // while diagnosing this round's ceiling/POT correlation gap; fixed alongside it. Note: vitest
+    // itself cannot run in this sandbox (missing @rollup/rollup-linux-x64-gnu native binary) — this
+    // fix is a static correctness fix based on reading `ovrFromRawComposite`'s own clamp, not a
+    // confirmed green test run.
     const pool = makePool();
     const recomputed = recomputeOVR(pool);
-    expect(recomputed.every((p) => p.OVR >= 28 && p.OVR <= 99)).toBe(true);
+    expect(recomputed.every((p) => p.OVR >= 40 && p.OVR <= 110)).toBe(true);
   });
 
   it("a maxed-out player scores higher than a floor player in the same pool", () => {

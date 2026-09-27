@@ -195,14 +195,242 @@ export const YOUTH_TAPER_HEADROOM_START = 0.1;
 export const YOUTH_TAPER_HEADROOM_FULL = 0.45;
 export const YOUTH_TAPER_BOOST_CAP = 1.5;
 
-/** See `YOUTH_TAPER_HEADROOM_START`'s doc comment. Returns the multiplier to apply on top of `developmentMultiplier`'s existing `imp_`-side effect — `1` for a player with little/no real headroom left, up to `1 + YOUTH_TAPER_BOOST_CAP` for a player with large real headroom on their own primary attributes. */
-export function youthTaperFor(p: Player): number {
-  const ceiling = potentialCeilingFor(p);
+/**
+ * See `YOUTH_TAPER_HEADROOM_START`'s doc comment. Returns the multiplier to apply on top of
+ * `developmentMultiplier`'s existing `imp_`-side effect — `1` for a player with little/no real headroom
+ * left, up to `1 + YOUTH_TAPER_BOOST_CAP` for a player with large real headroom on their own primary
+ * attributes.
+ *
+ * **Round C153**: `ceilingOverride` (optional) lets the caller supply the REAL operative growth
+ * ceiling — see `growthCeilingFor` below — instead of this function silently recomputing the raw,
+ * now-superseded `potentialCeilingFor(p)` itself. Defaults to `potentialCeilingFor(p)` (today's
+ * pre-C151 behaviour, unchanged) so every existing direct caller (`verify_roundC152_scratch.ts`, this
+ * file's own tests) keeps compiling and reading exactly as before.
+ *
+ * `eliteEligible` (optional, default `false`): see `ELITE_YOUTH_TAPER_BOOST_CAP`'s own doc comment —
+ * swaps in a materially larger boost cap, gated the same strict way `growthCeilingFor`'s overshoot is.
+ */
+export function youthTaperFor(p: Player, ceilingOverride?: number, eliteEligible = false): number {
+  const ceiling = ceilingOverride ?? potentialCeilingFor(p);
   const primaryAttrs = ARCHETYPE_PRIMARY_ATTRIBUTES[p.archetype as Archetype];
   const meanHeadroom = primaryAttrs.reduce((sum, a) => sum + potentialHeadroom(p[a], ceiling), 0) / primaryAttrs.length;
   if (meanHeadroom <= YOUTH_TAPER_HEADROOM_START) return 1;
   const t = Math.min(1, (meanHeadroom - YOUTH_TAPER_HEADROOM_START) / (YOUTH_TAPER_HEADROOM_FULL - YOUTH_TAPER_HEADROOM_START));
-  return 1 + t * YOUTH_TAPER_BOOST_CAP;
+  const cap = eliteEligible ? eliteYouthTaperBoostCapFor(p.Age) : YOUTH_TAPER_BOOST_CAP;
+  return 1 + t * cap;
+}
+
+/**
+ * Round C153 — see `ELITE_YOUTH_TAPER_BOOST_CAP`'s own doc comment for why this exists at all. The
+ * elite cap itself RAMPS with age (`ELITE_RAMP_START_AGE` -> `ELITE_RAMP_FULL_AGE`) rather than
+ * applying at full strength immediately — a flat elite cap, tried first during this round's own
+ * calibration pass, produced the SAME defect a naive ceiling-overshoot age-gate did (see
+ * `OVERSHOOT_CAP`'s doc comment): because a young player's headroom is LARGEST the moment they're
+ * furthest from their ceiling (i.e. right now, at whatever age they start), a flat elite cap makes the
+ * single biggest jump happen in year one, then decelerate — an early, not a 26-30, peak. Ramping the
+ * cap up with age instead deliberately holds a young elite-club player back a little in their early
+ * 20s (preserving real headroom) so the bulk of the growth lands during, not before, Tyler's own named
+ * prime window, matching a believable "still growing into their body and role" real career arc rather
+ * than an instant early spike.
+ */
+export const ELITE_RAMP_START_AGE = 20;
+export const ELITE_RAMP_FULL_AGE = 27;
+
+function eliteYouthTaperBoostCapFor(age: number): number {
+  const t = Math.max(0, Math.min(1, (age - ELITE_RAMP_START_AGE) / (ELITE_RAMP_FULL_AGE - ELITE_RAMP_START_AGE)));
+  return t * ELITE_YOUTH_TAPER_BOOST_CAP;
+}
+
+/**
+ * Round C153 — Tyler's ask #1, the other half of the fix `ceilingFromPot` alone doesn't cover. Fixing
+ * the ceiling's CORRELATION to POT (above) doesn't by itself fix the RATE: re-running Watson's
+ * ELITE_CLUB scenario with only the ceiling fix in place (`scripts/diagnose_roundC153_scratch.ts`'s own
+ * before/after) still peaked at OVR 69 — barely moved from his BASELINE peak of 68, nowhere near his
+ * (now-correctly-tied) POT 95 — because Round C152's own `YOUTH_TAPER_BOOST_CAP` (1.5) was deliberately
+ * kept modest specifically because it applied UNCONDITIONALLY to every young big-headroom player
+ * regardless of club quality, and that round's own tuning pass confirmed a much larger cap manufactures
+ * unrealistic peaks for modest-POT players under exactly the same conditions a genuine talent gets it.
+ *
+ * **The fix**: a SECOND, materially larger boost cap that only activates under the exact same strict
+ * elite gate `isEliteRateEligible` already defines for the bounded OVR-overshoot above —
+ * a genuinely scarce combination (sustained near-maxed coach+facility+performance investment, which in
+ * practice means the user's own single coached club, not any AI club a modest-POT player might land at)
+ * rather than "any club with a bit of investment," which is what made Round C152's own larger-cap
+ * experiment unsafe population-wide. Calibrated against Watson's own ELITE_CLUB re-simulation (see
+ * Schema.md's Round C153 section for the full year-by-year trajectory) to land his peak in Tyler's own
+ * named age-26-30 window, at/modestly above his own POT — GOOD_CLUB/STAR_TRACK are unaffected (neither
+ * clears `OVERSHOOT_ELITE_MULTIPLIER_THRESHOLD`), so this never touches the general population's growth
+ * rate, only the single elite-club-and-in-prime slice Tyler explicitly asked for.
+ */
+export const ELITE_YOUTH_TAPER_BOOST_CAP = 20;
+
+/**
+ * Round C153 — [[Growth and Progression Engine — Audit and Recommendations]] / ROADMAP #103. Root
+ * cause, confirmed with real numbers (`scripts/diagnose_roundC153_scratch.ts`, 2026-09-28, 698 active
+ * players): `potentialCeilingFor(p)` (the raw `potentialTall`/`potentialMid` roll `ageOnePlayer` used
+ * as its growth ceiling) correlates only weakly with the player's own displayed `POT`
+ * (Pearson r = 0.414). Two distinct, confirmed failure modes, not one:
+ *
+ * 1. **Ceiling far ABOVE POT** — 669/698 active players (95.8%, mean gap +22.5) have a raw ceiling
+ *    that sits well above their own POT, floating free of it purely because `generatePotential`
+ *    (`draft.ts`) rolls it independently at generation time. This is ROADMAP #103's own headline risk:
+ *    left alone, a strong enough growth rate (Round C152's youth taper, or any future rate increase)
+ *    lets a modest-POT player's OVR climb toward this unrelated, unrealistically-high raw ceiling
+ *    instead of their own real scouted expectation — a NEW "12 generational talents" failure mode via
+ *    a different mechanism than Round 91-93's original one.
+ * 2. **Ceiling BELOW POT** — a smaller (17/698) but real slice, concentrated in Round C151's
+ *    proven-trajectory beneficiaries (Harry Dean +24, Harry Sheezel +17, Jagga Smith +16, Nick Watson's
+ *    own case among them at a smaller gap) whose displayed `POT` was deliberately widened using a
+ *    SEPARATE signal (`blendedPotentialFor`'s draft-capital/proven-trajectory blend) that never touches
+ *    `potentialTall`/`potentialMid` at all — these players are mathematically incapable of ever
+ *    reaching their own generated `POT` through real career growth, exactly the Watson shortfall Round
+ *    C152's audit note flagged and only partially closed (a faster rate still aims at the wrong
+ *    target).
+ *
+ * **Naively substituting POT itself as the per-attribute ceiling was tried and rejected.** `POT`, like
+ * `OVR`, is a Z-SCORED COMPOSITE across 20 attributes (`ovrRawComposite`/`ovrFromRawComposite`) — not a
+ * per-attribute physical limit `potentialHeadroom` can directly compare a single raw attribute against.
+ * The same population scan found 633/698 active players (90.7%) already have at least one
+ * archetype-primary attribute reading ABOVE their own composite POT/OVR number today — completely
+ * normal (that's what weighting primary attributes into half the composite means), but naively using
+ * POT as a per-attribute ceiling would have floored `potentialHeadroom` at 0 for the large majority of
+ * the league immediately, re-triggering Round C152's exact "guaranteed stagnation" bug at roughly 5x
+ * the scale.
+ *
+ * **The real fix**: invert the composite formula instead of substituting POT directly. Since
+ * `ovrRawComposite` collapses to exactly `C + prestigeBonusFor(p)` when every one of a player's 20
+ * `RATED_ATTRIBUTES` uniformly reads the same value `C` (`primaryMean == overallMean == C` regardless
+ * of `PRIMARY_ATTRIBUTE_SHARE`), inverting `ovrFromRawComposite`'s Z-score/rescale step gives a closed
+ * form for the single per-attribute ceiling `C` that reproduces this player's own real `POT` if every
+ * attribute reached it:
+ *
+ *   C = populationStats.mean - prestigeBonusFor(p) + (POT - 70) * populationStats.stdDev / OVR_Z_MULTIPLIER
+ *
+ * This ceiling is now tied to `POT` BY CONSTRUCTION (perfectly, not loosely, correlated) while staying
+ * on the same raw per-attribute scale `potentialHeadroom` was always designed to compare against.
+ * `populationStats` is frozen at the start of the off-season step, the same disclosed
+ * frozen-population-snapshot approximation `careerProjection.ts`'s `projectOvrTrajectory` already uses
+ * and discloses (doesn't model the whole league aging together) — reused here rather than invented
+ * fresh for this round.
+ *
+ * **When `populationStats` isn't supplied** (a caller with no population in scope — kept purely for
+ * backward compatibility, e.g. a unit test constructing a lone synthetic player), this falls back to
+ * the OLD raw-ceiling behaviour (`potentialCeilingFor(p)`) unchanged — this round's real fix only
+ * activates for callers that actually have a population to derive the inversion from
+ * (`runOffSeason`, `careerProjection.ts`, `scripts/scratch_growth_audit.ts`).
+ */
+export function ceilingFromPot(p: Player, populationStats: { mean: number; stdDev: number }): number {
+  const prestige = prestigeBonusFor(p);
+  const raw = populationStats.mean - prestige + ((p.POT - 70) * populationStats.stdDev) / OVR_Z_MULTIPLIER;
+  return Math.max(40, Math.min(110, raw));
+}
+
+/**
+ * Round C153 — Tyler's ask #1's second half: "even EXCEED [POT] somewhat if [the player's] club's
+ * coaching and facilities are elite, peaking somewhere in the age 26-30 range." A real, deliberate
+ * `OVR > POT` invariant change (see this file's own top-level note in Schema.md's Round C153 section
+ * for the full before/after invariant statement) — bounded, not unlimited.
+ *
+ * **Elite, not just good, development conditions**: `developmentMultiplier` (the RAW value passed into
+ * `ageOnePlayer`, i.e. BEFORE the youth taper multiplies it further) must be at/above
+ * `OVERSHOOT_ELITE_MULTIPLIER_THRESHOLD` — chosen between this round's own GOOD_CLUB (~1.20) /
+ * STAR_TRACK (~1.32) scenarios and the new ELITE_CLUB scenario (maxed coach + maxed facilities +
+ * near-cap performance, which reaches exactly `DEVELOPMENT_TUNING.MULTIPLIER_CAP` = 1.4) — so a merely
+ * good, or even a genuine star's season under good-but-not-maxed investment, never qualifies. In
+ * practice this confines the whole mechanism to the human player's OWN coached club: `coachContributionFor`
+ * (`development.ts`) always reads exactly `0` for every other (AI) club, so no AI-controlled player can
+ * ever reach this threshold — this is a deliberate, self-selected choice by the human player investing
+ * in one specific club, never a population-wide risk the way Round C152's own youth-taper tuning had to
+ * guard against (that mechanism activated for ANY young big-headroom player at ANY club).
+ *
+ * **NOT separately age-gated** (an earlier draft of this mechanism gated the overshoot to
+ * `[24, 31]` specifically, matching Tyler's named prime window — dropped after this round's own
+ * calibration run showed it created an ugly one-season discontinuity: the ceiling jumping the moment
+ * age 24 was reached produced a single unrealistic leap followed by pure decline, not the gradual
+ * multi-year climb Tyler actually asked for). The "peaks in the 26-30 range, then genuinely declines"
+ * SHAPE is produced entirely by the existing age-keyed decline machinery instead — `ageFactor`'s own
+ * climb past age 29, `prestige.ts`'s age-32/33/34 sunset, and this round's own new speed/agility
+ * athletic decline (ages 31-35) — not by artificially switching the ceiling off. A trained-up ceiling
+ * doesn't retroactively shrink just because a player turns 32; only their actual attributes decline,
+ * which those three mechanisms already (and more honestly) model.
+ *
+ * `OVERSHOOT_CAP` is expressed directly in OVR-scale points (the units Tyler's own ask and this round's
+ * report are phrased in) and converted to the same raw per-attribute units `ceilingFromPot` uses via
+ * the identical Z-score scale factor, so "OVR can exceed POT by up to N points" is literally true by
+ * construction, not an approximation. Calibrated (see `scripts/diagnose_roundC153_scratch.ts`'s own
+ * before/after run and Schema.md's Round C153 section for Watson's full year-by-year trajectory) against
+ * Watson's own real ELITE_CLUB re-simulation to land a believable, gradual peak in the 26-30 range at/
+ * modestly above his own POT — real but bounded, Tyler's own "somewhat," not a blown-open ceiling, and
+ * inert for every scenario short of a genuinely maxed, sustained club investment.
+ */
+export const OVERSHOOT_CAP = 28;
+export const OVERSHOOT_ELITE_MULTIPLIER_THRESHOLD = 1.38;
+
+/** See `OVERSHOOT_CAP`'s doc comment. `developmentMultiplier` is the RAW value `ageOnePlayer` was called with, before `youthTaperFor` multiplies it further (so the taper's own boost, which can be large for a young big-headroom player regardless of club quality, never itself counts as "elite club investment"). Also gates `ELITE_YOUTH_TAPER_BOOST_CAP` (see that constant's own doc comment) — the same one condition drives both the ceiling overshoot and the elevated growth rate needed to actually reach it within a normal career. */
+export function isEliteRateEligible(developmentMultiplier: number): boolean {
+  return developmentMultiplier >= OVERSHOOT_ELITE_MULTIPLIER_THRESHOLD;
+}
+
+/**
+ * Round C153 — the one function `ageOnePlayer` actually reads for its growth ceiling, replacing the
+ * old direct `potentialCeilingFor(p)` read. See `ceilingFromPot`/`OVERSHOOT_CAP`'s own doc comments for
+ * the full derivation. Falls back to the raw, pre-C153 `potentialCeilingFor(p)` whenever no
+ * `populationStats` is supplied (see `ceilingFromPot`'s own doc comment for exactly which callers that
+ * applies to).
+ *
+ * **The non-elite ceiling is `max(potentialCeilingFor(p), ceilingFromPot(p, populationStats))`** — the
+ * higher of the two ALREADY-independently-safe ceilings, never a replacement of one by the other:
+ *
+ * - `potentialCeilingFor(p)` (the raw, STATIC `potentialTall`/`potentialMid` field) already carries
+ *   Round C152's own consistency guarantee (never sits below the player's own generation-time
+ *   attributes) — reusing it here, unchanged, rather than re-deriving a fresh per-year consistency floor
+ *   was a real, confirmed finding of this round's own calibration: an earlier version of this function
+ *   instead recomputed `clampCeilingToOwnAttributes` fresh from `p`'s CURRENT (already-aged) attributes
+ *   every single off-season — `clampCeilingToOwnAttributes` was only ever designed as a ONE-TIME repair
+ *   of a static field (`draft.ts`'s generation step, `refreshRoundC152.ts`'s one-off population pass),
+ *   and recomputing it every year instead created a dangerous runaway feedback loop: the floor chases
+ *   growth upward indefinitely (it moves the same +8 margin above whatever attribute it's currently
+ *   pinned against, forever, regardless of how far that attribute has already climbed), which a
+ *   population-wide re-simulation confirmed let hundreds of ordinary players — not just genuine
+ *   elite-club investments — drift 30-40+ OVR points past their own POT over a normal career.
+ * - `ceilingFromPot(p, populationStats)` is the actual root-cause fix (see its own doc comment) — it
+ *   RAISES the ceiling for the smaller population of players whose raw ceiling sits mathematically
+ *   below what their own POT implies (Harry Dean +24, Harry Sheezel +17, Jagga Smith +16 — see
+ *   `scripts/diagnose_roundC153_scratch.ts`'s own numbers), the "can never reach their own POT" half of
+ *   ROADMAP #103's confirmed root cause. For a player whose raw ceiling ALREADY sits reasonably above
+ *   their POT (Nick Watson's own case: raw ceiling 98 vs POT 95, already fine — his real problem was
+ *   always the RATE, which Round C152's youth taper addresses, not the ceiling), `ceilingFromPot` alone
+ *   would actually read LOWER than the existing, already-safe raw ceiling (a real, confirmed side effect
+ *   of this formula's own conservative "every one of 20 attributes reaches the same uniform value"
+ *   assumption) — taking the max avoids silently regressing an already-fine case while still fixing the
+ *   genuinely broken one.
+ *
+ * Verified (`scripts/verify_roundC153_scratch.ts`) this doesn't reopen Round C152's own established
+ * BASELINE/GOOD_CLUB/STAR_TRACK results for Watson/Darcy — those scenarios never touch `ceilingFromPot`
+ * at all unless it's genuinely the higher of the two.
+ */
+export function growthCeilingFor(p: Player, developmentMultiplier: number, populationStats?: { mean: number; stdDev: number }): number {
+  if (!populationStats) return potentialCeilingFor(p);
+  const potTied = ceilingFromPot(p, populationStats);
+  const clampedBase = Math.max(potentialCeilingFor(p), potTied);
+  if (!isEliteRateEligible(developmentMultiplier)) return clampedBase;
+  // Round C153 calibration finding, the most important one: under elite conditions the ceiling must be
+  // HARD-CAPPED at `potTied + overshoot`, via Math.min against `clampedBase` — NOT maxed, and NOT left
+  // at `clampedBase` uncapped. `clampedBase` inherits `potentialCeilingFor(p)` (the raw, STATIC
+  // ceiling), which — per ROADMAP #103's own confirmed root cause — sits FAR above POT for the large
+  // majority of the population (669/698 active players, mean +22.5) purely because it was rolled
+  // independently of POT at generation time. A population-wide re-simulation confirmed that simply
+  // letting elite conditions accelerate a player toward that ALREADY-inflated raw ceiling (rather than
+  // toward a POT-bounded target) blows the "modestly above POT" invariant open for the majority of the
+  // league, not just Watson — up to +58 in one run of this round's own calibration, an entirely
+  // different failure mode from the one this round set out to fix. Capping the ELITE-eligible ceiling
+  // at `potTied + overshoot` regardless of how high `clampedBase` reads makes `OVR <= POT + OVERSHOOT_CAP`
+  // (converted through the same Z-score scale factor) a real, ENFORCED invariant for every elite-eligible
+  // player, not merely a calibration target — see this round's own population-wide re-scan
+  // (`scripts/verify_roundC153_scratch.ts`) for the confirmed bounded numbers this produces.
+  const overshootAttrPoints = (OVERSHOOT_CAP * populationStats.stdDev) / OVR_Z_MULTIPLIER;
+  const eliteCeiling = Math.min(clampedBase, potTied + overshootAttrPoints);
+  return Math.max(40, Math.min(110, eliteCeiling));
 }
 
 /**
@@ -226,6 +454,87 @@ export function ageFactor(age: number): number {
 
 /** Deliberately roughed in, same status as contest.ts's `K` or match.ts's placeholder probabilities — scripts/simulate.ts's balance simulator is the natural place to eventually tune this against real season-over-season rating drift once there's a season-over-season baseline worth tuning against. */
 export const PROGRESSION_SCALE = 0.12;
+
+/**
+ * Round C153 — Tyler's ask #3: a deliberate, distinct athletic-decline signal for `speed`/`agility`
+ * specifically, starting age 31, ~5%/year for 5 years (ages 31-35 inclusive), cumulative
+ * `1 - 0.95^5 ≈ 23%` by 35 — mirroring `prestige.ts`'s own age-32/33/34 sunset: a discrete, bounded,
+ * deliberately age-triggered step-down, not a continuous curve.
+ *
+ * **Investigated first, per this round's own brief**: what do `deg_speed`/`deg_agility` already
+ * produce for a 31-35-year-old under the EXISTING generic mechanism, before adding anything new?
+ * `speed` is referenced by `markLead`/`spoilLead` (each `deg_` typically 5-25, static per-player RNG);
+ * `agility` by `hardBallGets`/`getToContest`/`evasion`/`catchPlayer`. At age 31, `ageFactor` = 1.4x; at
+ * age 35, 2.2x. For a mid-range player (`deg_` ~15), that's roughly `15 * 1.4 * 0.12 ≈ 2.5` raw-scale
+ * points/year at 31, climbing to `15 * 2.2 * 0.12 ≈ 4.0`/year at 35 — a real, already-active decline,
+ * NOT zero, but generic (shared by every one of the 20 attributes, not an athletic-specific signal) and
+ * usually partly offset by whatever residual `imp_`-side headroom the attribute still has.
+ *
+ * **Decision: REPLACES, not adds to, the generic decline for these two attributes, for exactly this
+ * 5-season window.** Stacking a second, independent ~5%/year multiplicative reduction on top of the
+ * generic mechanism's own already-real ~3-6%/year (on a typical 60-80 starting value) would roughly
+ * DOUBLE the combined decline rate for speed/agility specifically — a real double-counting of the same
+ * underlying real-world phenomenon (athletic decline), not two independent signals. Outside this
+ * 5-season window (age < 31, or > 35 — matching the prestige sunset's own literal "holds, doesn't keep
+ * compounding" reading of an unspecified tail), `speed`/`agility` age completely normally through the
+ * existing generic `imp_`/`deg_` mechanism, same as every other attribute, before AND after — this is a
+ * genuinely separate, additional signal only in the sense the prestige sunset is "additional" (a second
+ * mechanism the player's age can trigger), never a second decline force compounding on the first one
+ * for the same two attributes in the same seasons.
+ */
+export const ATHLETIC_DECLINE_START_AGE = 31;
+export const ATHLETIC_DECLINE_END_AGE = 35;
+export const ATHLETIC_DECLINE_PER_YEAR = 0.05;
+export const ATHLETIC_DECLINE_ATTRIBUTES = ["speed", "agility"] as const;
+
+/** True for exactly the 5 seasons (ages 31-35 inclusive, the player's NEW post-increment age) `applyAthleticDecline` overrides. */
+export function inAthleticDeclineWindow(newAge: number): boolean {
+  return newAge >= ATHLETIC_DECLINE_START_AGE && newAge <= ATHLETIC_DECLINE_END_AGE;
+}
+
+/**
+ * Mutates `next` in place (called once, immediately after `next.Age` is set — see `ageOnePlayer`):
+ * overrides `speed`/`agility` with a flat `(1 - ATHLETIC_DECLINE_PER_YEAR)` multiplicative step off
+ * last year's OWN value (`prev`, not whatever the generic loop already computed into `next`) for exactly
+ * the 5 seasons `inAthleticDeclineWindow` covers — see this file's own doc comment above for why this
+ * REPLACES rather than adds to the generic per-attribute delta for these two attributes in that window.
+ * Outside the window, `next[attr]` (the generic loop's own result) is left completely untouched.
+ */
+/**
+ * Round C153 — the last piece needed to actually get Watson's ELITE_CLUB peak into Tyler's own named
+ * "at or modestly above POT" bar. `ceilingFromPot` + the elite ceiling overshoot + `ELITE_YOUTH_TAPER_BOOST_CAP`
+ * alone still plateaued well short (peaking around OVR 80-82 against a POT of 95 during this round's own
+ * calibration run) — not because headroom ran out, but because the GENERIC `deg_`-driven decline term
+ * (unaffected by any `imp_`-side multiplier, by design) reaches a stable EQUILIBRIUM with growth well
+ * before a player's attributes climb anywhere near the elevated elite ceiling: as headroom shrinks, the
+ * taper's own headroom-based shape naturally throttles the boost back down regardless of how large its
+ * cap is, so growth and baseline decline settle into balance early, not at the ceiling.
+ *
+ * **The fix**: a small, explicitly disclosed departure from this file's own established "developmentMultiplier
+ * only ever touches imp_, never deg_" principle (Round 91's original design, kept for GOOD_CLUB/STAR_TRACK
+ * and every non-elite player) — under the exact same strict elite gate as everything else this round adds,
+ * AND only through Tyler's own named prime window (`ELITE_DECLINE_DAMP_MAX_AGE`), the age-decline term
+ * itself is dampened by `ELITE_DECLINE_DAMP_FACTOR`. Modelled as what a genuinely maxed medical/
+ * conditioning/sports-science program at a real AFL club actually buys a player: not faster skill
+ * acquisition alone, but measurably less wear-and-tear across their genuine prime — a real, if
+ * simplified, mechanism, not an arbitrary knob. Ages at/beyond `ELITE_DECLINE_DAMP_MAX_AGE` (Tyler's own
+ * "then decline" half of the ask) get ZERO damping regardless of club quality — the prestige sunset and
+ * this round's new speed/agility athletic decline are the mechanisms doing that work, undiminished.
+ */
+export const ELITE_DECLINE_DAMP_FACTOR = 0.3;
+export const ELITE_DECLINE_DAMP_MAX_AGE = 30;
+
+function eliteDeclineDampFor(age: number, eliteRateEligible: boolean): number {
+  if (!eliteRateEligible || age > ELITE_DECLINE_DAMP_MAX_AGE) return 1;
+  return ELITE_DECLINE_DAMP_FACTOR;
+}
+
+function applyAthleticDecline(prev: Player, next: Player): void {
+  if (!inAthleticDeclineWindow(next.Age)) return;
+  for (const attr of ATHLETIC_DECLINE_ATTRIBUTES) {
+    next[attr] = Math.max(40, Math.min(110, Math.round(prev[attr] * (1 - ATHLETIC_DECLINE_PER_YEAR))));
+  }
+}
 
 /**
  * Applies one off-season step to a single player's `RATED_ATTRIBUTES` (see
@@ -259,11 +568,34 @@ export const PROGRESSION_SCALE = 0.12;
  *   `imp` reweighted before it's averaged into its attributes), never on `deg_`, and never touching
  *   `developmentMultiplier`/`PROGRESSION_SCALE` themselves — this only changes WHERE the same overall
  *   improvement budget lands, not how much of it there is.
+ *
+ * Round C153 additions:
+ * - The growth ceiling itself now comes from `growthCeilingFor` (POT-tied, with a small bounded elite
+ *   overshoot) instead of a direct `potentialCeilingFor(p)` read — see that function's own doc comment.
+ *   `populationStats` (optional; see `ceilingFromPot`'s doc comment for exactly which callers pass it)
+ *   is the frozen `{mean, stdDev}` the inversion needs; omitted, this falls back to the raw pre-C153
+ *   ceiling unchanged.
+ * - The attribute clamp moved from the stale `[1, 99]` (a leftover from before Round C147's population-
+ *   wide 40-110 rescale — confirmed still active and biting: 23/825 players already carry a real
+ *   attribute above 99 today, up to 107, every one of which this stale clamp would have silently
+ *   dragged down to 99 the very next time they were aged, regardless of `imp_`/`deg_`) to `[40, 110]`,
+ *   matching every other rated-quantity clamp in this file (`ovrFromRawComposite`,
+ *   `shrinkAttributesForSmallSample`) and `attributeGeneration.ts`'s own real-player generation scale.
+ * - `applyAthleticDecline` (below) runs AFTER the main per-attribute loop, overriding `speed`/`agility`
+ *   specifically for exactly the 5 seasons its own doc comment covers — see that function's doc comment
+ *   for why this REPLACES rather than adds to the generic `deg_`-driven decline for those two attributes
+ *   in that window only.
  */
-export function ageOnePlayer(p: Player, developmentMultiplier = 1, skillEmphasis?: Partial<Record<DiscreteSkill, number>>): Player {
-  const ceiling = potentialCeilingFor(p);
-  const af = ageFactor(p.Age);
-  const effectiveDevelopmentMultiplier = developmentMultiplier * youthTaperFor(p);
+export function ageOnePlayer(
+  p: Player,
+  developmentMultiplier = 1,
+  skillEmphasis?: Partial<Record<DiscreteSkill, number>>,
+  populationStats?: { mean: number; stdDev: number },
+): Player {
+  const ceiling = growthCeilingFor(p, developmentMultiplier, populationStats);
+  const eliteRateEligible = isEliteRateEligible(developmentMultiplier);
+  const af = ageFactor(p.Age) * eliteDeclineDampFor(p.Age, eliteRateEligible);
+  const effectiveDevelopmentMultiplier = developmentMultiplier * youthTaperFor(p, ceiling, eliteRateEligible);
   const contributions: Partial<Record<RatedAttribute, number[]>> = {};
 
   for (const skill of DISCRETE_SKILLS) {
@@ -281,9 +613,10 @@ export function ageOnePlayer(p: Player, developmentMultiplier = 1, skillEmphasis
     const list = contributions[attr];
     if (!list || list.length === 0) continue;
     const meanDelta = list.reduce((a, b) => a + b, 0) / list.length;
-    next[attr] = Math.max(1, Math.min(99, Math.round(p[attr] + meanDelta)));
+    next[attr] = Math.max(40, Math.min(110, Math.round(p[attr] + meanDelta)));
   }
   next.Age = p.Age + 1;
+  applyAthleticDecline(p, next);
   return next;
 }
 
@@ -481,9 +814,15 @@ export function recomputeOVR(players: readonly Player[]): Player[] {
  * same "computed from the season that's about to be archived, before anyone ages" timing as
  * `developmentMultipliers`. A player missing from the map ages with no emphasis at all, i.e. every
  * skill at its default uniform `1` weight — today's unmodified behaviour.
+ *
+ * Round C153: computes `populationOvrStats` ONCE, off the pre-aging population passed in, and threads
+ * it into every `ageOnePlayer` call — this is what actually activates `growthCeilingFor`'s new
+ * POT-tied ceiling (see that function's own doc comment) for every real off-season run, not just this
+ * round's own diagnostic/projection scripts.
  */
 export function runOffSeason(players: readonly Player[], developmentMultipliers?: ReadonlyMap<number, number>, skillEmphases?: ReadonlyMap<number, Partial<Record<DiscreteSkill, number>>>): Player[] {
-  const aged = players.map((p) => ageOnePlayer(p, developmentMultipliers?.get(p.PlayerID) ?? 1, skillEmphases?.get(p.PlayerID)));
+  const populationStats = populationOvrStats(players);
+  const aged = players.map((p) => ageOnePlayer(p, developmentMultipliers?.get(p.PlayerID) ?? 1, skillEmphases?.get(p.PlayerID), populationStats));
   return recomputeOVR(aged);
 }
 

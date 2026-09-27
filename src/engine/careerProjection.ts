@@ -109,7 +109,14 @@ export function projectOvrTrajectory(player: Player, currentYear: number, popula
   const years: ProjectedYear[] = [];
   let current = player;
   for (let i = 1; i <= yearsForward; i++) {
-    current = ageOnePlayer(current, 1);
+    // Round C153: threads `populationStats` (already computed by every caller of this function, for
+    // the OVR conversion two lines below) into `ageOnePlayer` too — this is what activates the new
+    // POT-tied growth ceiling (`growthCeilingFor`) for this chart, instead of the raw, now-superseded
+    // `potentialTall`/`potentialMid` ceiling. The `developmentMultiplier` passed is still hardcoded `1`
+    // (ROADMAP #104, left unbuilt) — a merely-baseline multiplier never qualifies for this round's new
+    // elite-overshoot allowance either (see `isEliteRateEligible`), so this chart's BASELINE shape
+    // is otherwise unaffected by this round beyond the ceiling-correlation fix itself.
+    current = ageOnePlayer(current, 1, undefined, populationStats);
     const ovr = ovrFromRawComposite(ovrRawComposite(current), populationStats);
     years.push({ year: currentYear + i, age: current.Age, ovr });
   }

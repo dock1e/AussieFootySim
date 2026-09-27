@@ -198,14 +198,57 @@ const PRESTIGE_SCALE = 0.55;
 export const PRESTIGE_CAP = 8;
 
 /**
+ * Round C150 — [[End-of-2026 Player Database Refresh]]. Tyler's own diagnosis: Max Gawn (34) and
+ * Lachie Neale (33) still read artificially high, because the prestige nudge — even after Round
+ * C148's per-honour-YEAR recency decay — has no notion of the PLAYER'S current age, only of how long
+ * ago each individual honour was won. A player who keeps winning honours late in their career (an
+ * All-Australian or Brownlow at 33/34) can therefore hold the honours term near its lifetime peak
+ * indefinitely, which Tyler judged doesn't reflect reality: a lifetime of accumulated reputation
+ * shouldn't fully offset the reality of playing your final real seasons, no matter how recently the
+ * last honour landed.
+ *
+ * **The fix**: a separate, ADDITIONAL age-keyed step-function reduction — `prestigeAgeSunsetFor` —
+ * applied to the final summed-and-capped prestige value, on top of (not instead of) Round C148's
+ * existing per-honour recency decay. This is deliberately a discrete step function keyed on real
+ * `Age`, not a continuous curve — Tyler's spec was exact ages (32/33/34), not a smooth taper:
+ *   - Age 32: -2 (the sunset first kicks in here)
+ *   - Age 33: an ADDITIONAL -3 on top of the age-32 step (-5 cumulative)
+ *   - Age 34: an ADDITIONAL -3 on top of that (-8 cumulative)
+ *   - Age <32: 0 (no sunset at all)
+ * **Age 35+ interpretation (disclosed, not silently assumed)**: Tyler's spec only named ages up to
+ * 34. Read literally as a "sunset," not something that reverses, 35+ holds steady at the same -8
+ * cumulative reduction as age 34 rather than continuing to compound further or snapping back to 0 —
+ * the most literal reading of an unspecified tail, flagged here rather than guessed at silently.
+ * **The floor**: per Tyler's explicit instruction, this sunset can only reduce prestige TOWARD zero,
+ * never below it, and never past the existing `PRESTIGE_CAP` in the positive direction either — an
+ * old honour should never be made to actively hurt a player. The reduction is therefore applied
+ * AFTER the existing honours/pedigree/milestone sum and the existing +/-8 cap, and the result is
+ * re-clipped into `[0, PRESTIGE_CAP]` when the pre-sunset value was positive (a negative
+ * pre-sunset value is left untouched — the sunset only trims a positive reputation bonus, it isn't a
+ * new penalty in its own right; see `prestigeBonusFor` for exactly how the two combine).
+ */
+export function prestigeAgeSunsetFor(age: number): number {
+  if (age >= 34) return 8;
+  if (age === 33) return 5;
+  if (age === 32) return 2;
+  return 0;
+}
+
+/**
  * The full bounded prestige nudge for one player, in raw-composite points (see this file's own doc
- * comment for units and the cap rationale). Combines all three real signals above; nothing here
- * reads free-text narrative directly.
+ * comment for units and the cap rationale). Combines all three real signals above, capped at
+ * `PRESTIGE_CAP`, then applies Round C150's age sunset (see `prestigeAgeSunsetFor`) on top — a
+ * separate, additional reduction from Round C148's honours-recency decay, keyed on the player's
+ * current real age rather than how long ago any single honour was won. Nothing here reads free-text
+ * narrative directly.
  */
 export function prestigeBonusFor(p: Player): number {
   const honours = honoursScoreFor(p.realFullName);
   const pedigree = draftPedigreeBonusFor(p);
   const milestone = careerMilestoneBonusFor(careerGamesFor(p));
   const raw = honours * PRESTIGE_SCALE + pedigree + milestone;
-  return Math.max(-PRESTIGE_CAP, Math.min(PRESTIGE_CAP, raw));
+  const capped = Math.max(-PRESTIGE_CAP, Math.min(PRESTIGE_CAP, raw));
+  if (capped <= 0) return capped; // sunset only trims a positive reputation bonus, never adds a penalty
+  const sunset = prestigeAgeSunsetFor(p.Age);
+  return Math.max(0, Math.min(PRESTIGE_CAP, capped - sunset));
 }

@@ -36,6 +36,19 @@
  * Totals/Averages" table, the "Advanced Stats" toggle, and the "Career" tab's per-season table,
  * which independently corroborates the basic totals plus a 2026 Brownlow vote). This is no longer a
  * scoped follow-up.
+ *
+ * ROUND C143g CORRECTION: the pre-existing "Bailey Williams" row (Western Bulldogs, no "J." —
+ * distinct from West Coast's "Bailey J. Williams" above) was found to be corrupted: it carried
+ * West-Coast-ruckman-shaped numbers (570 hitouts, etc.) that never belonged to the Western
+ * Bulldogs player, a leftover artifact of the same original extraction pass that produced the
+ * Bailey J. Williams gap. Replaced with the real Western Bulldogs Bailey Williams' 2026 season,
+ * sourced directly from footywire.com (basic stats "Season 2026 Totals/Averages": GM 19, K 228,
+ * HB 155, D 383, M 108, G 7, GA 3, B 8, T 34, HO 0, FF 15, FA 13, CL 17, CG 44, I50 48, R50 57; the
+ * "Advanced Stats" toggle: CP 99, UP 269, CM 4, MI5 9, 1% 20, BO 12; and the "Career" tab's
+ * per-season table, which corroborates the basic totals and shows a blank BL column for 2026, i.e.
+ * 0 Brownlow votes). afltables.com's cached profile for this player (born 10-Oct-1997, drafted
+ * 2015) only carries seasons 2016-2020 and wasn't usable as a 2026 cross-check. Both "Bailey
+ * Williams" rows in this file are now correct and distinct.
  */
 
 export interface Real2026SeasonStats {
@@ -634,7 +647,7 @@ const RAW_ROWS: RawRow[] = [
   ["Ed Richards", 23, 397, 84, 200, 597, 20, 5, 0, 102, 59, 154, 139, 80, 25, 24, 0, 240, 356, 2, 8, 26, 33, 22],
   ["Matthew Kennedy", 24, 292, 98, 262, 554, 11, 10, 8, 109, 43, 83, 115, 97, 18, 36, 0, 228, 304, 4, 12, 13, 4, 10],
   ["Marcus Bontempelli", 23, 310, 97, 301, 611, 31, 13, 4, 94, 46, 134, 132, 82, 19, 18, 0, 261, 367, 6, 17, 64, 11, 20],
-  ["Bailey Williams", 19, 141, 39, 110, 251, 8, 7, 570, 57, 27, 49, 99, 57, 35, 22, 0, 188, 71, 21, 6, 50, 0, 10],
+  ["Bailey Williams", 19, 228, 108, 155, 383, 7, 8, 0, 34, 57, 48, 17, 44, 15, 13, 0, 99, 269, 4, 9, 20, 12, 3],
   ["Joel Freijah", 24, 243, 93, 218, 461, 11, 12, 0, 92, 39, 61, 93, 88, 13, 31, 0, 186, 279, 2, 10, 41, 7, 22],
   ["Tim English", 16, 127, 73, 114, 241, 6, 2, 375, 43, 16, 36, 40, 31, 26, 16, 0, 114, 140, 10, 10, 51, 1, 5],
   ["Lachlan Bramble", 24, 252, 82, 148, 400, 4, 4, 0, 42, 60, 57, 21, 35, 12, 8, 0, 92, 253, 3, 1, 22, 25, 13],

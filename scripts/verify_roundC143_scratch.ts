@@ -37,6 +37,18 @@
  * player, "Bailey J. Williams", and OVR/POT/RATED_ATTRIBUTES/`clangerTend` for any player — the
  * documented population-wide ripple — never any other column for anyone).
  *
+ * Updated again in Round C143g, which fixed a data-corruption bug in the pre-existing "Bailey
+ * Williams" (Western Bulldogs, no "J.") row in `real2026SeasonStats.ts` and re-ran
+ * `refreshPlayerStats2026.ts` to push the correction into `stat_*`/attributes/OVR/POT.
+ * `applyRosterMovements.ts` was NOT re-run this round (Lance Collard's fringe-cohort closure is
+ * documentation-only, no `RosterMovementEntry`, no CSV change) — so `ROSTER_BACKUP_PATH` and
+ * `STATS_BACKUP_PATH` both point at the same pre-refresh snapshot
+ * (`players_master.pre-roundC143g.csv`, taken immediately before this round's
+ * `refreshPlayerStats2026.ts` run), and check 7's "one newly-matched player" name changes from
+ * "Bailey J. Williams" to "Bailey Williams" (this round didn't newly match anyone — it corrected an
+ * already-matched player's stats — so the check below is generalized to allow "Bailey Williams" in
+ * place of a newly-matched name).
+ *
  * Run with: `node --experimental-strip-types scripts/verify_roundC143_scratch.ts`
  */
 import { readFileSync } from "node:fs";
@@ -50,10 +62,12 @@ import type { Player } from "../src/types/player.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = join(__dirname, "..", "data", "players_master.csv");
-// Isolates applyRosterMovements.ts's effect this round (before that script ran).
-const ROSTER_BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143f.csv");
-// Isolates refreshPlayerStats2026.ts's effect this round (after roster movements, before the stats refresh).
-const STATS_BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143f-statsRefresh.csv");
+// Round C143g didn't re-run applyRosterMovements.ts (Lance Collard's closure is doc-only), so both
+// snapshots are the same pre-refresh backup taken immediately before this round's
+// refreshPlayerStats2026.ts run.
+const ROSTER_BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143g.csv");
+// Isolates refreshPlayerStats2026.ts's effect this round (before the stats refresh ran).
+const STATS_BACKUP_PATH = join(__dirname, "..", "data", "players_master.pre-roundC143g.csv");
 const BACKUP_PATH = STATS_BACKUP_PATH;
 
 const players: Player[] = parseCsvToObjects(readFileSync(CSV_PATH, "utf-8")).map(coerceRow);
@@ -139,15 +153,16 @@ for (const p of before) {
 }
 check("applyRosterMovements.ts this round touched ONLY the 4 real-status columns (nothing else, for any player)", rosterScopeViolations === 0);
 
-// 7 (Round C143f revision). Isolate refreshPlayerStats2026.ts's effect this round: comparing the
-// current CSV against the pre-stats-refresh snapshot, stat_* fields may ONLY differ for "Bailey J.
-// Williams" (the one newly-matched player this round), and NO column outside
+// 7 (Round C143g revision). Isolate refreshPlayerStats2026.ts's effect this round: comparing the
+// current CSV against the pre-stats-refresh snapshot, stat_* fields may ONLY differ for "Bailey
+// Williams" (Western Bulldogs — the one corrected player this round), and NO column outside
 // stat_*/RATED_ATTRIBUTES/OVR/POT/clangerTend may differ for ANYONE — the population-wide
 // OVR/POT/RATED_ATTRIBUTES ripple from the z-score fairness pass re-running against a changed
 // reference population is expected and documented in refreshPlayerStats2026.ts's own header.
 const beforeByName = new Map(before.map((p) => [p.realFullName ?? `${p.fname} ${p.lname}`, p]));
 const STAT_FIELDS = ["stat_GM", "stat_DI", "stat_KI", "stat_HB", "stat_MK", "stat_TK", "stat_CL", "stat_GL", "stat_HO", "stat_CM", "stat_CP", "stat_UP", "stat_1pct"] as const;
 const STATS_REFRESH_ALLOWED = new Set<string>([...STAT_FIELDS, ...RATED_ATTRIBUTES, "OVR", "POT", "clangerTend"]);
+const STATS_REFRESH_CORRECTED_NAME = "Bailey Williams";
 let unexpectedStatFieldChange = 0;
 let outOfScopeChange = 0;
 for (const p of players) {
@@ -155,20 +170,25 @@ for (const p of players) {
   const b = beforeByName.get(name);
   if (!b) continue;
   for (const f of STAT_FIELDS) {
-    if (p[f] !== b[f] && name !== "Bailey J. Williams") unexpectedStatFieldChange++;
+    if (p[f] !== b[f] && name !== STATS_REFRESH_CORRECTED_NAME) unexpectedStatFieldChange++;
   }
   for (const col of Object.keys(p) as (keyof Player)[]) {
     if (STATS_REFRESH_ALLOWED.has(col as string) || REAL_STATUS_COLUMNS.has(col as string)) continue;
     if ((p as unknown as Record<string, unknown>)[col] !== (b as unknown as Record<string, unknown>)[col]) outOfScopeChange++;
   }
 }
-check("refreshPlayerStats2026.ts this round changed stat_* ONLY for Bailey J. Williams", unexpectedStatFieldChange === 0);
+check(`refreshPlayerStats2026.ts this round changed stat_* ONLY for ${STATS_REFRESH_CORRECTED_NAME}`, unexpectedStatFieldChange === 0);
 check("refreshPlayerStats2026.ts this round touched no column outside stat_*/RATED_ATTRIBUTES/OVR/POT/clangerTend for anyone", outOfScopeChange === 0);
 
-// 7b. Bailey J. Williams specifically now has a real 2026 stat row applied (no longer part of the
-// data-completeness gap Round C143d flagged).
+// 7b. Bailey Williams (Western Bulldogs) specifically now has the corrected real 2026 stat row
+// applied (no longer the West-Coast-ruckman-shaped corrupted data Round C143g found).
+const bw = players.find((p) => p.realFullName === "Bailey Williams");
+check("Bailey Williams (Western Bulldogs) now has corrected real 2026 stats applied (stat_GM = 19, stat_HO = 0, stat_DI = 383)", bw?.stat_GM === 19 && bw?.stat_HO === 0 && bw?.stat_DI === 383);
+
+// 7c. Bailey J. Williams (West Coast) is untouched this round — his stats were already correct as
+// of Round C143f and this round's fix only concerned the Western Bulldogs "Bailey Williams" row.
 const bjw = players.find((p) => p.realFullName === "Bailey J. Williams");
-check("Bailey J. Williams now has real 2026 stats applied (stat_GM = 19)", bjw?.stat_GM === 19);
+check("Bailey J. Williams (West Coast) still has his Round C143f real 2026 stats (stat_GM = 19)", bjw?.stat_GM === 19);
 
 // 8. Players with no entry in the event log stay implicitly Active (blank realStatus).
 let unexpectedlyFlagged = 0;

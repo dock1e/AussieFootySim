@@ -168,12 +168,19 @@
  * guilty finding for a homophobic slur toward an opponent, a sought 10-game suspension for a second
  * such offence reduced on appeal to a 4-match suspension with 2 of those 4 suspended into the
  * following year) — stated here factually and neutrally as a matter of public record, not
- * editorialized. A 4-match suspension, however, only partially explains his 0 games played across
- * the ~19+ rounds of the 2026 season — he'd still have been available for the other rounds — so
- * this is disclosed as a partial explanation only, not treated as a resolved case. `RosterMovementType`
- * has no `'Suspended'` case, and inventing one for this single, partially-explanatory data point
- * isn't warranted; he stays implicitly `'Active'` (no entry) pending whatever actually explains the
- * rest of his season.
+ * editorialized. A 4-match suspension only partially explains his 0 games played across the ~19+
+ * rounds of the 2026 season taken alone — he'd still have been available for the other rounds — so
+ * Round C143d disclosed this as a partial explanation only, not a resolved case.
+ *
+ * ROUND C143g CLOSURE: Tyler directly confirmed "Consider Lance Collard a fringe player as well. He
+ * won't be reselected after his tribunal suspension." Combining the documented Tribunal suspension
+ * above with Tyler's judgment call that he won't be recalled to the senior side, Collard is now
+ * folded into the same closed/explained fringe-player cohort as the 8 names below — a real,
+ * still-technically-active AFL list player who is effectively fringe and won't manage a 2026 senior
+ * game, not a formal roster movement. `RosterMovementType` still has no `'Suspended'` case, and one
+ * still isn't warranted for a single partially-explanatory data point; he stays implicitly `'Active'`
+ * (no entry, `realStatus` blank), same as the other 8. See the Round C143f/g fringe-player addendum
+ * below for the full cohort.
  *
  * **"Bailey Williams" / "Bailey J. Williams" — the apparent collision is RESOLVED, not just
  * re-confirmed.** footywire confirms both are real, distinct, fully active 2026 players who each
@@ -233,17 +240,29 @@
  *
  * ROUND C143f ADDENDUM (fringe-player cohort closure, no new `RosterMovementEntry` rows): Tyler
  * directly confirmed (2026-09-27) the following 8 names — the remaining entries from Round C143d's
- * "genuinely unexplained" gap-set list, EXCLUDING Lance Collard (documented separate partial-
- * suspension explanation) and Bailey J. Williams (data-completeness gap, resolved this round in
- * `real2026SeasonStats.ts` instead) — as: "Consider each of these players fringe players who didn't
- * manage to play an AFL game in 2026." They are real, currently-active AFL list players (confirmed
- * present on footywire.com's live current-players list as of Round C143d) who simply have very few
- * career games and did not get a senior game in the real 2026 season — NOT retirements, delistings,
- * or injuries. Per Tyler's instruction this is a closed, explained category: **Alex Dodson, Clay
- * Hall, Cooper Simpson, Hugh Davies, Josh Draper, Lucca Grego, Luke Beecken, Tyrell Dewar.**
- * Deliberately NO `RosterMovementEntry` is added for any of these 8 — they remain `'Active'`
- * (`realStatus` blank/undefined), same as any other player with no recorded movement. This note
- * exists purely so a future round doesn't re-open this as an open research item: it's closed,
+ * "genuinely unexplained" gap-set list, EXCLUDING Lance Collard (at the time, a documented separate
+ * partial-suspension explanation — see ROUND C143g below, now folded into this same cohort) and
+ * Bailey J. Williams (data-completeness gap, resolved this round in `real2026SeasonStats.ts`
+ * instead) — as: "Consider each of these players fringe players who didn't manage to play an AFL
+ * game in 2026." They are real, currently-active AFL list players (confirmed present on
+ * footywire.com's live current-players list as of Round C143d) who simply have very few career
+ * games and did not get a senior game in the real 2026 season — NOT retirements, delistings, or
+ * injuries. Per Tyler's instruction this is a closed, explained category: **Alex Dodson, Clay Hall,
+ * Cooper Simpson, Hugh Davies, Josh Draper, Lucca Grego, Luke Beecken, Tyrell Dewar.** Deliberately
+ * NO `RosterMovementEntry` is added for any of these 8 — they remain `'Active'` (`realStatus`
+ * blank/undefined), same as any other player with no recorded movement.
+ *
+ * ROUND C143g ADDENDUM (Lance Collard joins the cohort, now 9 names): Tyler directly confirmed
+ * "Consider Lance Collard a fringe player as well. He won't be reselected after his tribunal
+ * suspension." Combining his already-documented Tribunal/Appeals Board suspension (see the Lance
+ * Collard note above) with Tyler's judgment that he won't be recalled to the senior side, Collard
+ * moves from "documented partial-explanation, still technically open" into this same closed/
+ * explained category as the other 8 — a real, still-technically-active AFL list player who is
+ * effectively fringe and won't manage a 2026 senior game. The cohort is now **Alex Dodson, Clay
+ * Hall, Cooper Simpson, Hugh Davies, Josh Draper, Lucca Grego, Luke Beecken, Tyrell Dewar, and Lance
+ * Collard (9 names)**. Same as the other 8, deliberately NO `RosterMovementEntry` is added for
+ * Collard — he remains `'Active'` (`realStatus` blank/undefined). This note exists purely so a
+ * future round doesn't re-open this as an open research item: the whole 9-name cohort is closed,
  * documentation-only, no data change.
  */
 

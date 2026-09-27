@@ -1,7 +1,7 @@
 import type { Player } from "../types/player.ts";
 import type { Archetype } from "../types/archetype.ts";
 import { DISCRETE_SKILLS, RATED_ATTRIBUTES, type DiscreteSkill, type RatedAttribute } from "../types/player.ts";
-import { ARCHETYPE_PRIMARY_ATTRIBUTES } from "../types/archetype.ts";
+import { ARCHETYPE_PRIMARY_ATTRIBUTES, META_ATTRIBUTE_WEIGHTS } from "../types/archetype.ts";
 
 /**
  * Season/career progression — Engine.md "Season/career progression":
@@ -182,13 +182,27 @@ export function ageOnePlayer(p: Player, developmentMultiplier = 1): Player {
  * Extracted as its own export (round 118, [[Club Theme System]] Player Career screen) so a forward
  * OVR projection can re-run this exact formula against a hypothetically-aged player without
  * duplicating it — `recomputeOVR` below is now just this function plus the population z-score step.
+ *
+ * **Round C144 — three-tier weighting, not two.** Per the [[AFL Archetype and Role Fluidity -
+ * Scoping Note]] (Tier 2), an attribute's weight is now: **x3** if it's a primary attribute for the
+ * player's own archetype (`ARCHETYPE_PRIMARY_ATTRIBUTES`, unchanged mechanism); else **x1.5** if it's
+ * a universal `META_ATTRIBUTE_WEIGHTS` entry (today, just `consistancy`); else **x1**. A primary-
+ * archetype match wins over a meta weight if an attribute is ever both (checked first, in that
+ * order) — though as of this round no archetype lists `consistancy` as primary any more, so that
+ * tie-break is currently never exercised in practice, just defensively ordered.
+ *
+ * `consistancy` moved here from being Medium Defender's own ×3 primary attribute: it's a
+ * psychological trait that affects performance variance for every player, not a skill specific to
+ * one defensive archetype, which was the scoping note's single strongest critique of the old table.
+ * Universal weighting reads its effect on `OVR` as positional-independent, matching what it actually
+ * represents.
  */
 export function ovrRawComposite(p: Player): number {
   const primary = new Set(ARCHETYPE_PRIMARY_ATTRIBUTES[p.archetype as Archetype]);
   let weightedSum = 0;
   let weightTotal = 0;
   for (const attr of RATED_ATTRIBUTES) {
-    const weight = primary.has(attr) ? 3 : 1;
+    const weight = primary.has(attr) ? 3 : (META_ATTRIBUTE_WEIGHTS[attr] ?? 1);
     weightedSum += p[attr] * weight;
     weightTotal += weight;
   }

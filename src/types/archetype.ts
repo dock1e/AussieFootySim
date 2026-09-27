@@ -31,22 +31,72 @@ export type Archetype = (typeof ARCHETYPES)[number];
  * slightly out of sync with a couple of archetype pages (e.g. it lists 6
  * attributes for Inside Mid where the archetype page itself lists 5) — the
  * per-archetype page is the more specific source and what this table follows.
+ *
+ * **Round C144 addendum — 3 additions from the [[AFL Archetype and Role Fluidity - Scoping Note]]
+ * (Tier 1, Tyler-approved as-is).** That note reviewed an uploaded real-2026-AFL research report
+ * against this exact table (the report's own "Current Primary Scoped Attributes" column is a verbatim
+ * reproduction of it) and found three genuine, low-risk gaps, all now closed:
+ * - **Pressure Forward** gained `acceleration`. The old 4-attribute list (`tenacity`, `aggression`,
+ *   `strengthManOnMan`, `courage`) is pure contested/tackling strength with zero closing-speed
+ *   attribute at all — but a pressure forward's whole job (locking the ball in forward 50, closing
+ *   passing lanes before a rebound kick escapes) depends on get-there speed as much as tackling
+ *   strength. The report called this a "critical deficit" and it checks out against our own table.
+ * - **Half Back Flanker** gained `readPlay`. The old list (`speed`, `skill`, `endurance`,
+ *   `acceleration`) is pure execution/athleticism with no vision/decision-making attribute, despite
+ *   this being exactly the gap the report's own headline case study (Harry Sheezel, real 2026 AFL)
+ *   was rebuilding away from — a rebounding half-back needs to read the field under pressure to hit a
+ *   clean corridor kick, not just have the legs to get there.
+ * - **Key Forward** and **Hybrid Key Forward Ruck** both gained `strengthGroundLevel`. Both lists were
+ *   pure overhead/marking attributes (`manMarking`, `strengthOverhead`, `verticalLeap`, plus
+ *   `confidence` for Key Forward) with zero ground-ball capability — but the report's own case study
+ *   (Harry McKay, real 2026 AFL, ~30% secondary-ruck game time) shows key forwards are routinely
+ *   pressed into pinch-hitting ruck/stoppage duty, where ground-ball strength genuinely matters, and
+ *   the old table scored that duty as if the player couldn't win a ground ball at all.
+ *
+ * **Round C144 addendum — `consistancy` removed from Medium Defender (Tier 2).** The same scoping
+ * note's strongest single critique: consistency is a psychological trait affecting performance
+ * variance for every player, not a Medium-Defender-specific skill, so weighting it here (×3, but only
+ * for one archetype) was mis-scoped. It's now weighted universally instead — see
+ * `META_ATTRIBUTE_WEIGHTS` below and `ovrRawComposite`'s own doc comment for the replacement
+ * mechanism. Medium Defender's list drops to `strengthManOnMan`/`positioning` only; no other archetype
+ * has ever listed `consistancy` as primary (confirmed by grep across this table).
  */
 export const ARCHETYPE_PRIMARY_ATTRIBUTES: Record<Archetype, readonly RatedAttribute[]> = {
   "Inside Mid": ["strengthGroundLevel", "tenacity", "courage", "readPlay", "copeWithPressure"],
   "Outside Mid": ["endurance", "speed", "agility", "skill", "acceleration"],
-  "Pressure Forward": ["tenacity", "aggression", "strengthManOnMan", "courage"],
+  "Pressure Forward": ["tenacity", "aggression", "strengthManOnMan", "courage", "acceleration"],
   "Hybrid Mid Forward": ["skill", "xFactor", "confidence", "courage", "readPlay"],
   "Small Forward": ["agility", "xFactor", "acceleration", "confidence"],
   "Medium Forward": ["manMarking", "skill", "confidence"],
   Ruck: ["strengthOverhead", "verticalLeap", "endurance"],
-  "Key Forward": ["manMarking", "strengthOverhead", "verticalLeap", "confidence"],
-  "Hybrid Key Forward Ruck": ["strengthOverhead", "verticalLeap", "manMarking"],
-  "Medium Defender": ["strengthManOnMan", "positioning", "consistancy"],
+  "Key Forward": ["manMarking", "strengthOverhead", "verticalLeap", "confidence", "strengthGroundLevel"],
+  "Hybrid Key Forward Ruck": ["strengthOverhead", "verticalLeap", "manMarking", "strengthGroundLevel"],
+  "Medium Defender": ["strengthManOnMan", "positioning"],
   "Intercept Defender": ["readPlay", "positioning", "manMarking", "skill"],
-  "Half Back Flanker": ["speed", "skill", "endurance", "acceleration"],
+  "Half Back Flanker": ["speed", "skill", "endurance", "acceleration", "readPlay"],
   "Back Pocket": ["strengthManOnMan", "tenacity", "positioning"],
   "Key Defender": ["strengthOverhead", "manMarking", "verticalLeap", "courage"],
+};
+
+/**
+ * Attributes weighted the same for every archetype, regardless of `ARCHETYPE_PRIMARY_ATTRIBUTES` — a
+ * psychological/meta trait that affects performance variance for everyone, not a positional skill.
+ * Round C144, see the [[AFL Archetype and Role Fluidity - Scoping Note]] (Tier 2, Tyler's "fuller
+ * meta-attribute system" option, not the minimal single-multiplier option the note itself recommended
+ * as a fallback). Extensible by design: a second meta-attribute (the note names `leadership` as an
+ * arguable future candidate) is just another entry here — no new plumbing needed in
+ * `ovrRawComposite`, which already checks this table generically for every one of the 20
+ * `RATED_ATTRIBUTES`. Deliberately does NOT include `leadership` itself: `leadership` is a separate,
+ * non-`RATED_ATTRIBUTES` field (Schema.md's "Discipline & tendency" section) that never flows through
+ * the OVR composite today, and pulling it in is out of scope for this round.
+ *
+ * `1.5` for `consistancy` is the scoping note's own suggested weight (between the "everything else"
+ * baseline of 1 and a full primary-attribute 3) — kept as-is rather than tuned further, since it
+ * preserves the existing ×3/×1 spread's overall scale without a universal trait dominating the
+ * composite the way a full ×3 would if applied to all 751 players at once.
+ */
+export const META_ATTRIBUTE_WEIGHTS: Partial<Record<RatedAttribute, number>> = {
+  consistancy: 1.5,
 };
 
 /**

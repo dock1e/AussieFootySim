@@ -754,7 +754,7 @@ const RAW_2021: RawRow[] = [
   [2021, "National", 1, "North Melbourne", "Jason Horne-Francis", 18, 185, "A", 101, 88, 219, 45, "AA40: 2024, 2026"],
   [2021, "National", 2, "Western Bulldogs", "Sam Darcy", 18, 205, "B+", 51, 101, 59, 9, "AA40: 2025"],
   [2021, "National", 3, "GWS", "Finn Callaghan", 18, 191, "A", 90, 21, 140, 27, "AA40: 2025"],
-  [2021, "National", 4, "Collingwood", "Nick Daicos", 18, 183, "A+", 117, 87, 489, 109, "AA: 2023, 2024, 2025, 2026; Rising Star: 2022; MVP: 2025, 2026; AFLCA: 2024, 2026; B&F: 2024; AFLCA Young: 2023; AFLPA 1st: 2022; Prem: 2023"],
+  [2021, "National", 4, "Collingwood", "Nick Daicos", 18, 183, "A+", 117, 87, 489, 109, "AA: 2023, 2024, 2025, 2026; Rising Star: 2022; MVP: 2025, 2026; AFLCA: 2024, 2026; B&F: 2024; AFLCA Young: 2023; AFLPA 1st: 2022; Brownlow: 2026; Prem: 2023"],
   [2021, "National", 5, "Gold Coast", "Mac Andrew", 18, 201, "B+", 88, 14, 59, 0, ""],
   [2021, "National", 6, "Adelaide", "Josh Rachele", 18, 180, "B", 93, 135, 64, 1, ""],
   [2021, "National", 7, "Hawthorn", "Josh Ward", 18, 183, "B", 90, 14, 29, 7, ""],

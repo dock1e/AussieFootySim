@@ -15,14 +15,18 @@ import { draftCapitalScore, realCareerGamesFor } from "./draftCapital.ts";
  * 1. **Named honours** (`honoursScoreFor`) — parsed from `data/realDraftHistory.ts`'s own
  *    `DraftHistoryEntry.awards` semicolon-tag convention (e.g. "AA: 2023, 2024; Brownlow: 2026"),
  *    the exact same field this codebase has used since round 65/66/68 for every scouting-text
- *    honours callout. Each distinct honour TYPE is counted once per real season it was won (a
- *    repeated tag like "AA: 2023, 2024, 2025, 2026" counts 4), weighted by `HONOUR_WEIGHTS` below —
- *    Brownlow (the game's own highest individual honour) weighted heaviest, full All-Australian
- *    blazers/Coleman/Norm Smith next, then best-and-fairest/Rising Star/AFLPA-1st-tier honours,
- *    then the lesser AA40 (wider 40-man squad, not the actual 23-man team) and flag-only
- *    Premiership tags lightest (a flag is a team honour with a large lucky/context component, not
- *    pure individual quality — included at low weight rather than left out entirely, since Tyler's
- *    own brief explicitly names "Norm Smith Medal + premiership tags... already tagged" as an input).
+ *    honours callout, weighted by `HONOUR_WEIGHTS` below — Brownlow (the game's own highest
+ *    individual honour) weighted heaviest, full All-Australian blazers/Coleman/Norm Smith next, then
+ *    best-and-fairest/Rising Star/AFLPA-1st-tier honours, then the lesser AA40 (wider 40-man squad,
+ *    not the actual 23-man team) and flag-only Premiership tags lightest (a flag is a team honour
+ *    with a large lucky/context component, not pure individual quality — included at low weight
+ *    rather than left out entirely, since Tyler's own brief explicitly names "Norm Smith Medal +
+ *    premiership tags... already tagged" as an input). **Round C148**: each individual honour-YEAR
+ *    now DECAYS by real years elapsed since it was won (half-life 6 real seasons — see
+ *    `honoursScoreFor`'s own doc comment for the full derivation and why this was a confirmed, not
+ *    just suspected, driver of Round C147's "no real decline" problem) — this file's Round C147
+ *    version was a flat, never-decaying lifetime sum, which is what let a decorated-but-declined
+ *    veteran's `OVR` stay permanently propped up regardless of current real form.
  * 2. **Draft pedigree** (`draftPedigreeBonusFor`) — reuses `draftCapital.ts`'s existing
  *    `draftCapitalScore` (avg-career-games-by-pick, already built for `POT`'s upside term) as the
  *    "was this player a historically elite draft selection" signal Tyler's brief names directly
@@ -61,8 +65,8 @@ import { draftCapitalScore, realCareerGamesFor } from "./draftCapital.ts";
  * genuine backstop, not a target.
  */
 
-/** Weight per distinct honour-tag TYPE in `DraftHistoryEntry.awards`, applied once per real season year that tag lists. Anything not in this table (unrecognised/未-tagged text) contributes 0 — deliberately conservative rather than guessing at an unknown tag's intended weight. */
-const HONOUR_WEIGHTS: Readonly<Record<string, number>> = {
+/** Weight per distinct honour-tag TYPE in `DraftHistoryEntry.awards`, applied once per real season year that tag lists. Anything not in this table (unrecognised/未-tagged text) contributes 0 — deliberately conservative rather than guessing at an unknown tag's intended weight. Exported (Round C148) so `provenTrajectory.ts` can check "does this player have ANY real recognised honour" without re-declaring the same table. */
+export const HONOUR_WEIGHTS: Readonly<Record<string, number>> = {
   Brownlow: 3,
   AA: 1.5,
   Coleman: 1.5,
@@ -79,47 +83,92 @@ const HONOUR_WEIGHTS: Readonly<Record<string, number>> = {
   Prem: 0.4,
 };
 
-/** `"AA: 2023, 2024; Coleman: 2022"` -> `{AA: 2, Coleman: 1}` — a plain count of years listed per honour type, not a lookup of what year it is now (Tyler's own steer: pedigree/honours are lifetime signals here, not "won it recently"). */
-function parseAwardCounts(awards: string): Record<string, number> {
-  const counts: Record<string, number> = {};
-  if (!awards) return counts;
+/** `"AA: 2023, 2024; Coleman: 2022"` -> `{AA: [2023, 2024], Coleman: [2022]}` — the actual YEARS
+ * listed per honour type (not just a count), so `honoursScoreFor` below can decay each one by how
+ * long ago it was actually won. */
+function parseAwardYears(awards: string): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  if (!awards) return out;
   for (const clause of awards.split(";")) {
     const m = /^\s*([^:]+):\s*(.+)$/.exec(clause);
     if (!m) continue;
     const label = m[1].trim();
     const years = m[2]
       .split(",")
-      .map((y) => y.trim())
-      .filter(Boolean);
-    counts[label] = (counts[label] ?? 0) + years.length;
+      .map((y) => parseInt(y.trim(), 10))
+      .filter((y) => !Number.isNaN(y));
+    (out[label] ??= []).push(...years);
   }
-  return counts;
+  return out;
 }
 
+/** "This round," for decay purposes — the real 2026 AFL season. Exported so `provenTrajectory.ts`/verify scripts can reference the same constant rather than re-guessing it. */
+export const HONOUR_DECAY_CURRENT_YEAR = 2026;
+
 /**
- * Career honours score for a real player, merged across every `realDraftHistory.ts` row that
- * mentions them (a player traded/delisted-and-rerookied has more than one row — see that file's own
- * file-level caveat — and each row's `awards` text is a cumulative-to-scrape-time snapshot, so this
- * takes the MAX count per honour type across rows rather than summing, avoiding double-counting the
- * same honour years repeated verbatim on more than one row). `0` for a player with no real draft
- * history row at all (the ~128-201 players — see design note — whose `draft_pick` is still
- * MODELLED), same documented fallback every other draft-history-dependent formula in this codebase
- * already uses.
+ * Round C148 — [[End-of-2026 Player Database Refresh]]. Tyler's own diagnosis, confirmed directly
+ * (`scripts/verify_roundC148_scratch.ts` dumps the actual before/after numbers): this function used
+ * to be a flat lifetime sum with NO time-decay — a real Brownlow won in 2017 counted exactly as much
+ * in 2026 as one won last year, so a decorated-but-declined veteran's prestige term never shrank,
+ * permanently propping up `OVR` regardless of real current form (confirmed the actual driver of
+ * Dustin Martin still reading `OVR 102` post-retirement, and a real contributor — alongside the
+ * single-season-composite gap `recencyForm.ts` fixes — to Cripps/Oliver reading as "still rising").
+ *
+ * **The fix**: each individual honour-YEAR (not each honour TYPE) now decays exponentially by real
+ * years elapsed since it was won, half-life `HONOUR_HALF_LIFE_YEARS` (6 real seasons) — a Brownlow
+ * won 6 years ago contributes half its `HONOUR_WEIGHTS` weight, 12 years ago a quarter, and so on,
+ * asymptoting toward (never quite reaching) zero rather than being flatly excluded — a genuine
+ * career-defining honour should never read as worth literally NOTHING no matter how long ago, just
+ * steadily less. This is why a merely-good current season plus a real honour won recently still
+ * reads strongly (as it should), while the SAME honour a decade-plus stale contributes only a small
+ * fraction of its original weight — letting current-form decline actually show through instead of
+ * being permanently masked by lifetime prestige.
+ *
+ * **A real, disclosed side effect of moving from count-per-type to sum-per-year**: the old
+ * implementation took the MAX count per honour type across a player's multiple `realDraftHistory.ts`
+ * rows (guarding against the same years being repeated verbatim on more than one row). This version
+ * takes the UNION of years per honour type across rows instead (a `Set`, not a `Math.max`) — strictly
+ * more correct for the same reason (still never double-counts an identical year listed twice), and
+ * now also correctly captures a case the old MAX-per-row logic could miss: two rows each listing a
+ * DIFFERENT subset of a player's real honour years (e.g. row A lists "AA: 2023", a later re-scrape
+ * row B lists "AA: 2023, 2024") — the union correctly keeps both 2023 and 2024, where the old
+ * per-row max would have kept only whichever row's count was larger.
  */
-export function honoursScoreFor(realFullName: string | undefined): number {
+const HONOUR_HALF_LIFE_YEARS = 6;
+
+/**
+ * Career honours score for a real player, decayed by real years since each honour was won (see this
+ * function's own doc comment). `currentYear` defaults to `HONOUR_DECAY_CURRENT_YEAR` (this round's
+ * real season) — exposed as a parameter so `historicalOvrReconstruction.ts` can reuse this exact
+ * function to reconstruct what a player's prestige term would have read as of any past real season
+ * (an honour won AFTER `currentYear` is excluded entirely, not decayed "backwards"). `0` for a
+ * player with no real draft history row at all (the ~128-201 players — see design note — whose
+ * `draft_pick` is still MODELLED), same documented fallback every other draft-history-dependent
+ * formula in this codebase already uses.
+ */
+export function honoursScoreFor(realFullName: string | undefined, currentYear = HONOUR_DECAY_CURRENT_YEAR): number {
   if (!realFullName) return 0;
   const rows = draftHistoryFor(realFullName);
   if (rows.length === 0) return 0;
-  const merged: Record<string, number> = {};
+  const yearsByLabel = new Map<string, Set<number>>();
   for (const row of rows) {
-    const counts = parseAwardCounts(row.awards);
-    for (const [label, n] of Object.entries(counts)) {
-      merged[label] = Math.max(merged[label] ?? 0, n);
+    const parsed = parseAwardYears(row.awards);
+    for (const [label, years] of Object.entries(parsed)) {
+      if (!yearsByLabel.has(label)) yearsByLabel.set(label, new Set());
+      const set = yearsByLabel.get(label)!;
+      for (const y of years) set.add(y);
     }
   }
   let score = 0;
-  for (const [label, n] of Object.entries(merged)) {
-    score += (HONOUR_WEIGHTS[label] ?? 0) * n;
+  for (const [label, years] of yearsByLabel) {
+    const weight = HONOUR_WEIGHTS[label] ?? 0;
+    if (weight === 0) continue;
+    for (const y of years) {
+      if (y > currentYear) continue; // an honour not yet won as of the year we're reconstructing
+      const yearsAgo = currentYear - y;
+      const decay = Math.pow(0.5, yearsAgo / HONOUR_HALF_LIFE_YEARS);
+      score += weight * decay;
+    }
   }
   return score;
 }

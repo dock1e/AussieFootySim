@@ -220,13 +220,54 @@ export function ovrRawComposite(p: Player): number {
   return weightedSum / weightTotal + prestigeBonusFor(p);
 }
 
-/** `{mean, stdDev}` of `ovrRawComposite` across a population — the z-score denominator `recomputeOVR` needs. Extracted (round 118) so it can be computed ONCE against today's real population and then reused, frozen, to convert a projected future raw composite into an OVR-shaped number without re-running the full league through `ageOnePlayer` too — see `careerProjection.ts`'s own doc comment for why that's a disclosed approximation. */
+/**
+ * Round C148 — [[End-of-2026 Player Database Refresh]], Tyler's own explicit confirmed call: a real
+ * `Retired`/`Delisted` player's OLD form shouldn't inflate or drag the ACTIVE population's own
+ * z-score curve (their attributes are stale real-world stat-derived numbers that will never again be
+ * refreshed against a real current season). `Injured` deliberately stays IN — a season-ending injury
+ * doesn't retroactively make a player's real season-long stat line non-representative of their real
+ * quality, unlike a genuine retirement/delisting. Used by both `populationOvrStats` below and
+ * `ratingGeneration.ts`'s `archetypeAttributeMeans` (the two population-reference computations this
+ * round's brief named) — NOT by `recomputeOVR`'s per-player map step, which still assigns every
+ * player (including excluded ones) an `OVR` against the filtered baseline; only Top-50/rankings
+ * OUTPUT excludes them, per Tyler's own steer (see `scripts/refreshRoundC148.ts`).
+ */
+export function isActiveRealStatus(p: Pick<Player, "realStatus">): boolean {
+  return p.realStatus !== "Retired" && p.realStatus !== "Delisted";
+}
+
+/** `{mean, stdDev}` of `ovrRawComposite` across a population — the z-score denominator `recomputeOVR` needs. Extracted (round 118) so it can be computed ONCE against today's real population and then reused, frozen, to convert a projected future raw composite into an OVR-shaped number without re-running the full league through `ageOnePlayer` too — see `careerProjection.ts`'s own doc comment for why that's a disclosed approximation. Round C148: the baseline itself excludes real `Retired`/`Delisted` players (see `isActiveRealStatus`) — falls back to the full unfiltered population if filtering would leave it empty (never expected in practice at 825 players, just a defensive guard). */
 export function populationOvrStats(players: readonly Player[]): { mean: number; stdDev: number } {
-  const composites = players.map(ovrRawComposite);
+  const pool = players.filter(isActiveRealStatus);
+  const basis = pool.length > 0 ? pool : players;
+  const composites = basis.map(ovrRawComposite);
   const mean = composites.reduce((a, b) => a + b, 0) / composites.length;
   const variance = composites.reduce((a, c) => a + (c - mean) ** 2, 0) / composites.length;
   return { mean, stdDev: Math.sqrt(variance) };
 }
+
+/**
+ * Round C148 — [[End-of-2026 Player Database Refresh]]: the z-score standard-deviation multiplier
+ * `ovrFromRawComposite` scales by, widened from Round C147's `13` to `11` — the deliberately-last-
+ * resort fallback this round's own brief explicitly allows ("a modest widening of the population
+ * std-scaling term... but only if the real fixes above don't already resolve it"). Tried the real
+ * fixes first (recency-blended composites in `recencyForm.ts`, decayed prestige in `prestige.ts`,
+ * the Retired/Delisted baseline exclusion) and confirmed directly (see
+ * `scripts/verify_roundC148_scratch.ts`) they materially help but don't fully resolve two related,
+ * confirmed problems: (1) too many genuinely elite real players' raw composites clustered ABOVE the
+ * old `z >= (110-70)/13 ≈ 3.08` clip threshold, crowding the >100/>105 OVR tier well past a
+ * believably rare "elite" band; (2) a real decorated player's genuinely different peak-vs-decline
+ * seasons could BOTH independently exceed that same clip and read identically at the 110 ceiling,
+ * masking exactly the real year-over-year decline shape this round exists to surface (confirmed via
+ * `historicalOvrReconstruction.ts`'s reconstructed Cripps/Oliver trajectories pinning at 110 for
+ * most of their real prime years under the old `*13`, only barely coming off it for their real
+ * genuinely-weaker seasons — not the smooth peak/decline shape a real career shows). Widening to
+ * `*11` raises the effective clip threshold to `z >= 40/11 ≈ 3.64`, giving meaningfully more
+ * resolution across the genuinely elite tier before the ceiling swallows real differences between
+ * seasons — a modest, disclosed, last-resort global recalibration, not a first move (see the design
+ * note's own sequencing note on this point).
+ */
+export const OVR_Z_MULTIPLIER = 11;
 
 /**
  * `rawComposite` -> OVR, given a (population) `{mean, stdDev}`.
@@ -236,14 +277,17 @@ export function populationOvrStats(players: readonly Player[]): { mean: number; 
  * `scripts/verify_roundC147_scratch.ts`): `70 + z*13`, clipped `[40, 110]` — replaces the old
  * `50 + z*13` clipped `[28, 99]`. Recentres the league average from ~50 to ~70 and extends genuine
  * all-time-great territory from a hard 99 ceiling to 110, per Tyler's own round-125 steer. The
- * z-score SHAPE is unchanged (still `stdDev`-scaled, still `*13`) — only the additive centre (50->70)
- * and the clip bounds (28-99 -> 40-110) moved, which is why this is a recentre-and-extend, not a
- * linear stretch of the old numbers (Tyler was explicit this should NOT be a straight rescale of the
- * old 1-99 figures).
+ * z-score SHAPE is unchanged (still `stdDev`-scaled) — only the additive centre (50->70) and the
+ * clip bounds (28-99 -> 40-110) moved, which is why this is a recentre-and-extend, not a linear
+ * stretch of the old numbers (Tyler was explicit this should NOT be a straight rescale of the old
+ * 1-99 figures).
+ *
+ * **Round C148**: the multiplier itself moved `13 -> 11` (`OVR_Z_MULTIPLIER` above) — see that
+ * constant's own doc comment for the full, confirmed rationale.
  */
 export function ovrFromRawComposite(rawComposite: number, stats: { mean: number; stdDev: number }): number {
   const z = stats.stdDev === 0 ? 0 : (rawComposite - stats.mean) / stats.stdDev;
-  return Math.max(40, Math.min(110, Math.round(70 + z * 13)));
+  return Math.max(40, Math.min(110, Math.round(70 + z * OVR_Z_MULTIPLIER)));
 }
 
 /** The exact OVR formula from Schema.md's `OVR` row: a raw composite (mean of the 20 RATED_ATTRIBUTES, each weighted x3 if it's one of the player's archetype's ARCHETYPE_PRIMARY_ATTRIBUTES, x1 otherwise, plus Round C147's bounded `prestigeBonus`), z-scored against the full population passed in, rescaled to `70 + z*13`, clipped to `[40, 110]` (Round C147 rescale). */

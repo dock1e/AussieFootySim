@@ -1,7 +1,8 @@
 import type { Player } from "../types/player.ts";
 import { RATED_ATTRIBUTES, type RatedAttribute } from "../types/player.ts";
-import { potentialCeilingFor, ovrRawComposite, populationOvrStats, ovrFromRawComposite } from "./progression.ts";
+import { potentialCeilingFor, ovrRawComposite, populationOvrStats, ovrFromRawComposite, isActiveRealStatus } from "./progression.ts";
 import { draftCapitalScore, realCareerGamesFor } from "./draftCapital.ts";
+import { qualifiesForProvenTrajectory, PROVEN_TRAJECTORY_GAMES_BONUS } from "./provenTrajectory.ts";
 
 /**
  * Round 125/126 fairness fix — [[End-of-2026 Player Database Refresh]]. Tyler's own ask: a young,
@@ -69,7 +70,14 @@ export function careerGamesFor(p: Player): number {
 export function archetypeAttributeMeans(players: readonly Player[]): Record<string, Record<RatedAttribute, number>> {
   const sums = new Map<string, Record<RatedAttribute, number>>();
   const counts = new Map<string, number>();
-  for (const p of players) {
+  // Round C148: excludes real Retired/Delisted players from the archetype prior too (same call as
+  // progression.ts's populationOvrStats — see isActiveRealStatus's own doc comment). Falls back to
+  // including a specific archetype's excluded members if EVERY member of that archetype turns out to
+  // be Retired/Delisted (a defensive guard against a NaN-producing empty prior, not expected to bite
+  // at 825 players).
+  const activeArchetypes = new Set(players.filter(isActiveRealStatus).map((p) => p.archetype));
+  const pool = players.filter((p) => isActiveRealStatus(p) || !activeArchetypes.has(p.archetype));
+  for (const p of pool) {
     const arc = p.archetype;
     if (!sums.has(arc)) {
       sums.set(arc, Object.fromEntries(RATED_ATTRIBUTES.map((a) => [a, 0])) as Record<RatedAttribute, number>);
@@ -161,7 +169,10 @@ export function applyFairnessPass(
   populationStats: { mean: number; stdDev: number },
   ceiling = 110, // Round C147: new default rescale ceiling (was 99) — see progression.ts's ovrFromRawComposite
 ): Player {
-  const careerGames = careerGamesFor(p);
+  // Round C148 — provenTrajectory.ts's objective rule, checked against p's FRESH (pre-shrinkage)
+  // real-stat-derived attributes, exactly as that file's own doc comment requires.
+  const proven = qualifiesForProvenTrajectory(p, populationStats);
+  const careerGames = careerGamesFor(p) + (proven ? PROVEN_TRAJECTORY_GAMES_BONUS : 0);
   const shrunkAttrs = p.ovrOverride ? null : shrinkAttributesForSmallSample(p, careerGames, archetypeMeans);
   const next: Player = shrunkAttrs ? { ...p, ...shrunkAttrs } : { ...p };
   if (!p.ovrOverride) {

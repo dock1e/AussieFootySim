@@ -144,6 +144,21 @@ export class AttributeZScorer {
   private z(realFullName: string, key: RateKey): number {
     const row = this.rows.get(realFullName);
     if (!row) return 0;
+    return this.zOfRow(row, key);
+  }
+
+  /**
+   * Round C148 — z-score an arbitrary `PerGameRates` row against this scorer's already-built
+   * population field stats, without requiring that row to be one of the ones the scorer was
+   * constructed from. Powers `attributesForExternalRow` below, which `recencyForm.ts`'s recency-
+   * blended synthetic rows and `historicalOvrReconstruction.ts`'s past-season rows both need: a
+   * historical or recency-blended stat line isn't itself a member of the CURRENT population this
+   * scorer's field means/stdDevs were computed from, but it should still be measured against that
+   * same fixed reference (see this round's design note for why a fixed current-population baseline
+   * is the disclosed, reasonable choice — there's no real same-year historical league population in
+   * this dataset to z-score against instead).
+   */
+  private zOfRow(row: PerGameRates, key: RateKey): number {
     const s = this.stats.get(key)!;
     if (s.stdDev === 0) return 0;
     return (row[key] - s.mean) / s.stdDev;
@@ -169,7 +184,23 @@ export class AttributeZScorer {
 
   /** The 20 `RATED_ATTRIBUTES` for one real player, per Schema.md's documented input table (see this file's own header comment for the disclosed simplifications). `realFullName` must have a row in the `Real2026SeasonStats` population this scorer was built from. */
   attributesFor(realFullName: string, archetype: Archetype): Record<RatedAttribute, number> {
-    const z = (k: RateKey) => this.z(realFullName, k);
+    return this.computeAttributes((k) => this.z(realFullName, k), archetype);
+  }
+
+  /**
+   * Round C148 — the same 20-attribute formula as `attributesFor`, but for an arbitrary
+   * `Real2026SeasonStats`-shaped row that ISN'T necessarily a member of the population this scorer
+   * was constructed from (a recency-blended synthetic row from `recencyForm.ts`, or a past real
+   * season's row from `historicalOvrReconstruction.ts`) — z-scored against this scorer's fixed
+   * population field stats regardless (see `zOfRow`'s own doc comment for why that's the disclosed,
+   * reasonable choice here).
+   */
+  attributesForExternalRow(row: Real2026SeasonStats, archetype: Archetype): Record<RatedAttribute, number> {
+    const rates = perGame(row);
+    return this.computeAttributes((k) => this.zOfRow(rates, k), archetype);
+  }
+
+  private computeAttributes(z: (k: RateKey) => number, archetype: Archetype): Record<RatedAttribute, number> {
     const avg = (...vs: number[]) => vs.reduce((a, b) => a + b, 0) / vs.length;
 
     const isDefender = DEFENDER_ARCHETYPES.includes(archetype);

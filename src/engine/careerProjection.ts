@@ -54,10 +54,12 @@ export interface OvrTier {
  * best-to-worst; the first band an OVR is `>=` is the tier assigned.
  */
 const OVR_TIERS: readonly OvrTier[] = [
-  { label: "Elite", minOvr: 88 },
-  { label: "Star", minOvr: 78 },
-  { label: "Quality", minOvr: 62 },
-  { label: "Solid", minOvr: 50 },
+  // Round C147: +20 recentre (OVR's own z-score formula moved from `50 + z*13` to `70 + z*13`,
+  // see progression.ts's ovrFromRawComposite) — was 88/78/62/50/0.
+  { label: "Elite", minOvr: 108 },
+  { label: "Star", minOvr: 98 },
+  { label: "Quality", minOvr: 82 },
+  { label: "Solid", minOvr: 70 },
   { label: "Depth", minOvr: 0 },
 ];
 

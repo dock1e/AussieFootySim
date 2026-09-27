@@ -95,9 +95,10 @@ export const DEVELOPMENT_TUNING = {
   /** Flat scale applied to a player's raw performance contribution once they fall outside that season's scarcity cutoff — never zeroed out (a solid season still counts for something), just meaningfully reduced. */
   BEYOND_CUTOFF_SCALE: 0.6,
   /** Round 93 — elite tapering on the PERFORMANCE half only (see `eliteTaperFor`). Full effect at/below this current OVR. */
-  ELITE_TAPER_START_OVR: 75,
-  /** Reduced-floor effect at/above this current OVR — chosen well below OVR's own 99 ceiling so it bites for genuine stars, not just the population's own top sliver. */
-  ELITE_TAPER_END_OVR: 92,
+  // Round C147: +20 recentre (was 75/92) — see progression.ts's ovrFromRawComposite doc comment.
+  ELITE_TAPER_START_OVR: 95,
+  /** Reduced-floor effect at/above this current OVR — chosen well below OVR's own new 110 ceiling so it bites for genuine stars, not just the population's own top sliver. */
+  ELITE_TAPER_END_OVR: 108,
   /** The reduced multiplier an already-elite player's performance contribution is tapered down to at/above ELITE_TAPER_END_OVR — a floor, not a wall, so a genuine career year for an established star still counts for something. */
   ELITE_TAPER_FLOOR: 0.5,
 } as const;

@@ -2,6 +2,7 @@ import type { Player } from "../types/player.ts";
 import type { Archetype } from "../types/archetype.ts";
 import { DISCRETE_SKILLS, RATED_ATTRIBUTES, type DiscreteSkill, type RatedAttribute } from "../types/player.ts";
 import { ARCHETYPE_PRIMARY_ATTRIBUTES, META_ATTRIBUTE_WEIGHTS } from "../types/archetype.ts";
+import { prestigeBonusFor } from "./prestige.ts";
 
 /**
  * Season/career progression — Engine.md "Season/career progression":
@@ -196,6 +197,16 @@ export function ageOnePlayer(p: Player, developmentMultiplier = 1): Player {
  * one defensive archetype, which was the scoping note's single strongest critique of the old table.
  * Universal weighting reads its effect on `OVR` as positional-independent, matching what it actually
  * represents.
+ *
+ * **Round C147 — `prestigeBonus` added.** [[End-of-2026 Player Database Refresh]] Step 3, Tyler's
+ * binding decision #2: a bounded, documented nudge from real named honours/draft pedigree/career
+ * milestones (`engine/prestige.ts`'s `prestigeBonusFor`, capped at +/-8 raw-composite points) is
+ * added directly to the weighted-mean composite, BEFORE the population z-score step
+ * (`ovrFromRawComposite` below) — i.e. it moves a player's z-score by a bounded amount, exactly the
+ * same mechanism a real extra attribute point would, rather than being a separate co-equal input to
+ * `OVR`. A synthetic player with no `realFullName`/real draft record (draft prospects, test
+ * fixtures) gets `prestigeBonusFor === 0` and is completely unaffected. See `prestige.ts`'s own doc
+ * comment for the full input list, weights, and why the cap is +/-8.
  */
 export function ovrRawComposite(p: Player): number {
   const primary = new Set(ARCHETYPE_PRIMARY_ATTRIBUTES[p.archetype as Archetype]);
@@ -206,7 +217,7 @@ export function ovrRawComposite(p: Player): number {
     weightedSum += p[attr] * weight;
     weightTotal += weight;
   }
-  return weightedSum / weightTotal;
+  return weightedSum / weightTotal + prestigeBonusFor(p);
 }
 
 /** `{mean, stdDev}` of `ovrRawComposite` across a population — the z-score denominator `recomputeOVR` needs. Extracted (round 118) so it can be computed ONCE against today's real population and then reused, frozen, to convert a projected future raw composite into an OVR-shaped number without re-running the full league through `ageOnePlayer` too — see `careerProjection.ts`'s own doc comment for why that's a disclosed approximation. */
@@ -217,13 +228,25 @@ export function populationOvrStats(players: readonly Player[]): { mean: number; 
   return { mean, stdDev: Math.sqrt(variance) };
 }
 
-/** `rawComposite` -> OVR, given a (population) `{mean, stdDev}` — the exact `50 + z*13`, clipped `[28,99]` rescale, split out of `recomputeOVR` so it can be reused against a frozen population baseline. */
+/**
+ * `rawComposite` -> OVR, given a (population) `{mean, stdDev}`.
+ *
+ * **Round C147 rescale** — [[End-of-2026 Player Database Refresh]] Step 3, design note round 125
+ * decision, re-verified against the current 825-player population before shipping (see
+ * `scripts/verify_roundC147_scratch.ts`): `70 + z*13`, clipped `[40, 110]` — replaces the old
+ * `50 + z*13` clipped `[28, 99]`. Recentres the league average from ~50 to ~70 and extends genuine
+ * all-time-great territory from a hard 99 ceiling to 110, per Tyler's own round-125 steer. The
+ * z-score SHAPE is unchanged (still `stdDev`-scaled, still `*13`) — only the additive centre (50->70)
+ * and the clip bounds (28-99 -> 40-110) moved, which is why this is a recentre-and-extend, not a
+ * linear stretch of the old numbers (Tyler was explicit this should NOT be a straight rescale of the
+ * old 1-99 figures).
+ */
 export function ovrFromRawComposite(rawComposite: number, stats: { mean: number; stdDev: number }): number {
   const z = stats.stdDev === 0 ? 0 : (rawComposite - stats.mean) / stats.stdDev;
-  return Math.max(28, Math.min(99, Math.round(50 + z * 13)));
+  return Math.max(40, Math.min(110, Math.round(70 + z * 13)));
 }
 
-/** The exact OVR formula from Schema.md's `OVR` row: a raw composite (mean of the 20 RATED_ATTRIBUTES, each weighted x3 if it's one of the player's archetype's ARCHETYPE_PRIMARY_ATTRIBUTES, x1 otherwise), z-scored against the full population passed in, rescaled to `50 + z*13`, clipped to `[28, 99]`. */
+/** The exact OVR formula from Schema.md's `OVR` row: a raw composite (mean of the 20 RATED_ATTRIBUTES, each weighted x3 if it's one of the player's archetype's ARCHETYPE_PRIMARY_ATTRIBUTES, x1 otherwise, plus Round C147's bounded `prestigeBonus`), z-scored against the full population passed in, rescaled to `70 + z*13`, clipped to `[40, 110]` (Round C147 rescale). */
 export function recomputeOVR(players: readonly Player[]): Player[] {
   const stats = populationOvrStats(players);
   return players.map((p) => ({ ...p, OVR: ovrFromRawComposite(ovrRawComposite(p), stats) }));

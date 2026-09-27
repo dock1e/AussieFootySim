@@ -675,7 +675,17 @@ const P_FORWARD50_CONTEST_IS_GROUNDBALL = 0.3;
  * script and this round's ROADMAP.md entry for the measured actual rate,
  * disclosed as this project's every other calibrated constant already is.
  */
-const KICK_DECISION_BASE_DIFFICULTY = 45.7;
+// Round C147 — [[End-of-2026 Player Database Refresh]] Step 3 match-engine recalibration.
+// `readPlay` (and every other RATED_ATTRIBUTE this comparison ultimately touches) moved from a
+// `50 + z*13` clip `[1,99]` scale to `70 + z*13` clip `[40,110]` — a pure `+20` recentre of the
+// z-score formula's additive term, with the SAME std-scaling (`*13`) either side. Since this
+// constant is compared against a single attribute-derived `rating` (not a difference of two such
+// ratings, which would cancel the shift automatically — see contest.ts's `resolveContest`/
+// `TACKLE_ATTEMPT_HANDICAP` for the cancelling case), it needs the identical `+20` shift to keep
+// producing the same win-probability landscape against the recentred population: 45.7 -> 65.7.
+// Verified, not just derived on paper, via `scripts/verify_roundC147_balance_scratch.ts`'s real
+// before/after 153-match round-robin (see that script + this round's report for the measured rates).
+const KICK_DECISION_BASE_DIFFICULTY = 65.7;
 /** Rating points per `spaceWeight`-unit of "the kick target is more open than the handball target" (or vice-versa) — `spaceWeight`'s own range is [1, `SPACE_WEIGHT_MAX`=4], so the two candidates' openness gap realistically spans roughly ±3; at that extreme this swings the roll by ±18 rating points, a real, noticeable preference (not decorative) without being a hard override — the same "soft preference" philosophy `spaceWeight` itself is already documented with (positioning.ts). */
 const KICK_DECISION_OPENNESS_WEIGHT = 6;
 /** Rating points subtracted at full pressure (a live tagger, or a nearby defender at `PROXIMITY_CLOSE_DISTANCE`) — big enough that a tagged/closely-attended carrier meaningfully favours the safer, shorter handball (a genuinely open kick target can still override it), small enough it never becomes a deterministic "always handball under any pressure" cutoff. */
@@ -721,7 +731,10 @@ const CRUMBING_SNAP_BONUS = 0.1;
  * `scripts/verify_round38_scratch.ts`, not just derived on paper, per this
  * file's own established discipline.
  */
-const LONG_KICK_EXECUTION_DIFFICULTY = 25;
+// Round C147 recalibration — same `+20` recentre shift as `KICK_DECISION_BASE_DIFFICULTY` above
+// (bare constant compared against a single attribute-derived `rating`, not a rating difference):
+// 25 -> 45.
+const LONG_KICK_EXECUTION_DIFFICULTY = 45;
 /**
  * A failed long-kick execution roll doesn't fumble the disposal outright —
  * the kick's already been counted (line 1004/1401's `line.kicks += 1`
@@ -770,7 +783,12 @@ const LONG_KICK_MISS_DISTANCE_PENALTY = 0.15;
 // "exported specifically for testability" precedent computeDotPositions/
 // ballTargetFor (round 45) and shotChanceOnEntry (round 46) already set for
 // functions, just applied to constants here instead.
-export const SHOT_DIFFICULTY_BASE = -70;
+// Round C147 recalibration — same `+20` recentre shift as `KICK_DECISION_BASE_DIFFICULTY` above:
+// this base is compared against `runShot`'s attribute-derived execution `rating`, not another
+// rating, so it needs the identical shift to preserve the same on-target probability landscape
+// (the `SHOT_DEPTH_PENALTY_SCALE`/`SHOT_ANGLE_PENALTY_SCALE` geometry terms below are unaffected —
+// they scale real metres/angle-severity, nothing attribute-scale-dependent): -70 -> -50.
+export const SHOT_DIFFICULTY_BASE = -50;
 // Round 107 — [[Simulation Engine Report Review]] Phase C point 3: `depth`
 // (shotGeometry's own output) is now real metres, not the old ~40m/unit
 // abstract scale, so this scale term is divided through by that same 40 to
@@ -1105,7 +1123,7 @@ function freeKickState(zone: Zone, side: Side, taker: Player, gotShot: boolean):
  * for disposal comfort, rather than inventing a second, parallel one.
  */
 const P_RUN_AND_CARRY_BASE = 0.14;
-const RUN_AND_CARRY_BASELINE_RATING = 55; // a plausible league-average speed+agility composite — same "deliberately roughed in, pending the balance simulator" status as every other constant here
+const RUN_AND_CARRY_BASELINE_RATING = 75; // Round C147: +20 recentre (was 55) — a plausible league-average speed+agility composite on the new 40-110 attribute scale, same "deliberately roughed in, pending the balance simulator" status as every other constant here
 const MAX_CONSECUTIVE_RUN_TICKS = 2;
 
 /**
@@ -1228,7 +1246,9 @@ export const FITNESS_FLOOR = 20;
  * `scripts/verify_round22_scratch.ts`, not just derived on paper — same
  * discipline as `TACKLE_ATTEMPT_HANDICAP`.
  */
-const CONTEST_EXECUTION_DIFFICULTY = -22;
+// Round C147 recalibration — same `+20` recentre shift as `KICK_DECISION_BASE_DIFFICULTY` above:
+// -22 -> -2.
+const CONTEST_EXECUTION_DIFFICULTY = -2;
 
 /**
  * Aug 2026 round 55 — [[Season Stats and Records]] Spoils/Intercept Marks. Both `runContest`'s and

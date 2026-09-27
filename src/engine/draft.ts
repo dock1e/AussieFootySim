@@ -357,11 +357,18 @@ function generateAttributes(means: Record<RatedAttribute, number>, age: number, 
 }
 
 /** `potentialTall`/`potentialMid` have no real-player-derived formula anywhere (Schema.md: "Archetype size class + age" — a description, not a formula) — for prospects specifically, both are generated centred meaningfully *above* a typical adult reading, with wide spread: prospects are drafted *because* of projected upside, so a wide, high-centred potential spread is the entire point of the mechanic (this is what makes some picks read as high-ceiling gambles and others as safe, capped floors). Disclosed modelled estimate, not sourced. */
-const POTENTIAL_CENTER = 68;
-const POTENTIAL_SPREAD = 20;
+// Round C147 rescale — [[End-of-2026 Player Database Refresh]] Step 3: `potentialTall`/
+// `potentialMid` moved onto the same 40-110 scale as every other rated quantity this round
+// (necessary, not cosmetic — `progression.ts`'s `potentialHeadroom` compares these directly against
+// the now-rescaled `RATED_ATTRIBUTES`, so leaving them on the old 1-99 scale would silently break
+// every off-season headroom calculation). Old center/spread (68/20 on a 1-99 scale) mapped by the
+// same affine stretch applied to the existing 825-player population's own potentialTall/potentialMid
+// values in `scripts/refreshRoundC147.ts` (`40 + (old-1) * 70/98`) — 68 -> 88, 20 -> 14 (rounded).
+const POTENTIAL_CENTER = 88;
+const POTENTIAL_SPREAD = 14;
 
 function generatePotential(rng: () => number): number {
-  return clip(Math.round(POTENTIAL_CENTER + (rng() - 0.5) * 2 * POTENTIAL_SPREAD), 1, 99);
+  return clip(Math.round(POTENTIAL_CENTER + (rng() - 0.5) * 2 * POTENTIAL_SPREAD), 40, 110);
 }
 
 function buildProspect(id: number, archetype: Archetype, age: number, year: number, means: Record<RatedAttribute, number>, rng: () => number): Player {
@@ -440,7 +447,7 @@ function buildProspect(id: number, archetype: Archetype, age: number, year: numb
     stat_GM: 0, stat_DI: 0, stat_KI: 0, stat_HB: 0, stat_MK: 0, stat_TK: 0,
     stat_CL: 0, stat_GL: 0, stat_HO: 0, stat_CM: 0, stat_CP: 0, stat_UP: 0, stat_1pct: 0,
 
-    OVR: 28, // placeholder, overwritten below via recomputeOVR
+    OVR: 40, // placeholder (Round C147: new floor), overwritten below via recomputeOVR
     POT: 28, // placeholder, overwritten below via potentialForProspect
   };
 }
@@ -505,8 +512,17 @@ function buildRealProspect(id: number, record: RealProspectRecord, year: number,
   // prospect not on that list.
   const proseFloorBase = applyExternalConsensusFloor(record, potentialFloorFromProse(scoutingProseSignalFor(record).tier));
   const jitteredProseFloor = proseFloorBase > 0 ? proseFloorBase + Math.round(rng() * 3) : 0;
-  const potentialTall = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 1, 99);
-  const potentialMid = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 1, 99);
+  // Round C147: clip bounds moved to the new 40-110 scale (see POTENTIAL_CENTER's own doc comment
+  // above). `jitteredProseFloor`/`proseFloorBase` themselves are still computed on the OLD ~1-99
+  // scale by `potentialFloorFromProse` (realProspects.ts) — a disclosed, not-fully-migrated minor
+  // inconsistency for future PROCEDURALLY-GENERATED draft prospects only (this round's scope is the
+  // 825 REAL players_master.csv population, which never runs through this generator). Since the old
+  // floor values (roughly 50-70) still land well inside the new 40-110 range, `Math.max` here still
+  // behaves sensibly (a real named prospect's scouted floor still floors their potential above the
+  // generic random roll) — just not on the exact same rescaled units a from-scratch migration would
+  // use. Flagged rather than silently left implicit.
+  const potentialTall = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 40, 110);
+  const potentialMid = clip(Math.max(generatePotential(rng) + bonus, jitteredProseFloor), 40, 110);
 
   const { first, last } = splitRealName(record.name);
   const tall = TALL_ARCHETYPES.has(archetype);
@@ -587,7 +603,7 @@ function buildRealProspect(id: number, record: RealProspectRecord, year: number,
     stat_GM: 0, stat_DI: 0, stat_KI: 0, stat_HB: 0, stat_MK: 0, stat_TK: 0,
     stat_CL: 0, stat_GL: 0, stat_HO: 0, stat_CM: 0, stat_CP: 0, stat_UP: 0, stat_1pct: 0,
 
-    OVR: 28, // placeholder, overwritten below via recomputeOVR
+    OVR: 40, // placeholder (Round C147: new floor), overwritten below via recomputeOVR
     POT: 28, // placeholder, overwritten below via potentialForProspect
   };
 }
@@ -769,7 +785,7 @@ export function generateProspectPool(existingPlayers: readonly Player[], year: n
     const means = meansByArchetype.get(archetype)!;
     const prospect = buildProspect(nextId++, archetype, age, year, means, rng);
     const bonus = potentialBonusFromSignal(simulatedUnderageSignal(rng));
-    raw.push({ ...prospect, potentialTall: clip(prospect.potentialTall + bonus, 1, 99), potentialMid: clip(prospect.potentialMid + bonus, 1, 99) });
+    raw.push({ ...prospect, potentialTall: clip(prospect.potentialTall + bonus, 40, 110), potentialMid: clip(prospect.potentialMid + bonus, 40, 110) });
   }
 
   const allNew = [...realPlayers, ...raw];
@@ -934,9 +950,18 @@ export type ScoutingTier = "Generational Talent" | "Superstar" | "Elite" | "Grea
  * several in a standout year, rather than being capped at exactly 1 by
  * construction the way round 78 left it.
  */
-const GENERATIONAL_POT_FLOOR = 79;
-/** Unchanged since round 78 — see this section's own top doc comment. */
-const SUPERSTAR_POT_FLOOR = 75;
+// Round C147 — [[End-of-2026 Player Database Refresh]] Step 3: `+20` recentre shift, matching every
+// other bare OVR/POT-scale constant this round touches (was 79/75). Disclosed limitation: unlike the
+// match-engine constants in match.ts (which have an exact, provable `+20` shift because the
+// underlying attribute z-score formula's additive term moved by exactly that), these two were
+// originally reached by an EMPIRICAL simulated-draft-pool tuning pass (round 77/78's own doc comment
+// above — "1-2 Generational every 3 years", "2-6 Superstars/draft" against many simulated seeds).
+// The `+20` value here is the best available same-shape approximation, not a fresh re-run of that
+// simulation against the new 40-110 scale (the ceiling also EXTENDED, 99->110, not just shifted,
+// which could plausibly change how many prospects clear either bar) — a real, disclosed follow-up
+// for whenever draft-pool balance next gets attention, not silently presented as re-validated.
+const GENERATIONAL_POT_FLOOR = 99;
+const SUPERSTAR_POT_FLOOR = 95;
 const ELITE_PERCENTILE = 0.95;
 const GREAT_PERCENTILE = 0.8;
 const GOOD_PERCENTILE = 0.5;

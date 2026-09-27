@@ -97,7 +97,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDa
   const players = useMemo(() => getPlayersByClub(myClub), [myClub]);
   const lines = useMemo(() => summariseLines(players, leagueAverageOvr()), [players]);
   const clubAvgOvr = useMemo(() => averageOvr(players), [players]);
-  const eliteCount = players.filter((p) => p.OVR >= 84).length;
+  const eliteCount = players.filter((p) => p.OVR >= 104).length; // Round C147: +20 recentre, was 84
 
   const lastMatch = useMemo(() => (season && myClubId !== undefined ? lastPlayedMatchFor(season, myClubId) : null), [season, myClubId]);
   const ourTopPerformers = useMemo(

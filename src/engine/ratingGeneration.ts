@@ -103,7 +103,10 @@ export function shrinkAttributesForSmallSample(
   const out = {} as Record<RatedAttribute, number>;
   for (const a of RATED_ATTRIBUTES) {
     const prior = means?.[a] ?? p[a];
-    out[a] = Math.max(1, Math.min(99, Math.round(weight * p[a] + (1 - weight) * prior)));
+    // Round C147: clip moved to the new 40-110 attribute scale (see attributeGeneration.ts's own
+    // rescale doc comment) — the shrinkage MECHANISM (blend toward archetype mean, weighted by
+    // career games) is completely unchanged.
+    out[a] = Math.max(40, Math.min(110, Math.round(weight * p[a] + (1 - weight) * prior)));
   }
   return out;
 }
@@ -121,12 +124,21 @@ function potAgeFactor(age: number): number {
  * converging toward Schema's original attribute-only-leaning blend as career games accumulate.
  * `draftCapitalScore` returning `null` (no real draft record, or a draft type this file doesn't
  * model) falls back to the pure attribute-only upside, matching Schema's own documented 128-player
- * fallback. `ceiling` is the rescale ceiling to clip against — `99` today, `110` once round 126's
- * companion rescale round ships (see the design note).
+ * fallback. `ceiling` is the rescale ceiling to clip against — `110` as of Round C147 (was `99`
+ * pre-rescale; see the design note and `progression.ts`'s `ovrFromRawComposite`).
+ *
+ * **Round C147** — `upsideAttr`'s baseline moved from `50`/`50` to `70`/`40`: `potCeiling`
+ * (`potentialTall`/`potentialMid`) is now on the same 40-110 scale as every rated quantity this
+ * round touches (see `draft.ts`'s `POTENTIAL_CENTER` doc comment), so "how far above the population
+ * baseline is this player's ceiling" needs to measure against the NEW baseline (70, matching OVR's
+ * own recentred mean) and the NEW headroom-to-ceiling distance (110-70=40), not the old 50/50 pair —
+ * `draftCapitalScore`'s own `(capScore - 50) / 50` term is UNCHANGED, since `capScore` is a
+ * completely separate 0-100 scale (avg-career-games-by-pick normalised against the National-pick-1
+ * ceiling) that this rescale never touches.
  */
-export function blendedPotentialFor(p: Player, ovr: number, careerGames: number, ceiling = 99): number {
+export function blendedPotentialFor(p: Player, ovr: number, careerGames: number, ceiling = 110): number {
   const potCeiling = potentialCeilingFor(p);
-  const upsideAttr = Math.max(0, (potCeiling - 50) / 50) * 20;
+  const upsideAttr = Math.max(0, (potCeiling - 70) / 40) * 20;
   const capScore = draftCapitalScore(p);
   const weight = shrinkageWeight(careerGames);
   const blendedUpside = capScore == null ? upsideAttr : weight * upsideAttr + (1 - weight) * (Math.max(0, (capScore - 50) / 50) * 20);
@@ -147,7 +159,7 @@ export function applyFairnessPass(
   p: Player,
   archetypeMeans: Record<string, Record<RatedAttribute, number>>,
   populationStats: { mean: number; stdDev: number },
-  ceiling = 99,
+  ceiling = 110, // Round C147: new default rescale ceiling (was 99) — see progression.ts's ovrFromRawComposite
 ): Player {
   const careerGames = careerGamesFor(p);
   const shrunkAttrs = p.ovrOverride ? null : shrinkAttributesForSmallSample(p, careerGames, archetypeMeans);
@@ -162,7 +174,7 @@ export function applyFairnessPass(
 }
 
 /** Runs `applyFairnessPass` across a whole population, computing the archetype means and population OVR stats ONCE up front (both need the pre-shrinkage population as their reference — see each helper's own doc comment) rather than per-player. This is the real, committed replacement for the offline generation script's OVR/POT step — see the design note for why the raw-stat-to-attribute step itself is deliberately not re-derived here. */
-export function recomputeOVRWithShrinkage(players: readonly Player[], ceiling = 99): Player[] {
+export function recomputeOVRWithShrinkage(players: readonly Player[], ceiling = 110): Player[] {
   const archetypeMeans = archetypeAttributeMeans(players);
   const populationStats = populationOvrStats(players);
   return players.map((p) => applyFairnessPass(p, archetypeMeans, populationStats, ceiling));

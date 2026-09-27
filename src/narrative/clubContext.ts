@@ -325,9 +325,9 @@ export function getAllClubContexts(src: ContextSource): Map<number, ClubContext>
       lastFlagYear: lastFlagFor(club, src.seasonArchives),
       listAvg: Math.round(s.listAvg * 10) / 10,
       listRankInLeague: listRank.get(club.ClubID)!,
-      eliteCount: list.filter((p) => p.OVR >= 84).length,
+      eliteCount: list.filter((p) => p.OVR >= 104).length, // Round C147: +20 recentre, was 84
       avgAge: Math.round(s.avgAge * 10) / 10,
-      youngCoreCount: list.filter((p) => p.Age <= 23 && p.OVR >= 70).length,
+      youngCoreCount: list.filter((p) => p.Age <= 23 && p.OVR >= 90).length, // Round C147: +20 recentre, was 70
       star: ref(star),
       captain: ref(captain),
       topYoungster: ref(youngster),

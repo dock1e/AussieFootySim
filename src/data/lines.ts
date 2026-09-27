@@ -64,7 +64,7 @@ export function summariseLines(clubPlayers: Player[], leagueAvgOvr: number): Lin
       players,
       avgOvr,
       gapToLeague: avgOvr - leagueAvgOvr,
-      elite: players.filter((p) => p.OVR >= 84),
+      elite: players.filter((p) => p.OVR >= 104), // Round C147: +20 recentre, was 84
       avgAge,
       young: players.filter((p) => p.Age <= 22),
       veteran: players.filter((p) => p.Age >= 30),

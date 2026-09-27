@@ -149,8 +149,22 @@ export class AttributeZScorer {
     return (row[key] - s.mean) / s.stdDev;
   }
 
+  /**
+   * Round C147 rescale — [[End-of-2026 Player Database Refresh]] Step 3: `70 + z*13`, clipped
+   * `[40, 110]`, replacing the old `50 + z*13` clipped `[1, 99]` — the same recentre-and-extend
+   * `progression.ts`'s `ovrFromRawComposite` now uses for `OVR`, applied here to all 20
+   * `RATED_ATTRIBUTES` too per Tyler's own round-125 "rescale everything" decision. `clangerTend`
+   * (`clangerTendFor` below) deliberately stays on the OLD `[1, 99]` scale — it's tagged REAL in
+   * Schema.md, not one of the 20 `RATED_ATTRIBUTES` this round's rescale scope covers, and nothing
+   * in the match engine reads it on the new attribute scale.
+   */
   private rescale(zCombined: number, bonus = 0): number {
-    return Math.max(1, Math.min(99, Math.round(50 + (zCombined + bonus) * 13)));
+    return Math.max(40, Math.min(110, Math.round(70 + (zCombined + bonus) * 13)));
+  }
+
+  /** `clangerTendFor` reuses the OLD `[1, 99]` scale deliberately — see this file's `rescale` doc comment. */
+  private rescaleOldScale(zCombined: number): number {
+    return Math.max(1, Math.min(99, Math.round(50 + zCombined * 13)));
   }
 
   /** The 20 `RATED_ATTRIBUTES` for one real player, per Schema.md's documented input table (see this file's own header comment for the disclosed simplifications). `realFullName` must have a row in the `Real2026SeasonStats` population this scorer was built from. */
@@ -197,6 +211,6 @@ export class AttributeZScorer {
 
   /** `clangerTend` — Schema.md tags this REAL ("directly derived from real clangers/game"), not one of the 20 `RATED_ATTRIBUTES`, but regenerated alongside them for the same 594 players since it shares the same real-stat input that's being refreshed. */
   clangerTendFor(realFullName: string): number {
-    return this.rescale(this.z(realFullName, "clangersPg"));
+    return this.rescaleOldScale(this.z(realFullName, "clangersPg"));
   }
 }

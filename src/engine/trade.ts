@@ -218,7 +218,7 @@ function positionalNeedBonus(receivingClubName: string, incomingPlayers: readonl
 
 /** Engine.md, confirmed on the giving side's own proposer-view card: a franchise-asset intangible cost, independent of raw value. */
 const CORE_LOSS_AGE_CEILING = 25;
-const CORE_LOSS_OVR_FLOOR = 80;
+const CORE_LOSS_OVR_FLOOR = 100; // Round C147: +20 recentre, was 80
 const CORE_LOSS_PENALTY_PCT = 0.25;
 
 function coreLossPenalty(playersGivenUp: readonly Player[]): TradeFactor[] {

@@ -75,11 +75,43 @@ function hasAnyRecognisedHonour(realFullName: string | undefined): boolean {
  * pre-shrinkage attributes (the state `applyFairnessPass` has `p` in before it calls
  * `shrinkAttributesForSmallSample`) — this function does not shrink or mutate anything itself, it
  * only reads `p` to decide whether the caller should apply the games bonus.
+ *
+ * **Round C151 — `archetypeStats` (optional), closely-related widening of part 3's population
+ * reference.** Investigating Nick Watson (one of Tyler's two named Round C151 cases) found he
+ * FAILED this test's league-wide z-check by a hair (`z = -0.010` against the `0.1` bar) purely
+ * because Small Forward is a real, confirmed-undersold archetype in the LEAGUE-WIDE composite
+ * (Round C149's own root-caused archetype-weighting bias, only partially closed) — his composite
+ * against his OWN archetype's population instead reads `z = 2.71`, a genuinely elite score for a
+ * Small Forward specifically. Comparing a Small Forward's "real, checkable current form" only
+ * against the whole league (dominated by Inside-Mid-shaped composites) re-imports the exact bias
+ * Round C149 spent a whole round fixing at the attribute layer — checking ALSO against the
+ * player's own archetype population (an `OR`, not instead of the league check) is the natural,
+ * objective extension: a player only needs to clear the bar against EITHER the whole league OR
+ * their own archetype's peers, not both. `archetypeStats` is optional and defaults to the
+ * pre-Round-C151 league-only behaviour when omitted (every existing call site/test).
+ *
+ * **Round C151 — `rawCompositeOverride` (optional).** `historicalOvrReconstruction.ts` needs to run
+ * this exact test against a PAST reconstructed season's raw composite, not `p`'s current one (`p`
+ * itself only ever carries today's attributes) — passing it here avoids that file re-implementing
+ * (and risking drifting from) this function's honour/age/z-score logic a second time. Every existing
+ * caller omits it and gets today's unchanged `ovrRawComposite(p)` behaviour.
  */
-export function qualifiesForProvenTrajectory(p: Player, populationStats: { mean: number; stdDev: number }): boolean {
+export function qualifiesForProvenTrajectory(
+  p: Player,
+  populationStats: { mean: number; stdDev: number },
+  archetypeStats?: { mean: number; stdDev: number },
+  rawCompositeOverride?: number,
+): boolean {
   if (p.Age > MAX_QUALIFYING_AGE) return false;
   if (!hasAnyRecognisedHonour(p.realFullName)) return false;
-  if (populationStats.stdDev === 0) return false;
-  const z = (ovrRawComposite(p) - populationStats.mean) / populationStats.stdDev;
-  return z >= MIN_QUALIFYING_Z;
+  const raw = rawCompositeOverride ?? ovrRawComposite(p);
+  if (populationStats.stdDev > 0) {
+    const leagueZ = (raw - populationStats.mean) / populationStats.stdDev;
+    if (leagueZ >= MIN_QUALIFYING_Z) return true;
+  }
+  if (archetypeStats && archetypeStats.stdDev > 0) {
+    const archetypeZ = (raw - archetypeStats.mean) / archetypeStats.stdDev;
+    if (archetypeZ >= MIN_QUALIFYING_Z) return true;
+  }
+  return false;
 }

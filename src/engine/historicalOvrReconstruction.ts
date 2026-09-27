@@ -7,6 +7,8 @@ import { recencyWeightedSeasonStats } from "./recencyForm.ts";
 import { type RatedAttribute } from "../types/player.ts";
 import { honoursScoreFor } from "./prestige.ts";
 import { OVR_Z_MULTIPLIER, rawAttributeCompositeFor } from "./progression.ts";
+import { blendedPotentialFor } from "./ratingGeneration.ts";
+import { qualifiesForProvenTrajectory, PROVEN_TRAJECTORY_GAMES_BONUS } from "./provenTrajectory.ts";
 
 /**
  * Round C148 — [[End-of-2026 Player Database Refresh]] deliverable 1: reconstruct what a real
@@ -61,16 +63,44 @@ export interface ReconstructedYear {
   games: number;
   rawComposite: number;
   ovr: number;
+  /** Round C151 — see `reconstructHistoricalOvr`'s own doc comment for the (disclosed, approximate) method. */
+  pot: number;
 }
 
 /**
  * Reconstructs a player's OVR-shaped read for every real season on file in `realCareerHistory.ts`
  * (ascending), using the player's CURRENT `archetype`/`realFullName` and the fixed `baseline`
  * (see this file's doc comment). `[]` if the player has no real career history on file at all.
+ *
+ * **Round C151 — `pot` added, deliverable 1 of that round's brief ("extend it if it doesn't already
+ * expose per-year POT, not just OVR").** Reuses `ratingGeneration.ts`'s real, live `blendedPotentialFor`
+ * directly (not a re-derived copy) against each reconstructed year's `ovr`, so a future change to that
+ * formula automatically flows through here too. Three inputs it needs that this file cannot exactly
+ * reconstruct per-year are approximated, disclosed rather than silently assumed, in keeping with this
+ * file's existing "SHAPE not exact-match" mandate:
+ *
+ * 1. **Real career games as of that year** — summed from `careerHistoryFor`'s own per-season `games`
+ *    field for every row up to and including `year` (a real, checkable cumulative count, just not the
+ *    same-source `realDraftHistory.ts` scrape `careerGamesFor` uses for the CURRENT read).
+ * 2. **Age as of that year** — `p`'s CURRENT `Age` minus `(HONOUR_DECAY_CURRENT_YEAR - year)`. `p` must
+ *    now also carry `Age`/`potentialTall`/`potentialMid`/`draft_pick`/`draft_draftType` (every field
+ *    `blendedPotentialFor`/`qualifiesForProvenTrajectory` actually read) — widened from the previous
+ *    narrower `Pick<Player, ...>` this file's OVR-only reconstruction needed.
+ * 3. **`qualifiesForProvenTrajectory` as of that year** — checked using `year`'s OWN reconstructed
+ *    `rawComposite` (via that function's new `rawCompositeOverride` param) against the SAME fixed
+ *    `baseline`/archetype-stats every other year uses. The honour check itself is NOT year-gated here,
+ *    unlike `honoursScoreFor` above — a simplification matching this file's existing "fixed current
+ *    archetype/reference population for every past year" convention, not a new one invented for POT
+ *    alone.
  */
-export function reconstructHistoricalOvr(p: Pick<Player, "realFullName" | "fname" | "lname" | "archetype">, baseline: ReconstructionBaseline): ReconstructedYear[] {
+export function reconstructHistoricalOvr(
+  p: Pick<Player, "realFullName" | "fname" | "lname" | "archetype" | "Age" | "potentialTall" | "potentialMid" | "draft_pick" | "draft_draftType">,
+  baseline: ReconstructionBaseline,
+  archetypeBaseline?: ReconstructionBaseline,
+): ReconstructedYear[] {
   const name = p.realFullName ?? `${p.fname} ${p.lname}`;
-  const years = careerHistoryFor(name).map((r) => r.year);
+  const rows = careerHistoryFor(name);
+  const years = rows.map((r) => r.year);
   if (years.length === 0) return [];
   const archetype = p.archetype as Archetype;
   const out: ReconstructedYear[] = [];
@@ -88,7 +118,17 @@ export function reconstructHistoricalOvr(p: Pick<Player, "realFullName" | "fname
     const rawComposite = rawCompositeFromAttributes(attrs, archetype, Math.max(-8, Math.min(8, prestige * 0.55)));
     const z = baseline.stdDev === 0 ? 0 : (rawComposite - baseline.mean) / baseline.stdDev;
     const ovr = Math.max(40, Math.min(110, Math.round(70 + z * OVR_Z_MULTIPLIER)));
-    out.push({ year, games: blended.games, rawComposite, ovr });
+
+    const careerGamesAsOfYear = rows.filter((r) => r.year <= year).reduce((s, r) => s + r.games, 0);
+    const ageAsOfYear = p.Age - (2026 - year);
+    const pseudoPlayer = { ...p, Age: ageAsOfYear } as Player;
+    // rawComposite override: this year's OWN reconstructed composite, not p's current one (see
+    // qualifiesForProvenTrajectory's own Round C151 doc comment for why this override exists).
+    const proven = qualifiesForProvenTrajectory(pseudoPlayer, baseline, archetypeBaseline, rawComposite);
+    const careerGames = careerGamesAsOfYear + (proven ? PROVEN_TRAJECTORY_GAMES_BONUS : 0);
+    const pot = blendedPotentialFor(pseudoPlayer, ovr, careerGames, 110, proven);
+
+    out.push({ year, games: blended.games, rawComposite, ovr, pot });
   }
   return out;
 }

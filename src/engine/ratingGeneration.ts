@@ -2,7 +2,7 @@ import type { Player } from "../types/player.ts";
 import { RATED_ATTRIBUTES, type RatedAttribute } from "../types/player.ts";
 import { potentialCeilingFor, ovrRawComposite, populationOvrStats, ovrFromRawComposite, isActiveRealStatus } from "./progression.ts";
 import { draftCapitalScore, realCareerGamesFor } from "./draftCapital.ts";
-import { qualifiesForProvenTrajectory, PROVEN_TRAJECTORY_GAMES_BONUS } from "./provenTrajectory.ts";
+import { qualifiesForProvenTrajectory, PROVEN_TRAJECTORY_GAMES_BONUS, MAX_QUALIFYING_AGE } from "./provenTrajectory.ts";
 
 /**
  * Round 125/126 fairness fix — [[End-of-2026 Player Database Refresh]]. Tyler's own ask: a young,
@@ -119,6 +119,80 @@ export function shrinkAttributesForSmallSample(
   return out;
 }
 
+/**
+ * Round C151 — per-archetype `{mean, stdDev}` of `ovrRawComposite` across a population, the SAME
+ * active/fallback filtering `archetypeAttributeMeans` above already uses (kept as a separate function
+ * rather than merged into it: that one averages the 20 raw attributes themselves, this one z-scores
+ * the already-weighted composite — different units, same population-selection logic). Feeds
+ * `qualifiesForProvenTrajectory`'s new archetype-relative fallback check (see that function's own doc
+ * comment) — computed once per population, same "never hardcoded" discipline as every other
+ * population-reference stat in this file.
+ */
+export function archetypeOvrRawStats(players: readonly Player[]): Record<string, { mean: number; stdDev: number }> {
+  const activeArchetypes = new Set(players.filter(isActiveRealStatus).map((p) => p.archetype));
+  const pool = players.filter((p) => isActiveRealStatus(p) || !activeArchetypes.has(p.archetype));
+  const byArc = new Map<string, number[]>();
+  for (const p of pool) {
+    const arc = p.archetype;
+    if (!byArc.has(arc)) byArc.set(arc, []);
+    byArc.get(arc)!.push(ovrRawComposite(p));
+  }
+  const out: Record<string, { mean: number; stdDev: number }> = {};
+  for (const [arc, composites] of byArc) {
+    const mean = composites.reduce((a, b) => a + b, 0) / composites.length;
+    const variance = composites.reduce((a, c) => a + (c - mean) ** 2, 0) / composites.length;
+    out[arc] = { mean, stdDev: Math.sqrt(variance) };
+  }
+  return out;
+}
+
+/**
+ * Round C151 — [[End-of-2026 Player Database Refresh]]. Root cause, confirmed before any fix (see
+ * `scripts/diagnose_roundC151_scratch.ts`'s own dumped numbers): Round C149's own report already
+ * named this exact problem — `blendedPotentialFor`'s upside term was capped at roughly `20 *
+ * ageFactor` raw points above `OVR`, mathematically incapable of reaching the 22-33 point OVR-to-POT
+ * gaps a genuine high-draft-capital proven young star (Tyler's own year-by-year Nick Watson/Sam Darcy
+ * targets) deserves. `BASE_UPSIDE_CAP` (20) is exactly today's pre-Round-C151 constant, unchanged for
+ * every non-qualifying player — this is a widening SCOPED to `qualifiesForProvenTrajectory` qualifiers
+ * only, never a global cap increase (Tyler's own explicit steer, since Round C149/C150 both worked to
+ * keep the >100/>105 OVR population from re-crowding, and POT — unlike OVR — has no population
+ * z-score renormalisation to keep a global widening in check).
+ *
+ * **The shape, fitted not guessed** (`scripts/fit_roundC151_scratch.ts`, least-squares against Tyler's
+ * own 7 real year-by-year Watson/Darcy target gaps): a cap of the form
+ * `PROVEN_TRAJECTORY_BASE_UPSIDE_CAP + PROVEN_TRAJECTORY_YOUTH_BONUS_PER_YEAR * years-younger-than-23`
+ * — continuous, not a flat cap, because Tyler's own targets show the gap WIDEST early in a proven
+ * young star's real career (30-33 points at 19-20) and narrowing as they approach the same age
+ * ceiling `provenTrajectory.ts` already uses to define "still young enough to qualify at all." A
+ * player who ages OUT of qualifying (>23) simply reverts to the unwidened `BASE_UPSIDE_CAP` path
+ * entirely (see `applyFairnessPass`), so this per-year bonus never needs its own separate upper age
+ * bound.
+ *
+ * **The magnitude, honestly disclosed as a two-step derivation, not a single clean fit**: the pure
+ * least-squares minimum against the 7 historical target gaps alone is `BASE=37, YOUTH=10` (SSE ~67,
+ * `fit_roundC151_scratch.ts`'s own reported best fit) — but checking THAT choice against the real,
+ * immediate ask (deliverable 5: "Watson and Darcy crack the Top 50 by OVR and/or POT in the CURRENT
+ * 2026 database") found it insufficient: Sam Darcy's real 2026 season is genuinely injury-suppressed
+ * (`OVR` 76, not this round's to fix), so at his real current Age (23, no youth-bonus years left) his
+ * POT gap under `BASE=37` reads only ~9 — short of the live Top-50-by-POT cutoff (~89-91). Raising to
+ * `BASE=60` (kept `YOUTH=10`) clears that practical bar for BOTH named players (verified,
+ * `scripts/diagnose_roundC151_top50_scratch.ts`) at the honestly-disclosed cost of now OVERSHOOTING
+ * Nick Watson's own historical-reconstruction target gaps by ~10-12 points at his younger
+ * reconstructed years (see [[Round C147 Top 50 Grading]]'s Round C151 section for the full
+ * before/after table) — still directionally correct (widest early, narrowing with age, as Tyler's own
+ * targets show), just not numerically tight for Watson specifically. Tyler's own explicit priority
+ * (a real, practical Top-50 fix over an exact historical-shape match, which the brief itself only ever
+ * asked to be "directionally correct, not exact-match-required") is why this round ships `BASE=60`
+ * rather than the purer `BASE=37` fit.
+ */
+export const BASE_UPSIDE_CAP = 20;
+export const PROVEN_TRAJECTORY_BASE_UPSIDE_CAP = 60;
+export const PROVEN_TRAJECTORY_YOUTH_BONUS_PER_YEAR = 10;
+
+function provenUpsideCapFor(age: number): number {
+  return PROVEN_TRAJECTORY_BASE_UPSIDE_CAP + PROVEN_TRAJECTORY_YOUTH_BONUS_PER_YEAR * Math.max(0, MAX_QUALIFYING_AGE - age);
+}
+
 /** `age_factor` for POT's upside term — Schema.md's exact `clip((30 - Age) / 12, 0.1, 1)`, reproduced here rather than re-imported since `progression.ts`'s own `ageFactor` is a different, unrelated curve (the off-season decline multiplier) that happens to share a name with this one in Schema's prose. */
 function potAgeFactor(age: number): number {
   return Math.max(0.1, Math.min(1, (30 - age) / 12));
@@ -143,13 +217,45 @@ function potAgeFactor(age: number): number {
  * `draftCapitalScore`'s own `(capScore - 50) / 50` term is UNCHANGED, since `capScore` is a
  * completely separate 0-100 scale (avg-career-games-by-pick normalised against the National-pick-1
  * ceiling) that this rescale never touches.
+ *
+ * **Round C151** — `proven` (default `false`, today's unmodified behaviour for every non-qualifier):
+ * when `true` (the caller has already confirmed `qualifiesForProvenTrajectory`), two changes, both
+ * scoped to this one player's calculation only:
+ *
+ * 1. The `20`-point scalar both upside terms multiply against becomes `provenUpsideCapFor(p.Age)`
+ *    (see that function's own doc comment) instead of the flat `BASE_UPSIDE_CAP` — the actual
+ *    ceiling-widening fix Round C149's own report flagged as missing ("mathematically incapable" of
+ *    reaching a genuine young star's wide OVR-to-POT gap).
+ * 2. The two upside signals are blended at a fixed 50/50 ratio, not `shrinkageWeight`. Confirmed by
+ *    `scripts/fit_roundC151_scratch.ts`: shrinkage-weighting still systematically misses Tyler's
+ *    targets for BOTH named players in OPPOSITE directions, because `PROVEN_TRAJECTORY_GAMES_BONUS`
+ *    (`applyFairnessPass`) pushes `shrinkageWeight` high for a qualifier — the right call for a
+ *    player whose attribute-derived ceiling IS the strong signal (Nick Watson, `potentialMid` 98),
+ *    but the wrong call for a player whose `Tall`-frame `potentialTall` reads structurally modest
+ *    relative to their real elite draft pedigree (Sam Darcy, `potentialTall` 82 vs. a national-pick-2
+ *    `draftCapitalScore` in the high 70s) — shrinkage-weighting always overshoots the first case and
+ *    undershoots the second under one shared cap. A player who has already cleared BOTH the honour
+ *    bar and the current-form bar (that is what "qualifies" means) has, by construction, already
+ *    earned equal trust in both signals regardless of career-games sample size — least-squares
+ *    confirmed a fixed 50/50 blend fits Tyler's 7 real year-by-year targets meaningfully better
+ *    (SSE ~67) than either shrinkage-weighting (~374) or a `max()` of the two signals (~180, which
+ *    reads as double-counting whichever signal already happens to be ahead, not trusting both).
  */
-export function blendedPotentialFor(p: Player, ovr: number, careerGames: number, ceiling = 110): number {
+export function blendedPotentialFor(p: Player, ovr: number, careerGames: number, ceiling = 110, proven = false): number {
   const potCeiling = potentialCeilingFor(p);
-  const upsideAttr = Math.max(0, (potCeiling - 70) / 40) * 20;
+  const cap = proven ? provenUpsideCapFor(p.Age) : BASE_UPSIDE_CAP;
+  const upsideAttr = Math.max(0, (potCeiling - 70) / 40) * cap;
   const capScore = draftCapitalScore(p);
-  const weight = shrinkageWeight(careerGames);
-  const blendedUpside = capScore == null ? upsideAttr : weight * upsideAttr + (1 - weight) * (Math.max(0, (capScore - 50) / 50) * 20);
+  const upsideDraft = capScore == null ? null : Math.max(0, (capScore - 50) / 50) * cap;
+  let blendedUpside: number;
+  if (upsideDraft == null) {
+    blendedUpside = upsideAttr;
+  } else if (proven) {
+    blendedUpside = 0.5 * upsideAttr + 0.5 * upsideDraft;
+  } else {
+    const weight = shrinkageWeight(careerGames);
+    blendedUpside = weight * upsideAttr + (1 - weight) * upsideDraft;
+  }
   const af = potAgeFactor(p.Age);
   return Math.max(ovr, Math.min(ceiling, Math.round(ovr + blendedUpside * af)));
 }
@@ -162,16 +268,34 @@ export function blendedPotentialFor(p: Player, ovr: number, careerGames: number,
  * `POT` off that fairer `OVR`. Respects `ovrOverride`/`potOverride` (round 126's gap #37 fix,
  * `types/player.ts`) — an overridden player's `OVR` and/or `POT` pass through completely
  * untouched, exactly as `runOffSeason`'s own doc comment always said a real implementation should.
+ *
+ * **Round C151** — `archetypeOvrStats` (optional): the per-archetype reference `provenTrajectory.ts`'s
+ * widened qualification check can use (see that function's own doc comment); omitted defaults to the
+ * pre-Round-C151 league-only check. `POT_FLOOR_MAX_DROP_PER_ROUND` (below): once a fresh `POT` is
+ * computed, this round's real career-ceiling "shouldn't retreat because of one injury-shortened
+ * season" fix floors how far it's allowed to fall BELOW `p`'s own already-stored `POT` (last round's
+ * committed value, the one piece of real season-to-season memory already available here without any
+ * new persisted field) in a single round. A genuine multi-round decline still gets there — this
+ * floor re-applies every round, so it can still fall by up to this amount EVERY round a real decline
+ * persists — it only stops a one-season crash. Applies to every player uniformly (not gated on
+ * `proven`): a real ceiling shouldn't crash from a single bad/interrupted season regardless of
+ * archetype or draft pedigree, and `Math.max(freshPOT, ...)` is a no-op whenever `freshPOT` doesn't
+ * fall by more than the floor anyway (the overwhelming majority of players, most rounds).
  */
+const POT_FLOOR_MAX_DROP_PER_ROUND = 3;
+
 export function applyFairnessPass(
   p: Player,
   archetypeMeans: Record<string, Record<RatedAttribute, number>>,
   populationStats: { mean: number; stdDev: number },
   ceiling = 110, // Round C147: new default rescale ceiling (was 99) — see progression.ts's ovrFromRawComposite
+  archetypeOvrStats?: Record<string, { mean: number; stdDev: number }>,
 ): Player {
   // Round C148 — provenTrajectory.ts's objective rule, checked against p's FRESH (pre-shrinkage)
-  // real-stat-derived attributes, exactly as that file's own doc comment requires.
-  const proven = qualifiesForProvenTrajectory(p, populationStats);
+  // real-stat-derived attributes, exactly as that file's own doc comment requires. Round C151: also
+  // passes this archetype's own {mean,stdDev} (may be undefined, e.g. a caller that hasn't been
+  // updated) for the new archetype-relative fallback.
+  const proven = qualifiesForProvenTrajectory(p, populationStats, archetypeOvrStats?.[p.archetype]);
   const careerGames = careerGamesFor(p) + (proven ? PROVEN_TRAJECTORY_GAMES_BONUS : 0);
   const shrunkAttrs = p.ovrOverride ? null : shrinkAttributesForSmallSample(p, careerGames, archetypeMeans);
   const next: Player = shrunkAttrs ? { ...p, ...shrunkAttrs } : { ...p };
@@ -179,14 +303,17 @@ export function applyFairnessPass(
     next.OVR = ovrFromRawComposite(ovrRawComposite(next), populationStats);
   }
   if (!p.potOverride) {
-    next.POT = blendedPotentialFor(next, next.OVR, careerGames, ceiling);
+    const freshPot = blendedPotentialFor(next, next.OVR, careerGames, ceiling, proven);
+    const floored = Math.max(freshPot, p.POT - POT_FLOOR_MAX_DROP_PER_ROUND);
+    next.POT = Math.max(next.OVR, Math.min(ceiling, floored));
   }
   return next;
 }
 
-/** Runs `applyFairnessPass` across a whole population, computing the archetype means and population OVR stats ONCE up front (both need the pre-shrinkage population as their reference — see each helper's own doc comment) rather than per-player. This is the real, committed replacement for the offline generation script's OVR/POT step — see the design note for why the raw-stat-to-attribute step itself is deliberately not re-derived here. */
+/** Runs `applyFairnessPass` across a whole population, computing the archetype means, population OVR stats, and (Round C151) per-archetype OVR stats ONCE up front (all three need the pre-shrinkage population as their reference — see each helper's own doc comment) rather than per-player. This is the real, committed replacement for the offline generation script's OVR/POT step — see the design note for why the raw-stat-to-attribute step itself is deliberately not re-derived here. */
 export function recomputeOVRWithShrinkage(players: readonly Player[], ceiling = 110): Player[] {
   const archetypeMeans = archetypeAttributeMeans(players);
   const populationStats = populationOvrStats(players);
-  return players.map((p) => applyFairnessPass(p, archetypeMeans, populationStats, ceiling));
+  const archetypeStats = archetypeOvrRawStats(players);
+  return players.map((p) => applyFairnessPass(p, archetypeMeans, populationStats, ceiling, archetypeStats));
 }

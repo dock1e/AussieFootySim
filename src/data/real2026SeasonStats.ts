@@ -415,7 +415,16 @@ const RAW_ROWS: RawRow[] = [
   ["Cam Mackenzie", 21, 219, 49, 207, 426, 4, 8, 0, 92, 24, 69, 77, 57, 20, 14, 0, 149, 272, 2, 2, 13, 4, 12],
   ["Finn Maginness", 6, 28, 11, 54, 82, 2, 1, 0, 12, 8, 4, 3, 13, 3, 5, 0, 33, 50, 1, 2, 3, 0, 1],
   ["Will Day", 11, 123, 38, 108, 231, 9, 4, 0, 45, 19, 44, 52, 42, 12, 18, 0, 92, 131, 5, 6, 13, 4, 4],
-  ["Sam Butler", 8, 66, 27, 31, 97, 4, 4, 0, 28, 4, 18, 7, 15, 3, 3, 0, 26, 69, 1, 2, 3, 0, 4],
+  // Round C157 data-integrity fix: this row previously carried a stale/wrong stat line for
+  // Hawthorn's real Sam Butler (8 games, 97 disposals, 28 tackles — none of it matched a live
+  // footywire.com pull for him). Replaced with his confirmed real 2025 season totals per
+  // footywire.com (2 games, 33 disposals, 11 tackles, 5 clearances, 4 marks, 2 goal assists, 1
+  // behind, 2 free kicks for, 1 against, 6 clangers, 6 inside-50s, 2 rebound-50s, 0 hitouts/goals).
+  // contestedPoss/uncontestedPoss (14/19), contestedMarks/marksInside50/onePercenters/bounces (0
+  // each), and brownlowVotes (0) were NOT given by the source and are a disclosed ESTIMATE (the
+  // contested/uncontested split sums to his real 33 disposals; the rest are conservative zero-fills,
+  // not sourced) — see Schema.md's Round C157 section.
+  ["Sam Butler", 2, 16, 4, 17, 33, 0, 1, 0, 11, 2, 6, 5, 6, 2, 1, 0, 14, 19, 0, 0, 0, 0, 2],
   ["Calsher Dear", 5, 27, 18, 18, 45, 4, 5, 0, 13, 1, 8, 0, 7, 6, 2, 0, 22, 25, 1, 9, 8, 1, 2],
   ["Mitch Lewis", 22, 182, 122, 91, 273, 34, 23, 2, 33, 2, 60, 8, 53, 23, 16, 0, 106, 168, 28, 41, 35, 2, 13],
   ["Henry Hustwaite", 1, 7, 1, 12, 19, 0, 0, 0, 3, 1, 1, 6, 3, 0, 0, 0, 9, 10, 0, 0, 0, 0, 0],

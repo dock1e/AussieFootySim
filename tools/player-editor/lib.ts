@@ -109,6 +109,49 @@ export function summarize(p: Player & { attributeOverride?: boolean }): PlayerSu
   };
 }
 
+export interface GridRow {
+  id: number;
+  name: string;
+  club: string;
+  archetype: string;
+  age: number;
+  OVR: number;
+  POT: number;
+  realStatus: string;
+  active: boolean;
+  attributeOverride: boolean;
+  attributes: Record<RatedAttribute, number>;
+}
+
+/** Round C156 — Player Grid view. Returns ALL players (no pagination; 825 rows is small enough to
+ * ship to the client in one shot per the round brief) with everything the client-side sortable/
+ * filterable/heatmapped grid needs: identity fields, OVR/POT, real status (`realStatus` is
+ * undefined for an ordinary active player, so it's normalized to the string `"Active"` here for
+ * display), `isActiveRealStatus` (Retired/Delisted excluded, Injured still counts as active —
+ * same semantics every other Top-N table in this series already uses), and all 20
+ * `RATED_ATTRIBUTES` raw values. Sorting/filtering/ranking is deliberately done CLIENT-SIDE in
+ * `app.js` once this loads, not per-request here, so the grid feels like a spreadsheet rather than
+ * round-tripping the server on every click. */
+export function gridRows(pop: Population): GridRow[] {
+  return pop.players.map((p) => {
+    const attributes = {} as Record<RatedAttribute, number>;
+    for (const a of RATED_ATTRIBUTES) attributes[a] = p[a];
+    return {
+      id: p.PlayerID,
+      name: `${p.fname} ${p.lname}`,
+      club: p.Team,
+      archetype: p.archetype as string,
+      age: p.Age,
+      OVR: p.OVR,
+      POT: p.POT,
+      realStatus: p.realStatus || "Active",
+      active: isActiveRealStatus(p),
+      attributeOverride: !!(p as Player & { attributeOverride?: boolean }).attributeOverride,
+      attributes,
+    };
+  });
+}
+
 export function searchPlayers(pop: Population, query: string): PlayerSummary[] {
   const q = query.trim().toLowerCase();
   const matches = !q

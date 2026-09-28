@@ -20,7 +20,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname } from "node:path";
 import { RATED_ATTRIBUTES, type RatedAttribute } from "../../src/types/player.ts";
-import { loadPopulation, searchPlayers, findPlayer, playerDetail, previewChange, saveChange, type Population } from "./lib.ts";
+import { loadPopulation, searchPlayers, findPlayer, playerDetail, previewChange, saveChange, gridRows, type Population } from "./lib.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 5155);
@@ -74,6 +74,12 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/players") {
       const q = url.searchParams.get("q") ?? "";
       return sendJson(res, 200, searchPlayers(pop, q));
+    }
+
+    // Round C156 — Player Grid view: ships ALL players (825 rows, no pagination) in one shot so
+    // the client can sort/filter/rank/heatmap entirely in JS without a server round-trip per click.
+    if (req.method === "GET" && url.pathname === "/api/players/all") {
+      return sendJson(res, 200, gridRows(pop));
     }
 
     const detailMatch = url.pathname.match(/^\/api\/players\/(\d+)$/);

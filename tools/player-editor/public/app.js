@@ -175,3 +175,249 @@ searchEl.addEventListener("input", () => {
 });
 
 doSearch("");
+
+// ---------------------------------------------------------------------------------------------
+// Round C156 — Grid view: an Excel-style spreadsheet of ALL players, sortable/filterable/ranked/
+// heatmapped entirely client-side once loaded (one /api/players/all fetch, no server round-trip
+// per sort/filter click — see this round's Schema.md note for why).
+// ---------------------------------------------------------------------------------------------
+
+const ALL_ATTRS = ATTRIBUTE_GROUPS.flatMap((g) => g.attrs); // reuses the same 20-attribute list/order as the single-player editor
+
+const BASE_COLS = [
+  { key: "name", label: "Name", kind: "text" },
+  { key: "club", label: "Club", kind: "text" },
+  { key: "archetype", label: "Archetype", kind: "text" },
+  { key: "age", label: "Age", kind: "num" },
+  { key: "OVR", label: "OVR", kind: "num" },
+  { key: "POT", label: "POT", kind: "num" },
+  { key: "realStatus", label: "Status", kind: "text" },
+];
+const ATTR_COLS = ALL_ATTRS.map((a) => ({ key: a, label: a, kind: "num", attr: true }));
+const ALL_COLS = [...BASE_COLS, ...ATTR_COLS];
+
+let gridData = null; // full unfiltered array from /api/players/all, loaded once
+let gridLoaded = false;
+let gridSort = { key: "OVR", dir: "desc" };
+let gridFilters = { text: "", archetypes: new Set(), activeOnly: true };
+let hiddenCols = new Set(); // column keys hidden via the column picker
+
+function colValue(row, col) {
+  return col.attr ? row.attributes[col.key] : row[col.key];
+}
+
+function ensureGridLoaded() {
+  if (gridLoaded) return Promise.resolve();
+  return api("/api/players/all").then((data) => {
+    gridData = data;
+    gridLoaded = true;
+    buildArchetypeMenu();
+    buildColumnPickerMenu();
+    renderGrid();
+  });
+}
+
+function buildArchetypeMenu() {
+  const archetypes = [...new Set(gridData.map((r) => r.archetype))].sort();
+  const menu = document.getElementById("archetypePickerMenu");
+  menu.innerHTML = `
+    <div class="picker-actions">
+      <button type="button" id="archAll">All</button>
+      <button type="button" id="archNone">None</button>
+    </div>
+    ${archetypes
+      .map(
+        (a) =>
+          `<label><input type="checkbox" class="arch-cb" value="${a}" checked /> ${a}</label>`
+      )
+      .join("")}
+  `;
+  menu.querySelectorAll(".arch-cb").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      updateArchetypeFilterFromMenu();
+      renderGrid();
+    });
+  });
+  document.getElementById("archAll").addEventListener("click", () => {
+    menu.querySelectorAll(".arch-cb").forEach((cb) => (cb.checked = true));
+    updateArchetypeFilterFromMenu();
+    renderGrid();
+  });
+  document.getElementById("archNone").addEventListener("click", () => {
+    menu.querySelectorAll(".arch-cb").forEach((cb) => (cb.checked = false));
+    updateArchetypeFilterFromMenu();
+    renderGrid();
+  });
+  updateArchetypeFilterFromMenu();
+}
+
+function updateArchetypeFilterFromMenu() {
+  const menu = document.getElementById("archetypePickerMenu");
+  const checked = [...menu.querySelectorAll(".arch-cb:checked")].map((cb) => cb.value);
+  const total = menu.querySelectorAll(".arch-cb").length;
+  // Empty selection or "all checked" both mean "no archetype filter applied" (league-wide).
+  gridFilters.archetypes = checked.length === total ? new Set() : new Set(checked);
+  const btn = document.getElementById("archetypePickerBtn");
+  btn.textContent = gridFilters.archetypes.size === 0 ? "Archetypes ▾" : `Archetypes (${gridFilters.archetypes.size}) ▾`;
+}
+
+function buildColumnPickerMenu() {
+  const menu = document.getElementById("columnPickerMenu");
+  menu.innerHTML = `
+    <div class="picker-actions">
+      <button type="button" id="colAll">Show all</button>
+    </div>
+    ${ALL_COLS.map(
+      (c) =>
+        `<label><input type="checkbox" class="col-cb" value="${c.key}" ${hiddenCols.has(c.key) ? "" : "checked"} /> ${c.label}</label>`
+    ).join("")}
+  `;
+  menu.querySelectorAll(".col-cb").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) hiddenCols.delete(cb.value);
+      else hiddenCols.add(cb.value);
+      renderGrid();
+    });
+  });
+  document.getElementById("colAll").addEventListener("click", () => {
+    hiddenCols.clear();
+    menu.querySelectorAll(".col-cb").forEach((cb) => (cb.checked = true));
+    renderGrid();
+  });
+}
+
+function visibleRows() {
+  const q = gridFilters.text.trim().toLowerCase();
+  return gridData.filter((r) => {
+    if (gridFilters.activeOnly && !r.active) return false;
+    if (gridFilters.archetypes.size > 0 && !gridFilters.archetypes.has(r.archetype)) return false;
+    if (q && !(r.name.toLowerCase().includes(q) || r.club.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+function sortedRows(rows) {
+  const col = ALL_COLS.find((c) => c.key === gridSort.key) ?? ALL_COLS[0];
+  const dir = gridSort.dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const av = colValue(a, col);
+    const bv = colValue(b, col);
+    if (col.kind === "num") return (av - bv) * dir;
+    return String(av).localeCompare(String(bv)) * dir;
+  });
+}
+
+/** Min/max per numeric column within the CURRENTLY FILTERED rows — the basis for both the
+ * heatmap shading and (implicitly, via row position after sort) the rank column. Recomputed on
+ * every render so it always reflects the active filter set, per the round brief. */
+function computeRanges(rows) {
+  const ranges = {};
+  for (const col of ALL_COLS) {
+    if (col.kind !== "num") continue;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const r of rows) {
+      const v = colValue(r, col);
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    ranges[col.key] = { min, max };
+  }
+  return ranges;
+}
+
+function heatColor(v, range) {
+  if (!isFinite(range.min) || !isFinite(range.max) || range.max === range.min) return "";
+  const t = (v - range.min) / (range.max - range.min);
+  const hue = t * 120; // 0 = red (low), 120 = green (high)
+  return `background-color: hsl(${hue.toFixed(0)}, 55%, 20%);`;
+}
+
+function renderGrid() {
+  if (!gridData) return;
+  const filtered = visibleRows();
+  const sorted = sortedRows(filtered);
+  const ranges = computeRanges(filtered);
+  const cols = ALL_COLS.filter((c) => !hiddenCols.has(c.key));
+
+  document.getElementById("gridCount").textContent = `${filtered.length} / ${gridData.length} players shown, sorted by ${gridSort.key} (${gridSort.dir})`;
+
+  const thead = document.querySelector("#gridTable thead");
+  thead.innerHTML = `<tr><th>#</th>${cols
+    .map(
+      (c) =>
+        `<th data-key="${c.key}" class="${c.key === gridSort.key ? "sorted" : ""}">${c.label}${
+          c.key === gridSort.key ? (gridSort.dir === "asc" ? " ▲" : " ▼") : ""
+        }</th>`
+    )
+    .join("")}</tr>`;
+  thead.querySelectorAll("th[data-key]").forEach((th) => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (gridSort.key === key) {
+        gridSort.dir = gridSort.dir === "asc" ? "desc" : "asc";
+      } else {
+        const col = ALL_COLS.find((c) => c.key === key);
+        gridSort = { key, dir: col.kind === "num" ? "desc" : "asc" };
+      }
+      renderGrid();
+    });
+  });
+
+  const tbody = document.querySelector("#gridTable tbody");
+  const rowsHtml = sorted.map((r, i) => {
+    const cells = cols
+      .map((c) => {
+        const v = colValue(r, c);
+        const style = c.kind === "num" ? heatColor(v, ranges[c.key]) : "";
+        const cls = c.key === "name" ? ' class="name-cell"' : "";
+        return `<td style="${style}"${cls}>${v}${c.key === "name" && r.attributeOverride ? ' <span class="flag">ovr</span>' : ""}</td>`;
+      })
+      .join("");
+    return `<tr data-id="${r.id}"><td class="rank">${i + 1}</td>${cells}</tr>`;
+  });
+  tbody.innerHTML = rowsHtml.join("");
+  tbody.querySelectorAll("tr").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const id = Number(tr.dataset.id);
+      switchTab("editor");
+      selectPlayer(id, null);
+    });
+  });
+}
+
+// --- Tabs ---
+function switchTab(name) {
+  const isGrid = name === "grid";
+  document.getElementById("tabEditorBtn").classList.toggle("active", !isGrid);
+  document.getElementById("tabGridBtn").classList.toggle("active", isGrid);
+  document.getElementById("editorView").classList.toggle("active", !isGrid);
+  document.getElementById("gridView").classList.toggle("active", isGrid);
+  searchEl.style.display = isGrid ? "none" : "";
+  if (isGrid) ensureGridLoaded();
+}
+
+document.getElementById("tabEditorBtn").addEventListener("click", () => switchTab("editor"));
+document.getElementById("tabGridBtn").addEventListener("click", () => switchTab("grid"));
+
+document.getElementById("gridSearch").addEventListener("input", (e) => {
+  gridFilters.text = e.target.value;
+  renderGrid();
+});
+document.getElementById("activeOnly").addEventListener("change", (e) => {
+  gridFilters.activeOnly = e.target.checked;
+  renderGrid();
+});
+
+document.getElementById("archetypePickerBtn").addEventListener("click", () => {
+  document.getElementById("archetypePickerMenu").classList.toggle("open");
+  document.getElementById("columnPickerMenu").classList.remove("open");
+});
+document.getElementById("columnPickerBtn").addEventListener("click", () => {
+  document.getElementById("columnPickerMenu").classList.toggle("open");
+  document.getElementById("archetypePickerMenu").classList.remove("open");
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#archetypePicker")) document.getElementById("archetypePickerMenu").classList.remove("open");
+  if (!e.target.closest("#columnPicker")) document.getElementById("columnPickerMenu").classList.remove("open");
+});

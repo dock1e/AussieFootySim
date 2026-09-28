@@ -40,16 +40,70 @@
   button.primary:hover { background: #4a7be0; }
   #saveStatus { font-size: 13px; color: #9aa0ab; }
   .flag { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #4a3a1c; color: #ffb347; margin-left: 8px; }
+
+  /* Round C156 — tabs + grid view */
+  .tabs { display: flex; gap: 4px; }
+  .tab-btn { padding: 6px 14px; border-radius: 6px 6px 0 0; border: 1px solid #3a3f4a; border-bottom: none; background: #1c1f26; color: #9aa0ab; cursor: pointer; font-size: 13px; }
+  .tab-btn.active { background: #14161a; color: #eee; font-weight: 600; }
+  .view { display: none; height: calc(100vh - 53px); }
+  .view.active { display: flex; flex-direction: column; }
+  #gridControls { display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: #1c1f26; border-bottom: 1px solid #2c303a; flex-wrap: wrap; }
+  #gridControls input[type=text] { padding: 6px 10px; background: #101216; border: 1px solid #3a3f4a; color: #eee; border-radius: 4px; width: 220px; }
+  #gridControls select { padding: 6px 10px; background: #101216; border: 1px solid #3a3f4a; color: #eee; border-radius: 4px; }
+  #gridControls label.checkbox { font-size: 13px; display: flex; align-items: center; gap: 5px; }
+  #gridCount { font-size: 12px; color: #9aa0ab; margin-left: auto; }
+  #columnPicker, .dropdown { position: relative; }
+  #columnPickerBtn, .dropdown button { padding: 6px 10px; border-radius: 6px; border: 1px solid #3a3f4a; background: #2a3040; color: #eee; cursor: pointer; font-size: 13px; }
+  #columnPickerMenu, .dropdown-menu { display: none; position: absolute; top: 32px; left: 0; z-index: 20; background: #1c1f26; border: 1px solid #3a3f4a; border-radius: 6px; padding: 8px; max-height: 320px; overflow-y: auto; width: 220px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  #columnPickerMenu.open, .dropdown-menu.open { display: block; }
+  #columnPickerMenu label, .dropdown-menu label { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 4px; cursor: pointer; }
+  .dropdown-menu .picker-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+  .dropdown-menu .picker-actions button { font-size: 11px; padding: 3px 8px; }
+  #gridWrap { flex: 1; overflow: auto; }
+  table#gridTable { border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
+  table#gridTable th, table#gridTable td { padding: 5px 10px; border-bottom: 1px solid #23262d; text-align: right; }
+  table#gridTable th:first-child, table#gridTable td:first-child,
+  table#gridTable th:nth-child(2), table#gridTable td:nth-child(2),
+  table#gridTable th:nth-child(3), table#gridTable td:nth-child(3) { text-align: left; }
+  table#gridTable thead th { position: sticky; top: 0; background: #1c1f26; cursor: pointer; user-select: none; color: #cdd1d9; border-bottom: 1px solid #3a3f4a; }
+  table#gridTable thead th:hover { color: #fff; }
+  table#gridTable thead th.sorted { color: #6fa8ff; }
+  table#gridTable tbody tr { cursor: pointer; }
+  table#gridTable tbody tr:hover { outline: 1px solid #3a6fd8; outline-offset: -1px; }
+  table#gridTable td.rank { color: #9aa0ab; font-variant-numeric: tabular-nums; }
+  table#gridTable td.name-cell { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 </style>
 </head>
 <body>
 <header>
   <h1>Player Editor (admin)</h1>
+  <div class="tabs">
+    <button class="tab-btn active" id="tabEditorBtn" type="button">Single Player</button>
+    <button class="tab-btn" id="tabGridBtn" type="button">Grid</button>
+  </div>
   <input id="search" type="text" placeholder="Search by name, club, or archetype..." autocomplete="off" />
 </header>
 <main>
-  <div id="results"></div>
-  <div id="editor"><div class="empty">Search for a player to begin.</div></div>
+  <div id="editorView" class="view active" style="flex-direction: row;">
+    <div id="results"></div>
+    <div id="editor"><div class="empty">Search for a player to begin.</div></div>
+  </div>
+  <div id="gridView" class="view">
+    <div id="gridControls">
+      <input id="gridSearch" type="text" placeholder="Search name or club..." autocomplete="off" />
+      <div id="archetypePicker" class="dropdown">
+        <button id="archetypePickerBtn" type="button">Archetypes ▾</button>
+        <div id="archetypePickerMenu" class="dropdown-menu"></div>
+      </div>
+      <label class="checkbox"><input type="checkbox" id="activeOnly" checked /> Active only (excl. retired/delisted)</label>
+      <div id="columnPicker">
+        <button id="columnPickerBtn" type="button">Columns ▾</button>
+        <div id="columnPickerMenu"></div>
+      </div>
+      <span id="gridCount"></span>
+    </div>
+    <div id="gridWrap"><table id="gridTable"><thead></thead><tbody></tbody></table></div>
+  </div>
 </main>
 <script src="app.js"></script>
 </body>

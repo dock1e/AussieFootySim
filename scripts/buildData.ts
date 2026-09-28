@@ -59,7 +59,9 @@ const STRING_FIELDS = new Set([
 // Round 126 — closes gap #37. Stored in the CSV as "1"/"0" (buildData.ts's numeric-coercion
 // convention elsewhere), coerced to a real boolean here rather than left as 1/0 so
 // `p.ovrOverride`/`p.potOverride` reads naturally everywhere else in the codebase.
-const BOOLEAN_FIELDS = new Set(["ovrOverride", "potOverride"]);
+// Round C155 — attributeOverride joins ovrOverride/potOverride here; same "1"/"0" CSV convention,
+// same coercion-to-real-boolean treatment. See types/player.ts's own doc comment for what it means.
+const BOOLEAN_FIELDS = new Set(["ovrOverride", "potOverride", "attributeOverride"]);
 
 /** Exported (round 126) so `scripts/refreshPlayerRatings.ts` can parse the CSV into real `Player` objects the same way this pipeline does, rather than re-implementing the coercion rules a second time. */
 export function coerceRow(raw: Record<string, string>): Player {

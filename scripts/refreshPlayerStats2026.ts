@@ -83,11 +83,20 @@ function main() {
     p.stat_UP = real.uncontestedPoss;
     p.stat_1pct = real.onePercenters;
 
-    // Round C154 — pass the player's current Age so the shared athletic-decline-on-refresh fix
-    // (AttributeZScorer.attributesFor's new optional `age` param) applies for 31+ players. See
-    // progression.ts's `applyAthleticDeclineToFreshBaseline` doc comment.
-    const attrs = scorer.attributesFor(name, p.archetype as Archetype, p.Age);
-    for (const a of RATED_ATTRIBUTES) p[a] = attrs[a];
+    // Round C155 — an `attributeOverride` player's 20 RATED_ATTRIBUTES are Tyler's own hand-tuned
+    // values (set via the standalone Player Editor admin tool, `tools/player-editor/`) — skip
+    // regenerating them entirely, including the C154 athletic-decline-on-refresh step, since a
+    // manual value is a deliberate final state, not something that should keep aging underneath
+    // it. `clangerTend` is NOT gated by this flag (it's a real-derived field outside the 20
+    // RATED_ATTRIBUTES this override protects, same as stat_* above) — see types/player.ts's
+    // `attributeOverride` doc comment for the full distinction from `ovrOverride`/`potOverride`.
+    if (!p.attributeOverride) {
+      // Round C154 — pass the player's current Age so the shared athletic-decline-on-refresh fix
+      // (AttributeZScorer.attributesFor's new optional `age` param) applies for 31+ players. See
+      // progression.ts's `applyAthleticDeclineToFreshBaseline` doc comment.
+      const attrs = scorer.attributesFor(name, p.archetype as Archetype, p.Age);
+      for (const a of RATED_ATTRIBUTES) p[a] = attrs[a];
+    }
     p.clangerTend = scorer.clangerTendFor(name);
   }
 

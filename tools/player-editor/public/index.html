@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>AussieFootySim — Player Editor (admin)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #14161a; color: #e8e8ea; margin: 0; padding: 0; }
+  header { padding: 12px 20px; background: #1c1f26; border-bottom: 1px solid #2c303a; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header input { flex: 1; max-width: 420px; padding: 6px 10px; background: #101216; border: 1px solid #3a3f4a; color: #eee; border-radius: 4px; }
+  main { display: flex; height: calc(100vh - 53px); }
+  #results { width: 320px; overflow-y: auto; border-right: 1px solid #2c303a; }
+  #results .row { padding: 8px 14px; border-bottom: 1px solid #23262d; cursor: pointer; font-size: 13px; }
+  #results .row:hover { background: #20232a; }
+  #results .row.active { background: #2a3040; }
+  #results .row .name { font-weight: 600; }
+  #results .row .meta { color: #9aa0ab; font-size: 12px; }
+  #editor { flex: 1; overflow-y: auto; padding: 20px 28px; }
+  .empty { color: #777; padding: 40px; }
+  .readout { display: flex; gap: 28px; align-items: baseline; margin-bottom: 18px; padding: 14px 18px; background: #1c1f26; border-radius: 8px; border: 1px solid #2c303a; }
+  .readout .stat { display: flex; flex-direction: column; }
+  .readout .stat .label { font-size: 11px; color: #9aa0ab; text-transform: uppercase; letter-spacing: 0.04em; }
+  .readout .stat .value { font-size: 26px; font-weight: 700; }
+  .readout .stat .delta { font-size: 13px; margin-left: 6px; }
+  .delta.up { color: #5fd97a; }
+  .delta.down { color: #ff6b6b; }
+  .delta.zero { color: #888; }
+  .group { margin-bottom: 22px; }
+  .group h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: #9aa0ab; margin: 0 0 8px; }
+  .attr-row { display: grid; grid-template-columns: 170px 1fr 46px; align-items: center; gap: 10px; padding: 4px 0; }
+  .attr-row label { font-size: 13px; }
+  .attr-row input[type=range] { width: 100%; }
+  .attr-row .val { text-align: right; font-variant-numeric: tabular-nums; }
+  .attr-row.overridden .val { color: #ffb347; }
+  .actions { margin-top: 20px; display: flex; gap: 10px; align-items: center; }
+  button { padding: 8px 16px; border-radius: 6px; border: 1px solid #3a3f4a; background: #2a3040; color: #eee; cursor: pointer; font-size: 14px; }
+  button:hover { background: #333a4d; }
+  button.primary { background: #3a6fd8; border-color: #3a6fd8; }
+  button.primary:hover { background: #4a7be0; }
+  #saveStatus { font-size: 13px; color: #9aa0ab; }
+  .flag { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #4a3a1c; color: #ffb347; margin-left: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Player Editor (admin)</h1>
+  <input id="search" type="text" placeholder="Search by name, club, or archetype..." autocomplete="off" />
+</header>
+<main>
+  <div id="results"></div>
+  <div id="editor"><div class="empty">Search for a player to begin.</div></div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

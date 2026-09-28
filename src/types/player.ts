@@ -234,6 +234,24 @@ export interface Player extends ImprovementRates, DeclineRates {
   potOverride?: boolean;
 
   /**
+   * Round C155 — new CSV column, written by the standalone Player Editor admin tool
+   * (`tools/player-editor/`) whenever Tyler saves a manual attribute edit for this player. `true`
+   * for a player whose 20 `RATED_ATTRIBUTES` are Tyler's own hand-tuned final values, not the
+   * output of the real-stat generation pipeline.
+   *
+   * **Distinct from `ovrOverride`/`potOverride` above — protects the INPUT attributes, not the
+   * OUTPUT OVR/POT numbers.** An `attributeOverride` player's `OVR`/`POT` are still computed
+   * NORMALLY (via the standard `applyFairnessPass`/`ovrFromRawComposite` formula) off these
+   * now-frozen attributes — this flag only stops `scripts/refreshPlayerStats2026.ts` (and any
+   * future real-stat refresh built the same way) from regenerating the 20 `RATED_ATTRIBUTES`
+   * fresh from that season's real per-game stats, which would otherwise silently overwrite Tyler's
+   * deliberate manual values the very next time a real-stat refresh runs — the exact same class of
+   * bug Round C154 found and fixed for the athletic-decline mechanic, applied here to manual edits
+   * instead. See Schema.md's Round C155 section for the full design note.
+   */
+  attributeOverride?: boolean;
+
+  /**
    * Optional, added Phase 4 Slice 3 (Contracts) — true once a coach has
    * delisted this player from `Team`/`ClubID`'s active list via
    * engine/contracts.ts's `delist()`. `getPlayersByClub` does NOT filter

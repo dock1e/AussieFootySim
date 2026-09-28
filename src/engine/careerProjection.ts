@@ -93,30 +93,30 @@ export interface OvrTrajectory {
  * scenario (no coach/performance boost assumed for a hypothetical future with no known coach or
  * performance signal yet) — left as a flagged followup, not fixed this round: the audit note asked
  * whether this chart should compute a realistic multiplier from the player's actual current
- * club/coach/facility state instead. Checked the call site (`CareerProfile.tsx`) — it doesn't currently
- * carry `myClub`/`developmentCoach`/`lineCoaches`/`clubFinance`/`isBest22` (the real inputs
- * `developmentMultipliersFor` needs) into scope, only `player`/`currentYear`/`populationStats`, so
- * wiring a "realistic" multiplier through would mean threading that whole save-state shape into a
- * component that doesn't otherwise need it — bigger than it looks, deliberately left for a future
- * round rather than scope-creeping this one. **Round C152 Priority 2 note**: this chart's BASELINE
- * scenario itself already changes as of this round regardless — `ageOnePlayer`'s new youth taper
- * (`youthTaperFor`, progression.ts) multiplies whatever `developmentMultiplier` it's given, including
- * this hardcoded `1`, so a young big-headroom player's projected trajectory here now shows real
- * taper-driven growth even under the "no coach" baseline, not just when a real save's own multiplier
- * is passed elsewhere.
+ * club/coach/facility state instead.
+ *
+ * **Round C154 — fixed.** `developmentMultiplier` (optional, default `1` — the old unconditional
+ * baseline, so any caller that hasn't been updated, e.g. a unit test constructing a lone synthetic
+ * player, keeps compiling and behaving exactly as before) now lets the caller supply the player's REAL
+ * current multiplier, computed the same way an actual off-season would (`development.ts`'s
+ * `developmentMultipliersFor`, which needs `myClub`/`developmentCoach`/`lineCoaches`/`clubFinance`/
+ * `isBest22`/`season`/`seasonArchives`/`awards`). Deliberately NOT threaded as the whole save-state
+ * shape into this file — that's the "bigger than it looks" part the earlier note flagged, and it isn't:
+ * this function only ever needed the single already-resolved NUMBER out of that shape, not the shape
+ * itself. `CareerProfile.tsx` (the only real call site) now computes that number once via
+ * `developmentMultipliersFor` and passes it straight through here; a UI call site with no save loaded
+ * (or the pre-round-C154 default) simply omits it and gets the old BASELINE-1 behaviour.
  */
-export function projectOvrTrajectory(player: Player, currentYear: number, populationStats: { mean: number; stdDev: number }, yearsForward = 10): OvrTrajectory {
+export function projectOvrTrajectory(player: Player, currentYear: number, populationStats: { mean: number; stdDev: number }, yearsForward = 10, developmentMultiplier = 1): OvrTrajectory {
   const years: ProjectedYear[] = [];
   let current = player;
   for (let i = 1; i <= yearsForward; i++) {
     // Round C153: threads `populationStats` (already computed by every caller of this function, for
     // the OVR conversion two lines below) into `ageOnePlayer` too — this is what activates the new
     // POT-tied growth ceiling (`growthCeilingFor`) for this chart, instead of the raw, now-superseded
-    // `potentialTall`/`potentialMid` ceiling. The `developmentMultiplier` passed is still hardcoded `1`
-    // (ROADMAP #104, left unbuilt) — a merely-baseline multiplier never qualifies for this round's new
-    // elite-overshoot allowance either (see `isEliteRateEligible`), so this chart's BASELINE shape
-    // is otherwise unaffected by this round beyond the ceiling-correlation fix itself.
-    current = ageOnePlayer(current, 1, undefined, populationStats);
+    // `potentialTall`/`potentialMid` ceiling. Round C154: `developmentMultiplier` is no longer
+    // hardcoded `1` — see this function's own doc comment above (ROADMAP #104).
+    current = ageOnePlayer(current, developmentMultiplier, undefined, populationStats);
     const ovr = ovrFromRawComposite(ovrRawComposite(current), populationStats);
     years.push({ year: currentYear + i, age: current.Age, ovr });
   }

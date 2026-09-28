@@ -2,6 +2,7 @@ import type { RatedAttribute } from "../types/player.ts";
 import { RATED_ATTRIBUTES } from "../types/player.ts";
 import type { Real2026SeasonStats } from "../data/real2026SeasonStats.ts";
 import type { Archetype } from "../types/archetype.ts";
+import { ATHLETIC_DECLINE_ATTRIBUTES, ATHLETIC_DECLINE_START_AGE, applyAthleticDeclineToFreshBaseline } from "./progression.ts";
 
 /**
  * Round C142 — [[End-of-2026 Player Database Refresh]] Step 2. The real-stat-to-attribute
@@ -182,9 +183,21 @@ export class AttributeZScorer {
     return Math.max(1, Math.min(99, Math.round(50 + zCombined * 13)));
   }
 
-  /** The 20 `RATED_ATTRIBUTES` for one real player, per Schema.md's documented input table (see this file's own header comment for the disclosed simplifications). `realFullName` must have a row in the `Real2026SeasonStats` population this scorer was built from. */
-  attributesFor(realFullName: string, archetype: Archetype): Record<RatedAttribute, number> {
-    return this.computeAttributes((k) => this.z(realFullName, k), archetype);
+  /**
+   * The 20 `RATED_ATTRIBUTES` for one real player, per Schema.md's documented input table (see this
+   * file's own header comment for the disclosed simplifications). `realFullName` must have a row in
+   * the `Real2026SeasonStats` population this scorer was built from.
+   *
+   * Round C154 — `age` (optional; the player's CURRENT age this refresh is for) applies
+   * `progression.ts`'s `applyAthleticDeclineToFreshBaseline` to the two athletic attributes
+   * (`speed`/`agility`) after they're generated fresh from this season's real per-game stats — see
+   * that function's own doc comment for why this real-stat generation path needs its own copy of the
+   * athletic-decline mechanism `ageOnePlayer` already applies during simulated progression. Omitted
+   * (the pre-C154 default) leaves `speed`/`agility` exactly as generated, unchanged — every existing
+   * caller that hasn't been updated to pass an age keeps compiling and behaving identically.
+   */
+  attributesFor(realFullName: string, archetype: Archetype, age?: number): Record<RatedAttribute, number> {
+    return this.computeAttributes((k) => this.z(realFullName, k), archetype, age);
   }
 
   /**
@@ -200,7 +213,7 @@ export class AttributeZScorer {
     return this.computeAttributes((k) => this.zOfRow(rates, k), archetype);
   }
 
-  private computeAttributes(z: (k: RateKey) => number, archetype: Archetype): Record<RatedAttribute, number> {
+  private computeAttributes(z: (k: RateKey) => number, archetype: Archetype, age?: number): Record<RatedAttribute, number> {
     const avg = (...vs: number[]) => vs.reduce((a, b) => a + b, 0) / vs.length;
     // Round C149 — [[End-of-2026 Player Database Refresh]]: a weighted-average helper, alongside
     // the existing unweighted `avg`, so a specific input can be given more than 1/n share of an
@@ -272,6 +285,13 @@ export class AttributeZScorer {
     };
     for (const a of RATED_ATTRIBUTES) {
       if (!(a in out)) throw new Error(`attributeGeneration: missing rated attribute ${a}`);
+    }
+    // Round C154 — see attributesFor's own doc comment. Only fires for attributesFor's real,
+    // current-season path (age passed in); attributesForExternalRow never passes one.
+    if (age !== undefined && age >= ATHLETIC_DECLINE_START_AGE) {
+      for (const attr of ATHLETIC_DECLINE_ATTRIBUTES) {
+        out[attr] = applyAthleticDeclineToFreshBaseline(out[attr], age);
+      }
     }
     return out;
   }

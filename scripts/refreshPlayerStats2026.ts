@@ -83,7 +83,10 @@ function main() {
     p.stat_UP = real.uncontestedPoss;
     p.stat_1pct = real.onePercenters;
 
-    const attrs = scorer.attributesFor(name, p.archetype as Archetype);
+    // Round C154 — pass the player's current Age so the shared athletic-decline-on-refresh fix
+    // (AttributeZScorer.attributesFor's new optional `age` param) applies for 31+ players. See
+    // progression.ts's `applyAthleticDeclineToFreshBaseline` doc comment.
+    const attrs = scorer.attributesFor(name, p.archetype as Archetype, p.Age);
     for (const a of RATED_ATTRIBUTES) p[a] = attrs[a];
     p.clangerTend = scorer.clangerTendFor(name);
   }

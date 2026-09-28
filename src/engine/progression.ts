@@ -537,6 +537,43 @@ function applyAthleticDecline(prev: Player, next: Player): void {
 }
 
 /**
+ * Round C154 — extends the athletic-decline mechanism to the real-stat refresh pipeline, not just
+ * simulated career progression. `applyAthleticDecline` above only ever fires inside `ageOnePlayer`'s
+ * simulated step (a `careerProjection.ts` chart, or a real save's own `runOffSeasonOnSave`) — the
+ * ORDINARY per-round database refresh (`AttributeZScorer.attributesFor`, `attributeGeneration.ts`)
+ * regenerates `speed`/`agility` FRESH from that season's real per-game stats every time it runs, with
+ * no age-based term of its own at all (confirmed: `computeAttributes` never reads a player's `Age`).
+ * Left alone, the very next real-stat refresh after this round's one-off `players_master.csv` repair
+ * (`scripts/refreshRoundC154.ts`) would silently overwrite every 31+ player's `speed`/`agility` straight
+ * back to a no-decline value, undoing the fix within a single future round.
+ *
+ * This is the shared, single-point fix for that: applies the SAME stepwise
+ * `(1 - ATHLETIC_DECLINE_PER_YEAR)` compounding decline `applyAthleticDecline` uses inside
+ * `ageOnePlayer`, but against a FRESH real-stat-generated baseline (this season's just-computed
+ * z-scored value) rather than last year's own `ageOnePlayer`-stepped value — a real-stat refresh has
+ * no "last year's step" to read, so the fresh baseline stands in for "what this attribute reads before
+ * any age-related athletic decline" and gets aged down from there, exactly the same number of times
+ * (once per year from 31 up to `min(age, 35)`) the one-off repair and `ageOnePlayer` both apply.
+ *
+ * Wired into `AttributeZScorer.attributesFor` (attributeGeneration.ts) — the one shared function every
+ * real-stat refresh script (current, and any future season's `refreshPlayerStats20XX.ts`) already
+ * calls for a real player's CURRENT-season row — so this activates automatically for any future
+ * refresh, not just this round's one-off repair. Deliberately NOT wired into `attributesForExternalRow`
+ * (`historicalOvrReconstruction.ts`'s own past-season reconstruction, `recencyForm.ts`'s recency-blended
+ * synthetic rows) — those model a PAST season at the player's age AT THE TIME, which can't be read off
+ * an arbitrary external stat row, and retroactively aging historical seasons is a different, unasked-for
+ * problem this round doesn't take on.
+ */
+export function applyAthleticDeclineToFreshBaseline(baseline: number, age: number): number {
+  let v = baseline;
+  const top = Math.min(age, ATHLETIC_DECLINE_END_AGE);
+  for (let a = ATHLETIC_DECLINE_START_AGE; a <= top; a++) {
+    v = Math.max(40, Math.min(110, Math.round(v * (1 - ATHLETIC_DECLINE_PER_YEAR))));
+  }
+  return v;
+}
+
+/**
  * Applies one off-season step to a single player's `RATED_ATTRIBUTES` (see
  * this file's doc comment). Returns a new `Player` — does not mutate the
  * input. `Age` is incremented by 1; `age_day`/`age_month`/`age_year` (a real

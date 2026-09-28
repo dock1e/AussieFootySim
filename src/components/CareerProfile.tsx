@@ -10,6 +10,9 @@ import { projectOvrTrajectory, topRecordChasesFor, estimatedRemainingGames, type
 import { computeSeasonGrades } from "../engine/seasonGrading";
 import { ALL_LEAGUE_STATS, type LeagueStat } from "../engine/seasonSummary";
 import { draftHistoryFor } from "../data/realDraftHistory";
+import { developmentMultipliersFor } from "../engine/development";
+import { computeSeasonAwards } from "../engine/awards";
+import { pickBest22 } from "../engine/team";
 import { yearRowsFor, sumYearRows, type YearRow } from "./PlayerProfileModal";
 import { Card, HeroCard, Watermark, SectionLabel, StatusChip, KpiTile, PinStar } from "./theme/primitives";
 
@@ -39,6 +42,9 @@ export function CareerProfile() {
   const togglePin = useSaveStore((s) => s.togglePin);
   const clubHistory = useSaveStore((s) => s.clubHistory);
   const poolVersion = useSaveStore((s) => s.poolVersion);
+  const developmentCoach = useSaveStore((s) => s.developmentCoach);
+  const lineCoaches = useSaveStore((s) => s.lineCoaches);
+  const clubFinance = useSaveStore((s) => s.clubFinance);
   const season = useSeasonStore((s) => s.season);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -65,7 +71,33 @@ export function CareerProfile() {
   const careerTotals = sumYearRows(player.PlayerID, yearRows);
   const gamesPlayed = careerTotals?.gamesPlayed ?? 0;
 
-  const trajectory: OvrTrajectory = projectOvrTrajectory(player, currentYear, populationStats, 10);
+  // Round C154 — ROADMAP #104. Real "current club/coach/facility state" development multiplier, the
+  // same real inputs `saveGame.ts`'s `runOffSeasonOnSave` feeds `developmentMultipliersFor`, computed
+  // once here and threaded into the chart's projection instead of that function's own hardcoded `1`
+  // baseline. `isBest22` (per club, league-wide — the VFL & Development Program facility bonus only
+  // applies to a player outside their own club's best 22) is computed the same grouped-by-club way
+  // `runOffSeasonOnSave` does it. `season` may be the CURRENT in-progress season here (this is a live
+  // screen, not an off-season step) — an honest best-available signal of "this club's real recent
+  // performance," same as every other in-progress-season read this screen already does (`liveGrade`
+  // above uses the live `season` the same way).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const developmentMultiplier = useMemo(() => {
+    const isBest22 = new Map<number, boolean>();
+    const byClub = new Map<string, Player[]>();
+    for (const p of ALL_PLAYERS) {
+      if (!byClub.has(p.Team)) byClub.set(p.Team, []);
+      byClub.get(p.Team)!.push(p);
+    }
+    for (const [clubName, clubPlayers] of byClub) {
+      const best22Ids = new Set(pickBest22(clubName, clubPlayers).players.map((p) => p.PlayerID));
+      for (const p of clubPlayers) isBest22.set(p.PlayerID, best22Ids.has(p.PlayerID));
+    }
+    const awards = season ? computeSeasonAwards(season, ALL_PLAYERS) : null;
+    const multipliers = developmentMultipliersFor(ALL_PLAYERS, season, seasonArchives, myClub, developmentCoach, lineCoaches, awards, clubFinance, isBest22);
+    return multipliers.get(player.PlayerID) ?? 1;
+  }, [poolVersion, myClub, developmentCoach, lineCoaches, clubFinance, season, seasonArchives, player.PlayerID]);
+
+  const trajectory: OvrTrajectory = projectOvrTrajectory(player, currentYear, populationStats, 10, developmentMultiplier);
   const remainingGames = estimatedRemainingGames(trajectory);
   const chases = topRecordChasesFor(player.PlayerID, gamesPlayed, remainingGames, ALL_RECORD_CATEGORIES, seasonArchives, season, 2);
 

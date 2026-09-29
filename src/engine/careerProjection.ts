@@ -112,10 +112,11 @@ export function projectOvrTrajectory(player: Player, currentYear: number, popula
   let current = player;
   for (let i = 1; i <= yearsForward; i++) {
     // Round C153: threads `populationStats` (already computed by every caller of this function, for
-    // the OVR conversion two lines below) into `ageOnePlayer` too — this is what activates the new
-    // POT-tied growth ceiling (`growthCeilingFor`) for this chart, instead of the raw, now-superseded
-    // `potentialTall`/`potentialMid` ceiling. Round C154: `developmentMultiplier` is no longer
-    // hardcoded `1` — see this function's own doc comment above (ROADMAP #104).
+    // the OVR conversion two lines below) into `ageOnePlayer` too — this activates the elite-overshoot
+    // conversion inside Round C160's `growthCeilingForAttr` for this chart (each attribute's own real
+    // `ceiling_<attr>`, not a frame-level `potentialTall`/`potentialMid` scalar). Round C154:
+    // `developmentMultiplier` is no longer hardcoded `1` — see this function's own doc comment above
+    // (ROADMAP #104).
     current = ageOnePlayer(current, developmentMultiplier, undefined, populationStats);
     const ovr = ovrFromRawComposite(ovrRawComposite(current), populationStats);
     years.push({ year: currentYear + i, age: current.Age, ovr });

@@ -33,6 +33,11 @@
   .attr-row input[type=range] { width: 100%; }
   .attr-row .val { text-align: right; font-variant-numeric: tabular-nums; }
   .attr-row.overridden .val { color: #ffb347; }
+  /* Round C160 — the ceiling slider is a SECOND value+control pair on the same row, alongside the
+     existing current-value slider (Tyler's own ask). */
+  .attr-row.ceiling-row { grid-template-columns: 170px 1fr 40px auto 1fr 40px; }
+  .ceiling-label { font-size: 11px; opacity: 0.65; text-align: right; padding-right: 4px; }
+  .ceiling-val { color: #7fc8ff; }
   .actions { margin-top: 20px; display: flex; gap: 10px; align-items: center; }
   button { padding: 8px 16px; border-radius: 6px; border: 1px solid #3a3f4a; background: #2a3040; color: #eee; cursor: pointer; font-size: 14px; }
   button:hover { background: #333a4d; }

@@ -1,6 +1,8 @@
 import type { Player } from "../types/player.ts";
+import type { Archetype } from "../types/archetype.ts";
 import { RATED_ATTRIBUTES, type RatedAttribute } from "../types/player.ts";
-import { potentialCeilingFor, ovrRawComposite, populationOvrStats, ovrFromRawComposite, isActiveRealStatus } from "./progression.ts";
+import { potentialCeilingFor, ceilingAttrValue, ovrRawComposite, rawAttributeCompositeFor, populationOvrStats, ovrFromRawComposite, isActiveRealStatus } from "./progression.ts";
+import { prestigeBonusFor } from "./prestige.ts";
 import { draftCapitalScore, realCareerGamesFor } from "./draftCapital.ts";
 import { qualifiesForProvenTrajectory, PROVEN_TRAJECTORY_GAMES_BONUS, MAX_QUALIFYING_AGE } from "./provenTrajectory.ts";
 
@@ -198,6 +200,59 @@ export function archetypeOvrRawStats(players: readonly Player[]): Record<string,
 }
 
 /**
+ * Round C160 — [[End-of-2026 Player Database Refresh]]. This player's real per-attribute growth
+ * ceiling (`ceilingAttrValue`, `progression.ts`) for all 20 `RATED_ATTRIBUTES` at once, shaped exactly
+ * like `Pick<Player, RatedAttribute>` — i.e. usable anywhere a plain "attribute set" is expected. This
+ * is the one and only bridge between the persisted `ceiling_<attr>` columns and `potRawComposite`
+ * below: constructing this object and handing it to the EXISTING `rawAttributeCompositeFor` (the same
+ * archetype-primary-share blend `ovrRawComposite` already uses for a player's CURRENT attributes) is
+ * what avoids duplicating that blend math into a second, driftable copy — see `potRawComposite`'s own
+ * doc comment.
+ */
+export function ceilingAttributesFor(p: Player): Pick<Player, RatedAttribute> {
+  const out = {} as Record<RatedAttribute, number>;
+  for (const a of RATED_ATTRIBUTES) out[a] = ceilingAttrValue(p, a);
+  return out;
+}
+
+/**
+ * Round C160 — [[End-of-2026 Player Database Refresh]]. The new POT source of truth: the SAME
+ * archetype-primary-share composite `ovrRawComposite` computes for a player's CURRENT attributes
+ * (`rawAttributeCompositeFor`, `progression.ts`), applied instead to their CEILING attributes
+ * (`ceilingAttributesFor` above) — "POT is derived from attribute ceilings the same way OVR is derived
+ * from current attributes," Tyler's own explicit architecture choice. `+ prestigeBonusFor(p)` mirrors
+ * `ovrRawComposite`'s own trailing term exactly (the same real-honours/draft-pedigree/career-milestone
+ * nudge applies to a player's ceiling composite as to their current one — a decorated player's real
+ * upside gets the same bounded credit their current form does).
+ *
+ * **Deliberately reuses `rawAttributeCompositeFor` rather than a second copy of the blend math** — the
+ * one thing this round's brief explicitly required ("DO NOT duplicate the archetype-primary-share-blend
+ * math into a second copy that can drift"). `ovrRawComposite`/`potRawComposite` are now both thin
+ * one-line wrappers around the same shared function, fed different attribute sources.
+ */
+export function potRawComposite(p: Player): number {
+  return rawAttributeCompositeFor(ceilingAttributesFor(p), p.archetype as Archetype) + prestigeBonusFor(p);
+}
+
+/**
+ * Round C160 — the ceiling-composite mirror of `populationOvrStats` (`progression.ts`): `{mean,
+ * stdDev}` of `potRawComposite` across the population, the exact same active/fallback filtering
+ * (`isActiveRealStatus`) every other population-reference stat in this series uses. This is the z-score
+ * denominator `applyFairnessPass` now uses to turn a player's ceiling composite into a `POT` number,
+ * via the SAME `ovrFromRawComposite` rescale (`70 + z*OVR_Z_MULTIPLIER`, clipped `[40,110]`) `OVR`
+ * itself uses — one rescale function, two different composites/reference stats feeding it, per this
+ * round's own "composited the same way OVR is already computed" brief.
+ */
+export function populationCeilingStats(players: readonly Player[]): { mean: number; stdDev: number } {
+  const pool = players.filter(isActiveRealStatus);
+  const basis = pool.length > 0 ? pool : players;
+  const composites = basis.map(potRawComposite);
+  const mean = composites.reduce((a, b) => a + b, 0) / composites.length;
+  const variance = composites.reduce((a, c) => a + (c - mean) ** 2, 0) / composites.length;
+  return { mean, stdDev: Math.sqrt(variance) };
+}
+
+/**
  * Round C151 — [[End-of-2026 Player Database Refresh]]. Root cause, confirmed before any fix (see
  * `scripts/diagnose_roundC151_scratch.ts`'s own dumped numbers): Round C149's own report already
  * named this exact problem — `blendedPotentialFor`'s upside term was capped at roughly `20 *
@@ -291,6 +346,18 @@ function potAgeFactor(age: number): number {
  *    confirmed a fixed 50/50 blend fits Tyler's 7 real year-by-year targets meaningfully better
  *    (SSE ~67) than either shrinkage-weighting (~374) or a `max()` of the two signals (~180, which
  *    reads as double-counting whichever signal already happens to be ahead, not trusting both).
+ *
+ * **Round C160 — RETAINED, but no longer the live per-round pipeline's source of truth for `POT`.**
+ * `applyFairnessPass` (below) now computes `POT` from `potRawComposite` (the real per-attribute
+ * `ceiling_<attr>` composite) instead of calling this function — Tyler's own explicit choice on the
+ * design fork was to fully REPLACE the age-based upside formula, not keep it as an additive layer. This
+ * function is kept, unmodified, for exactly one real remaining caller:
+ * `historicalOvrReconstruction.ts`, which reconstructs a PAST season's `POT` — a past year has no
+ * per-attribute ceiling data to reconstruct (this round's `ceiling_<attr>` columns only ever existed
+ * from the backfill forward), so the age-based/draft-capital-blended upside formula remains the only
+ * available signal for "what would this player's POT plausibly have read in 2022." Left exported and
+ * otherwise untouched rather than deleted, per this round's own brief ("keep only as a fallback for the
+ * rare case a player has no sensible ceiling data").
  */
 export function blendedPotentialFor(p: Player, ovr: number, careerGames: number, ceiling = 110, proven = false): number {
   const potCeiling = potentialCeilingFor(p);
@@ -332,6 +399,14 @@ export function blendedPotentialFor(p: Player, ovr: number, careerGames: number,
  * `proven`): a real ceiling shouldn't crash from a single bad/interrupted season regardless of
  * archetype or draft pedigree, and `Math.max(freshPOT, ...)` is a no-op whenever `freshPOT` doesn't
  * fall by more than the floor anyway (the overwhelming majority of players, most rounds).
+ *
+ * **Round C160** — `ceilingStats` (optional, new last parameter): the population ceiling-composite
+ * `{mean, stdDev}` (`populationCeilingStats`) `POT`'s new derivation z-scores against — see the `POT`
+ * computation below. Omitted (any caller that hasn't been updated), this falls back to reusing
+ * `populationStats` itself — not scale-perfect (the ceiling composite's own population isn't
+ * identically distributed to the current-attribute composite `populationStats` was built from), but a
+ * safe, always-defined degenerate default rather than a crash, matching this file's own established
+ * "every optional population-reference parameter degrades gracefully" convention.
  */
 const POT_FLOOR_MAX_DROP_PER_ROUND = 3;
 
@@ -341,6 +416,7 @@ export function applyFairnessPass(
   populationStats: { mean: number; stdDev: number },
   ceiling = 110, // Round C147: new default rescale ceiling (was 99) — see progression.ts's ovrFromRawComposite
   archetypeOvrStats?: Record<string, { mean: number; stdDev: number }>,
+  ceilingStats?: { mean: number; stdDev: number },
 ): Player {
   // Round C148 — provenTrajectory.ts's objective rule, checked against p's FRESH (pre-shrinkage)
   // real-stat-derived attributes, exactly as that file's own doc comment requires. Round C151: also
@@ -369,17 +445,29 @@ export function applyFairnessPass(
     next.OVR = ovrFromRawComposite(ovrRawComposite(next), populationStats);
   }
   if (!p.potOverride) {
-    const freshPot = blendedPotentialFor(next, next.OVR, careerGames, ceiling, proven);
+    // Round C160 — [[End-of-2026 Player Database Refresh]]. `POT` is now fully DERIVED from the
+    // per-attribute ceiling composite (`potRawComposite`), composited the exact same way `OVR` is
+    // composited from current attributes (`rawAttributeCompositeFor`, shared, never duplicated) —
+    // this REPLACES the old `blendedPotentialFor` age-based-upside call as the live pipeline's source
+    // of truth for `POT` (see that function's own doc comment for why it's retained, unused here, for
+    // `historicalOvrReconstruction.ts` only). `potRawComposite(next)` — not `p` — so the
+    // `ceiling_<attr> >= <attr>` invariant is checked against the FINAL (possibly fairness-shrunk)
+    // live attributes, not the pre-shrink input; `ceilingStats` (below, `?? populationStats` fallback
+    // for any caller that hasn't been updated to pass it) is the ceiling-composite's own population
+    // z-score reference (`populationCeilingStats`), the ceiling-side mirror of `populationStats`.
+    const stats = ceilingStats ?? populationStats;
+    const freshPot = ovrFromRawComposite(potRawComposite(next), stats);
     const floored = Math.max(freshPot, p.POT - POT_FLOOR_MAX_DROP_PER_ROUND);
     next.POT = Math.max(next.OVR, Math.min(ceiling, floored));
   }
   return next;
 }
 
-/** Runs `applyFairnessPass` across a whole population, computing the archetype means, population OVR stats, and (Round C151) per-archetype OVR stats ONCE up front (all three need the pre-shrinkage population as their reference — see each helper's own doc comment) rather than per-player. This is the real, committed replacement for the offline generation script's OVR/POT step — see the design note for why the raw-stat-to-attribute step itself is deliberately not re-derived here. */
+/** Runs `applyFairnessPass` across a whole population, computing the archetype means, population OVR stats, (Round C151) per-archetype OVR stats, and (Round C160) population ceiling-composite stats ONCE up front (all four need the pre-shrinkage population as their reference — see each helper's own doc comment) rather than per-player. This is the real, committed replacement for the offline generation script's OVR/POT step — see the design note for why the raw-stat-to-attribute step itself is deliberately not re-derived here. */
 export function recomputeOVRWithShrinkage(players: readonly Player[], ceiling = 110): Player[] {
   const archetypeMeans = archetypeAttributeMeans(players);
   const populationStats = populationOvrStats(players);
   const archetypeStats = archetypeOvrRawStats(players);
-  return players.map((p) => applyFairnessPass(p, archetypeMeans, populationStats, ceiling, archetypeStats));
+  const ceilingStats = populationCeilingStats(players);
+  return players.map((p) => applyFairnessPass(p, archetypeMeans, populationStats, ceiling, archetypeStats, ceilingStats));
 }

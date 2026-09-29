@@ -69,7 +69,7 @@ export interface PlayerHonour {
   round: number | string;
 }
 
-export interface Player extends ImprovementRates, DeclineRates, RawAttributes {
+export interface Player extends ImprovementRates, DeclineRates, RawAttributes, CeilingAttributes {
   // --- Identity / bio ---
   PlayerID: number;
   Team: string;
@@ -375,6 +375,40 @@ export type RatedAttribute = (typeof RATED_ATTRIBUTES)[number];
  * exactly the same disclosed migration choice this round made for the real 825-player population).
  */
 export type RawAttributes = { [K in RatedAttribute as `raw_${K}`]?: number };
+
+/**
+ * Round C160 — [[End-of-2026 Player Database Refresh]]. One `ceiling_<attr>` column per
+ * `RatedAttribute`, the exact same mapped-type/CSV-column convention `RawAttributes` above already
+ * established for `raw_<attr>` (and, before that, `ImprovementRates`/`DeclineRates` for `imp_`/`deg_`).
+ * This is the new REAL per-attribute growth ceiling — replacing the old single-scalar, age-based
+ * `blendedPotentialFor` upside cap as the source of truth for a player's `POT`, and replacing
+ * Round C153's `ceilingFromPot`/`growthCeilingFor` inversion hack as the source of truth for
+ * `engine/progression.ts`'s `ageOnePlayer` real growth mechanism. See `engine/ratingGeneration.ts`'s
+ * `ceilingAttrValue`/`potRawComposite` and Schema.md's Round C160 section for the full architecture.
+ *
+ * **Invariant, enforced at every read (`progression.ts`'s `ceilingAttrValue`), not just at write
+ * time**: `ceiling_<attr> >= <attr>` always — a player can never have a ceiling below where they
+ * already are, the same spirit as Round C152's `clampCeilingToOwnAttributes` fix for the old
+ * frame-level `potentialTall`/`potentialMid` ceiling, now applied per-attribute.
+ *
+ * **Backfill, disclosed plainly (see Schema.md's Round C160 section for the full writeup)**: there is
+ * no real per-attribute scouting signal to initialize this from for the existing 825-player
+ * population, so the one-time migration (`scripts/migrateRoundC160Ceilings.ts`) sets
+ * `ceiling_<attr> = <attr> + (POT - OVR)` uniformly across all 20 attributes for every player — today's
+ * existing OVR-to-POT gap (already correctly carrying proven-trajectory qualifiers' wider gaps, the
+ * age-based upside factor, manual overrides, etc.) applied evenly, so the very first recompute under
+ * the new architecture reproduces each player's pre-round `POT` almost exactly, not an arbitrary
+ * reshuffle. From this point forward, differentiating which specific attributes have real headroom
+ * left (Sam Darcy's marking already being his ceiling, say, while his skill/read-play still have real
+ * room) is Tyler's own scouting judgment to apply via the Player Editor, exactly the same "editor as
+ * the differentiation mechanism going forward" shape Round C155 established for `attributeOverride`.
+ *
+ * Optional, same sparse-field convention as `RawAttributes`/`sc_trend_z`: a synthetic/test-fixture
+ * player (`draft.ts`'s generated prospects, `testUtils/makePlayer.ts`) has no CSV row and no ceiling
+ * recorded — `ceilingAttrValue`'s fallback (the old frame-level `potentialCeilingFor(p)`) keeps those
+ * callers compiling and behaving sensibly without needing per-attribute ceiling data of their own.
+ */
+export type CeilingAttributes = { [K in RatedAttribute as `ceiling_${K}`]?: number };
 
 // See RATED_ATTRIBUTES's own comment above for why this moved here instead of an inline `satisfies`.
 type _AssertRatedAttributesAreRealPlayerKeys = RatedAttribute extends keyof Player ? true : ["RATED_ATTRIBUTES contains a name that is not a real Player key"];

@@ -37,7 +37,8 @@ const METADATA_FIELDS = [
 ];
 
 let currentPlayer = null; // full detail from /api/players/:id
-let pendingChanges = {}; // attr -> new value
+let pendingChanges = {}; // attr -> new current value
+let pendingCeilingChanges = {}; // Round C160 — attr -> new ceiling_<attr> value
 let pendingMeta = {}; // metadata field -> new value
 let debounceTimer = null;
 let gridStale = true; // Round C158 Part C#2 — set true by any save so the Grid tab always refetches
@@ -71,6 +72,7 @@ async function selectPlayer(id, rowEl) {
   if (rowEl) rowEl.classList.add("active");
   currentPlayer = await api(`/api/players/${id}`);
   pendingChanges = {};
+  pendingCeilingChanges = {};
   renderEditor();
 }
 
@@ -108,18 +110,44 @@ function renderEditor() {
     groupEl.innerHTML = `<h3>${group.title}</h3>`;
     for (const attr of group.attrs) {
       const val = pendingChanges[attr] ?? p.attributes[attr];
+      const ceilingVal = pendingCeilingChanges[attr] ?? p.ceilings[attr];
       const row = document.createElement("div");
-      row.className = "attr-row";
+      row.className = "attr-row ceiling-row";
+      // Round C160 — two controls per attribute, per Tyler's own ask ("their current value as well
+      // as their maximum ceiling for that attribute"). The ceiling slider's own `min` is the CURRENT
+      // value (pending or saved) so it can never be dragged below it in the UI itself — the server
+      // (previewChange's invariant sweep) enforces the same rule independently regardless of what the
+      // client sends, so this is a UX convenience, not the only guard.
       row.innerHTML = `
         <label for="attr-${attr}">${attr}</label>
         <input type="range" id="attr-${attr}" min="40" max="110" step="1" value="${val}" />
         <span class="val" id="attr-${attr}-val">${val}</span>
+        <label for="ceiling-${attr}" class="ceiling-label">ceiling</label>
+        <input type="range" id="ceiling-${attr}" min="${val}" max="110" step="1" value="${Math.max(val, ceilingVal)}" />
+        <span class="val ceiling-val" id="ceiling-${attr}-val">${Math.max(val, ceilingVal)}</span>
       `;
-      const input = row.querySelector("input");
-      const valSpan = row.querySelector(".val");
+      const input = row.querySelector(`#attr-${attr}`);
+      const valSpan = row.querySelector(`#attr-${attr}-val`);
+      const ceilingInput = row.querySelector(`#ceiling-${attr}`);
+      const ceilingValSpan = row.querySelector(`#ceiling-${attr}-val`);
       input.addEventListener("input", () => {
         valSpan.textContent = input.value;
         pendingChanges[attr] = Number(input.value);
+        // Invariant, client-side: raising the current value above the ceiling slider's own position
+        // drags the ceiling slider up to match (never the other way round) — mirrors the server's own
+        // enforcement so the live preview never shows an inconsistent pair.
+        const cur = Number(input.value);
+        ceilingInput.min = String(cur);
+        if (Number(ceilingInput.value) < cur) {
+          ceilingInput.value = String(cur);
+          ceilingValSpan.textContent = ceilingInput.value;
+          pendingCeilingChanges[attr] = cur;
+        }
+        schedulePreview();
+      });
+      ceilingInput.addEventListener("input", () => {
+        ceilingValSpan.textContent = ceilingInput.value;
+        pendingCeilingChanges[attr] = Number(ceilingInput.value);
         schedulePreview();
       });
       groupEl.appendChild(row);
@@ -129,6 +157,7 @@ function renderEditor() {
   document.getElementById("saveBtn").addEventListener("click", doSave);
   document.getElementById("resetBtn").addEventListener("click", () => {
     pendingChanges = {};
+    pendingCeilingChanges = {};
     renderEditor();
   });
   document.getElementById("revertBtn").addEventListener("click", doRevert);
@@ -165,6 +194,7 @@ async function doRevert() {
     });
     currentPlayer = player;
     pendingChanges = {};
+    pendingCeilingChanges = {};
     gridStale = true;
     renderEditor();
     document.getElementById("saveStatus").textContent = `Reverted to formula. OVR ${result.before.OVR} -> ${result.after.OVR}, POT ${result.before.POT} -> ${result.after.POT}.`;
@@ -203,12 +233,15 @@ function schedulePreview() {
 }
 
 async function runPreview() {
-  if (!currentPlayer || Object.keys(pendingChanges).length === 0) return;
+  if (!currentPlayer || (Object.keys(pendingChanges).length === 0 && Object.keys(pendingCeilingChanges).length === 0)) return;
   try {
+    // Round C160 — the live OVR/POT preview now depends on BOTH change sets: POT is derived from the
+    // ceiling composite, so a ceiling-only edit (no current-value change at all) still needs a preview
+    // round-trip to show its POT effect.
     const result = await api("/api/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: currentPlayer.id, changes: pendingChanges }),
+      body: JSON.stringify({ id: currentPlayer.id, changes: pendingChanges, ceilingChanges: pendingCeilingChanges }),
     });
     updateReadout(result);
   } catch (err) {
@@ -243,11 +276,12 @@ async function doSave() {
     const { result, player } = await api("/api/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: currentPlayer.id, changes: pendingChanges }),
+      body: JSON.stringify({ id: currentPlayer.id, changes: pendingChanges, ceilingChanges: pendingCeilingChanges }),
     });
     statusEl.textContent = `Saved. OVR ${currentPlayer.OVR} -> ${result.after.OVR}, POT ${currentPlayer.POT} -> ${result.after.POT}. attributeOverride set.`;
     currentPlayer = player;
     pendingChanges = {};
+    pendingCeilingChanges = {};
     gridStale = true; // Round C158 Part C#2 — force the Grid tab to refetch next time it's shown
     renderEditor();
     document.getElementById("saveStatus").textContent = `Saved OK. OVR now ${player.OVR}, POT now ${player.POT}.`;

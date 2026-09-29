@@ -126,7 +126,10 @@ const server = createServer(async (req, res) => {
       const p = findPlayer(pop, id);
       if (!p) return sendJson(res, 404, { error: `No player with id ${id}` });
       const changes = parseChanges(body.changes);
-      return sendJson(res, 200, previewChange(pop, p, changes));
+      // Round C160 — `ceilingChanges` (optional): the new ceiling sliders' pending edits, same shape
+      // as `changes`. Both feed the same live OVR/POT preview now, since POT is derived from ceilings.
+      const ceilingChanges = parseChanges(body.ceilingChanges);
+      return sendJson(res, 200, previewChange(pop, p, changes, ceilingChanges));
     }
 
     if (req.method === "POST" && url.pathname === "/api/save") {
@@ -134,7 +137,8 @@ const server = createServer(async (req, res) => {
       const id = Number(body.id);
       if (!findPlayer(pop, id)) return sendJson(res, 404, { error: `No player with id ${id}` });
       const changes = parseChanges(body.changes);
-      const { result, player } = saveChange(pop, id, changes);
+      const ceilingChanges = parseChanges(body.ceilingChanges);
+      const { result, player } = saveChange(pop, id, changes, ceilingChanges);
       return sendJson(res, 200, { result, player: playerDetail(pop, player) });
     }
 

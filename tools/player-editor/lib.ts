@@ -28,12 +28,13 @@ import { dirname, join } from "node:path";
 import { parseCsv, parseCsvToObjects } from "../../scripts/csv.ts";
 import { coerceRow } from "../../scripts/buildData.ts";
 import { RATED_ATTRIBUTES, type Player, type RatedAttribute } from "../../src/types/player.ts";
-import { populationOvrStats, isActiveRealStatus } from "../../src/engine/progression.ts";
+import { populationOvrStats, isActiveRealStatus, ceilingAttrValue } from "../../src/engine/progression.ts";
 import {
   archetypeAttributeMeans,
   archetypeOvrRawStats,
   applyFairnessPass,
   careerGamesFor,
+  populationCeilingStats,
 } from "../../src/engine/ratingGeneration.ts";
 import { prestigeBonusFor } from "../../src/engine/prestige.ts";
 import { AttributeZScorer } from "../../src/engine/attributeGeneration.ts";
@@ -58,6 +59,17 @@ function setRawAttr(p: Record<string, unknown>, a: RatedAttribute, value: number
   p[rawColumn(a)] = value;
 }
 
+/** Round C160 — [[End-of-2026 Player Database Refresh]]. The 20 new `ceiling_<attr>` CSV columns
+ * (`types/player.ts`'s `CeilingAttributes`) — the real per-attribute growth ceiling, and (via
+ * `ratingGeneration.ts`'s `potRawComposite`) the new source of truth for `POT`. Same dynamic-key
+ * convention as `rawColumn`/`setRawAttr` above. */
+function ceilingColumn(a: RatedAttribute): string {
+  return `ceiling_${a}`;
+}
+function setCeilingAttr(p: Record<string, unknown>, a: RatedAttribute, value: number): void {
+  p[ceilingColumn(a)] = value;
+}
+
 function csvField(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "boolean") return value ? "1" : "0";
@@ -74,6 +86,9 @@ export interface Population {
   archetypeMeans: ReturnType<typeof archetypeAttributeMeans>;
   populationStats: { mean: number; stdDev: number };
   archetypeStats: ReturnType<typeof archetypeOvrRawStats>;
+  /** Round C160 — the ceiling-composite population reference `applyFairnessPass` needs to turn a
+   * player's ceiling composite into a `POT` number (`ratingGeneration.ts`'s `populationCeilingStats`). */
+  ceilingStats: { mean: number; stdDev: number };
 }
 
 /** Loads `players_master.csv` and computes the three population-reference stats ONCE — the exact
@@ -98,12 +113,18 @@ export function loadPopulation(): Population {
     const col = rawColumn(a);
     if (!header.includes(col)) header.push(col);
   }
+  // Round C160 — same defensive completeness for the 20 new ceiling_<attr> columns.
+  for (const a of RATED_ATTRIBUTES) {
+    const col = ceilingColumn(a);
+    if (!header.includes(col)) header.push(col);
+  }
   return {
     header,
     players,
     archetypeMeans: archetypeAttributeMeans(players),
     populationStats: populationOvrStats(players),
     archetypeStats: archetypeOvrRawStats(players),
+    ceilingStats: populationCeilingStats(players),
   };
 }
 
@@ -190,6 +211,11 @@ export function searchPlayers(pop: Population, query: string): PlayerSummary[] {
 
 export interface PlayerDetail extends PlayerSummary {
   attributes: Record<RatedAttribute, number>;
+  /** Round C160 — each attribute's real, persisted growth ceiling (`ceiling_<attr>`, already
+   * invariant-clamped `>= attributes[attr]` via `ceilingAttrValue`'s own read-time enforcement — see
+   * that function's doc comment). This is what the Player Editor's new ceiling sliders show/edit, and
+   * what `POT`'s new composite-of-ceilings formula reads. */
+  ceilings: Record<RatedAttribute, number>;
   potentialTall: number;
   potentialMid: number;
   careerGames: number;
@@ -211,12 +237,15 @@ export function findPlayer(pop: Population, id: number): Player | undefined {
 export function playerDetail(pop: Population, p: Player): PlayerDetail {
   const attributes = {} as Record<RatedAttribute, number>;
   for (const a of RATED_ATTRIBUTES) attributes[a] = p[a];
+  const ceilings = {} as Record<RatedAttribute, number>;
+  for (const a of RATED_ATTRIBUTES) ceilings[a] = ceilingAttrValue(p, a);
   const metadata: Record<string, string | number> = {};
   for (const f of METADATA_FIELDS) metadata[f] = (p as unknown as Record<string, string | number>)[f];
   const name = p.realFullName ?? `${p.fname} ${p.lname}`;
   return {
     ...summarize(p),
     attributes,
+    ceilings,
     potentialTall: p.potentialTall,
     potentialMid: p.potentialMid,
     careerGames: careerGamesFor(p),
@@ -228,8 +257,8 @@ export function playerDetail(pop: Population, p: Player): PlayerDetail {
 }
 
 export interface PreviewResult {
-  before: { OVR: number; POT: number; attributes: Record<RatedAttribute, number> };
-  after: { OVR: number; POT: number; attributes: Record<RatedAttribute, number> };
+  before: { OVR: number; POT: number; attributes: Record<RatedAttribute, number>; ceilings: Record<RatedAttribute, number> };
+  after: { OVR: number; POT: number; attributes: Record<RatedAttribute, number>; ceilings: Record<RatedAttribute, number> };
   shrinkageApplied: boolean;
 }
 
@@ -263,7 +292,28 @@ export interface PreviewResult {
  * save (now an `attributeOverride` player, unconditionally shrink-skipped) reads back exactly what
  * was saved, forever — no drift, no re-shrink, on any future call from anywhere.
  */
-export function previewChange(pop: Population, p: Player, changes: Partial<Record<RatedAttribute, number>>): PreviewResult {
+/**
+ * Round C160 — `ceilingChanges` (new, optional second changes map): a partial map of
+ * `RatedAttribute -> new ceiling_<attr> value`, exactly mirroring `changes`' own shape but for the
+ * ceiling sliders the editor now shows alongside the current-value sliders (Tyler's own ask — "their
+ * current value as well as their maximum ceiling for that attribute"). Applied to `candidate` the same
+ * way `changes` is: a direct, deliberate write, no shrinkage (ceiling values were never subject to
+ * `shrinkAttributesForSmallSample` — only the live/raw attribute pair is).
+ *
+ * **The `ceiling_<attr> >= <attr>` invariant, enforced here too, not just at read-time.** If `changes`
+ * pushes an attribute's CURRENT value above its OWN existing (or just-edited) ceiling, the ceiling is
+ * silently raised to match rather than left inconsistent — the same "only ever raises, never lowers"
+ * spirit `clampCeilingToOwnAttributes` established for the old frame-level ceiling. If `ceilingChanges`
+ * itself requests a ceiling below the (possibly just-changed) current value, it's clamped up to that
+ * current value — the UI's own ceiling-slider `min` already prevents this in normal use, but the
+ * server-side write path enforces it independently regardless of what the client sends.
+ */
+export function previewChange(
+  pop: Population,
+  p: Player,
+  changes: Partial<Record<RatedAttribute, number>>,
+  ceilingChanges: Partial<Record<RatedAttribute, number>> = {},
+): PreviewResult {
   const candidate: Player = { ...p };
   for (const [attr, value] of Object.entries(changes)) {
     if (value === undefined) continue;
@@ -271,19 +321,35 @@ export function previewChange(pop: Population, p: Player, changes: Partial<Recor
     candidate[attr as RatedAttribute] = v;
     setRawAttr(candidate as unknown as Record<string, unknown>, attr as RatedAttribute, v);
   }
-  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
-  const after = applyFairnessPass(candidate, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
+  for (const [attr, value] of Object.entries(ceilingChanges)) {
+    if (value === undefined) continue;
+    const v = Math.max(40, Math.min(110, Math.round(value)));
+    setCeilingAttr(candidate as unknown as Record<string, unknown>, attr as RatedAttribute, v);
+  }
+  // Invariant sweep — AFTER both change sets are applied, so a current-value raise and a ceiling edit
+  // in the same request are reconciled together, not order-dependent.
+  for (const a of RATED_ATTRIBUTES) {
+    const current = candidate[a];
+    const stored = (candidate as unknown as Record<string, number | undefined>)[ceilingColumn(a)];
+    if (stored !== undefined && stored < current) setCeilingAttr(candidate as unknown as Record<string, unknown>, a, current);
+  }
+  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, pop.ceilingStats);
+  const after = applyFairnessPass(candidate, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, pop.ceilingStats);
   const beforeAttrs = {} as Record<RatedAttribute, number>;
   const afterAttrs = {} as Record<RatedAttribute, number>;
+  const beforeCeilings = {} as Record<RatedAttribute, number>;
+  const afterCeilings = {} as Record<RatedAttribute, number>;
   let shrinkageApplied = false;
   for (const a of RATED_ATTRIBUTES) {
     beforeAttrs[a] = before[a];
     afterAttrs[a] = after[a];
+    beforeCeilings[a] = ceilingAttrValue(before, a);
+    afterCeilings[a] = ceilingAttrValue(after, a);
     if (changes[a] !== undefined && after[a] !== Math.max(40, Math.min(110, Math.round(changes[a]!)))) shrinkageApplied = true;
   }
   return {
-    before: { OVR: before.OVR, POT: before.POT, attributes: beforeAttrs },
-    after: { OVR: after.OVR, POT: after.POT, attributes: afterAttrs },
+    before: { OVR: before.OVR, POT: before.POT, attributes: beforeAttrs, ceilings: beforeCeilings },
+    after: { OVR: after.OVR, POT: after.POT, attributes: afterAttrs, ceilings: afterCeilings },
     shrinkageApplied,
   };
 }
@@ -351,10 +417,15 @@ function writeSingleRow(id: number, header: string[], updatedRow: Record<string,
  * sets `attributeOverride=1` for this player — see this file's own top doc comment and Schema.md's
  * Round C155/C158 sections. Round C158: the CSV write is now scoped to exactly this player's own
  * line (`writeSingleRow`), never the rest of the file. */
-export function saveChange(pop: Population, id: number, changes: Partial<Record<RatedAttribute, number>>): { result: PreviewResult; player: Player } {
+export function saveChange(
+  pop: Population,
+  id: number,
+  changes: Partial<Record<RatedAttribute, number>>,
+  ceilingChanges: Partial<Record<RatedAttribute, number>> = {},
+): { result: PreviewResult; player: Player } {
   const p = findPlayer(pop, id);
   if (!p) throw new Error(`No player with id ${id}`);
-  const result = previewChange(pop, p, changes);
+  const result = previewChange(pop, p, changes, ceilingChanges);
 
   const updated: Player & { attributeOverride?: boolean } = { ...p };
   for (const a of RATED_ATTRIBUTES) {
@@ -367,6 +438,10 @@ export function saveChange(pop: Population, id: number, changes: Partial<Record<
     // frozen" (Schema.md's Round C159 section), and it's what a future "revert to formula" (which
     // regenerates real raw AND clears attributeOverride) correctly replaces wholesale.
     setRawAttr(updated as unknown as Record<string, unknown>, a, result.after.attributes[a]);
+    // Round C160 — persist the (possibly invariant-raised) ceiling for every attribute, same
+    // "freeze the whole vector on every save" treatment as raw above, so `ceiling_<attr>` on disk
+    // always matches what the preview actually showed and used to compute `POT`.
+    setCeilingAttr(updated as unknown as Record<string, unknown>, a, result.after.ceilings[a]);
   }
   updated.OVR = result.after.OVR;
   updated.POT = result.after.POT;
@@ -469,13 +544,25 @@ export function revertToFormula(pop: Population, id: number): { result: PreviewR
   // other real-stat-refreshed player.
   const freshBase: Player = { ...p, ...freshAttrs, attributeOverride: false } as Player;
   for (const a of RATED_ATTRIBUTES) setRawAttr(freshBase as unknown as Record<string, unknown>, a, freshAttrs[a]);
-  const after = applyFairnessPass(freshBase, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
-  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
+  const after = applyFairnessPass(freshBase, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, pop.ceilingStats);
+  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, pop.ceilingStats);
   const beforeAttrs = {} as Record<RatedAttribute, number>;
   const afterAttrs = {} as Record<RatedAttribute, number>;
+  const beforeCeilings = {} as Record<RatedAttribute, number>;
+  const afterCeilings = {} as Record<RatedAttribute, number>;
   for (const a of RATED_ATTRIBUTES) {
     beforeAttrs[a] = before[a];
     afterAttrs[a] = after[a];
+    beforeCeilings[a] = ceilingAttrValue(before, a);
+    // Round C160 — `ceiling_<attr>` is deliberately NOT regenerated here. It's Tyler's own persisted
+    // scouting judgment about a player's real upside (backfilled, then his own to differentiate via
+    // the editor), not a real-stat-derived quantity `AttributeZScorer` has any signal for — "revert to
+    // formula" only ever meant "the 20 RATED_ATTRIBUTES," never the ceiling vector. The one thing this
+    // DOES need to guard is the invariant: if the fresh real-stat regeneration pushes an attribute
+    // ABOVE its existing stored ceiling, the ceiling is raised to match (never left inconsistent) —
+    // `ceilingAttrValue` already does exactly this at read time (`Math.max(p[a], ...)`), so reading it
+    // off `after` here is sufficient; nothing further needs writing unless it actually moved.
+    afterCeilings[a] = ceilingAttrValue(after, a);
   }
   const updated: Player & { attributeOverride?: boolean } = { ...p };
   for (const a of RATED_ATTRIBUTES) {
@@ -485,6 +572,9 @@ export function revertToFormula(pop: Population, id: number): { result: PreviewR
     // this real baseline exactly like every other non-overridden player, not treat their live value
     // as already-raw (that would just reintroduce ROADMAP #115's bug for this one player).
     setRawAttr(updated as unknown as Record<string, unknown>, a, freshAttrs[a]);
+    // Persist the invariant-enforced ceiling (see comment above) — a no-op write for the overwhelming
+    // majority of players whose ceiling already sat above the freshly-regenerated attribute.
+    setCeilingAttr(updated as unknown as Record<string, unknown>, a, afterCeilings[a]);
   }
   updated.OVR = after.OVR;
   updated.POT = after.POT;
@@ -497,8 +587,8 @@ export function revertToFormula(pop: Population, id: number): { result: PreviewR
 
   return {
     result: {
-      before: { OVR: before.OVR, POT: before.POT, attributes: beforeAttrs },
-      after: { OVR: after.OVR, POT: after.POT, attributes: afterAttrs },
+      before: { OVR: before.OVR, POT: before.POT, attributes: beforeAttrs, ceilings: beforeCeilings },
+      after: { OVR: after.OVR, POT: after.POT, attributes: afterAttrs, ceilings: afterCeilings },
       shrinkageApplied: true,
     },
     player: updated,

@@ -44,6 +44,23 @@ import { qualifiesForProvenTrajectory, PROVEN_TRAJECTORY_GAMES_BONUS, MAX_QUALIF
  * `ovrFromRawComposite` machinery unchanged.
  */
 
+/**
+ * Round C159 — [[End-of-2026 Player Database Refresh]] / ROADMAP #115. `raw_<attr>` accessor for
+ * one player: the persisted PRE-shrinkage baseline `types/player.ts`'s `RawAttributes` adds, or the
+ * live value as a one-time fallback for a player who's never had a raw baseline recorded (a
+ * synthetic/test-fixture player, or — for the real 825-player population specifically — this
+ * round's own one-time migration, which explicitly treats "current live value" as the starting raw
+ * baseline going forward; see Schema.md's Round C159 section for that disclosed limitation). Every
+ * REAL caller of `shrinkAttributesForSmallSample`/`archetypeAttributeMeans` should always find a
+ * real `raw_<attr>` present after this round's migration — the fallback exists for callers this
+ * round's migration script never touches (test fixtures, `draft.ts` prospects), not as an ongoing
+ * production code path.
+ */
+export function rawAttrValue(p: Player, a: RatedAttribute): number {
+  const raw = (p as unknown as Record<string, number | undefined>)[`raw_${a}`];
+  return raw ?? p[a];
+}
+
 /** Career games at which a player's own real stats are trusted exactly half as much as their archetype's population-average attributes (`shrinkageWeight(30) === 0.5`) — Tyler's own confirmed number (round 125, "~30 games recommended"). */
 export const SHRINKAGE_K = 30;
 
@@ -66,7 +83,24 @@ export function careerGamesFor(p: Player): number {
   return real ?? p.stat_GM;
 }
 
-/** Population mean per rated attribute, split by archetype — computed fresh off whichever population is passed in, never hardcoded, so it stays correct as the pool composition changes (new draft classes, delistings, etc). This is the "plausible player of this type" prior a thin-sample player's own noisy attributes get pulled toward. */
+/**
+ * Population mean per rated attribute, split by archetype — computed fresh off whichever population
+ * is passed in, never hardcoded, so it stays correct as the pool composition changes (new draft
+ * classes, delistings, etc). This is the "plausible player of this type" prior a thin-sample
+ * player's own noisy attributes get pulled toward.
+ *
+ * **Round C159** — this now averages each player's `rawAttrValue` (the persisted, pre-shrinkage
+ * baseline), not their live/display `RatedAttribute` (the old behaviour, and the root cause of
+ * ROADMAP #115's non-idempotency: a mean built from LIVE values pulls in whatever shrinkage already
+ * did to every other player, which itself depends on THIS mean from whenever it was last computed —
+ * a live-value-dependent feedback loop that only converges after several repeated calls, never
+ * exactly, because the live values it depends on keep being redefined as fresh input on every call).
+ * Built from `rawAttrValue` instead, this mean is a pure function of each player's persisted raw
+ * baseline (which itself only changes on a genuine fresh-stat-generation event) and is therefore
+ * IDENTICAL across repeated calls with no new input — see `shrinkAttributesForSmallSample`'s own doc
+ * comment for why that, combined with this, makes the whole shrinkage step a true fixed point after
+ * at most one population-wide pass off a freshly-persisted raw baseline.
+ */
 export function archetypeAttributeMeans(players: readonly Player[]): Record<string, Record<RatedAttribute, number>> {
   const sums = new Map<string, Record<RatedAttribute, number>>();
   const counts = new Map<string, number>();
@@ -84,7 +118,7 @@ export function archetypeAttributeMeans(players: readonly Player[]): Record<stri
       counts.set(arc, 0);
     }
     const s = sums.get(arc)!;
-    for (const a of RATED_ATTRIBUTES) s[a] += p[a];
+    for (const a of RATED_ATTRIBUTES) s[a] += rawAttrValue(p, a);
     counts.set(arc, (counts.get(arc) ?? 0) + 1);
   }
   const out: Record<string, Record<RatedAttribute, number>> = {};
@@ -100,6 +134,21 @@ export function archetypeAttributeMeans(players: readonly Player[]): Record<stri
  * real career games. Returns a NEW attribute set (does not mutate `p`) — a no-op in practice once
  * `shrinkageWeight` has converged near 1 for an established player. `archetypeMeans` should come
  * from `archetypeAttributeMeans` run across the full population this player belongs to.
+ *
+ * **Round C159 — [[End-of-2026 Player Database Refresh]] / ROADMAP #115, the structural fix.** This
+ * now blends `rawAttrValue(p, a)` (the persisted, pre-shrinkage baseline) toward the archetype mean
+ * — NOT the live `p[a]` this function read before this round. That one substitution is the entire
+ * root-cause fix Round C158 root-caused but deliberately didn't attempt: the OLD behaviour treated
+ * "whatever's currently stored in `p[a]`" as if it were always fresh, unshrunk, real-stat-derived
+ * input — but for any player not freshly regenerated that round (an `attributeOverride` player, a
+ * player with no current-season stat row, or simply a round that didn't touch them), `p[a]` was
+ * already the OUTPUT of a PRIOR call to this exact function. Calling a shrink-toward-a-prior
+ * estimator on its own prior output, repeatedly, is a geometric contraction toward the mean with no
+ * fixed point — confirmed empirically in Round C158 (Wanganeen-Milera's agility 83→82→81 across two
+ * successive calls with zero new input). Reading from `rawAttrValue` instead makes this function's
+ * result depend ONLY on `p`'s persisted raw baseline, `careerGames`, and `archetypeMeans` — none of
+ * which change from one call to the next when nothing new happened — so repeated calls with the same
+ * inputs now always produce the IDENTICAL output, by construction, not by convergence.
  */
 export function shrinkAttributesForSmallSample(
   p: Player,
@@ -110,11 +159,13 @@ export function shrinkAttributesForSmallSample(
   const means = archetypeMeans[p.archetype];
   const out = {} as Record<RatedAttribute, number>;
   for (const a of RATED_ATTRIBUTES) {
-    const prior = means?.[a] ?? p[a];
+    const raw = rawAttrValue(p, a);
+    const prior = means?.[a] ?? raw;
     // Round C147: clip moved to the new 40-110 attribute scale (see attributeGeneration.ts's own
     // rescale doc comment) — the shrinkage MECHANISM (blend toward archetype mean, weighted by
-    // career games) is completely unchanged.
-    out[a] = Math.max(40, Math.min(110, Math.round(weight * p[a] + (1 - weight) * prior)));
+    // career games) is completely unchanged. Round C159: blends from `raw`, not `p[a]` — see this
+    // function's own new doc paragraph above.
+    out[a] = Math.max(40, Math.min(110, Math.round(weight * raw + (1 - weight) * prior)));
   }
   return out;
 }
@@ -290,7 +341,6 @@ export function applyFairnessPass(
   populationStats: { mean: number; stdDev: number },
   ceiling = 110, // Round C147: new default rescale ceiling (was 99) — see progression.ts's ovrFromRawComposite
   archetypeOvrStats?: Record<string, { mean: number; stdDev: number }>,
-  skipShrinkForOverride = false,
 ): Player {
   // Round C148 — provenTrajectory.ts's objective rule, checked against p's FRESH (pre-shrinkage)
   // real-stat-derived attributes, exactly as that file's own doc comment requires. Round C151: also
@@ -298,16 +348,21 @@ export function applyFairnessPass(
   // updated) for the new archetype-relative fallback.
   const proven = qualifiesForProvenTrajectory(p, populationStats, archetypeOvrStats?.[p.archetype]);
   const careerGames = careerGamesFor(p) + (proven ? PROVEN_TRAJECTORY_GAMES_BONUS : 0);
-  // Round C158 — `skipShrinkForOverride` (default false; every existing/real refresh-round caller
-  // omits it and keeps today's exact, unchanged behaviour). Confirmed via a live before/after/before
-  // scratch test (Schema.md's Round C158 section) that `shrinkAttributesForSmallSample` is NOT a
-  // fixed point of its own output: called again on attributes that are themselves already the
-  // output of a prior shrink (rather than fresh real-stat data), it shrinks them further toward the
-  // archetype mean every time. The Player Editor tool (`tools/player-editor/lib.ts`) is the one
-  // caller that can genuinely re-invoke this on a player's OWN already-shrunk, already-`attributeOverride`
-  // output (repeated saves of the same manual edit) — passing `true` there stops a player's untouched
-  // attributes from silently drifting further from what Tyler actually set on every additional save.
-  const skipShrink = skipShrinkForOverride && !!p.attributeOverride;
+  // Round C158 introduced an opt-in `skipShrinkForOverride` parameter here, defaulted false for
+  // every real refresh-round caller — meaning an `attributeOverride` player's frozen attributes
+  // STILL got run back through `shrinkAttributesForSmallSample` on every ordinary population-wide
+  // refresh (`recomputeOVRWithShrinkage` never passed the flag), which is exactly backwards: the
+  // whole point of `attributeOverride` is that these ARE Tyler's own deliberate final values, not
+  // formula output subject to the archetype-mean pull.
+  //
+  // Round C159 — [[End-of-2026 Player Database Refresh]] / ROADMAP #115: that gate is now
+  // UNCONDITIONAL rather than caller-opt-in. Every `attributeOverride` player skips shrinkage on
+  // EVERY call, real refresh round or Player Editor save alike — never re-shrunk regardless of who's
+  // calling. This is the direct fix for the "must never be silently re-shrunk" half of #115's
+  // migration brief, and it makes the removed `skipShrinkForOverride` parameter redundant (every
+  // real call site already wanted this exact behaviour; the parameter only existed because the
+  // override check used to need an explicit caller opt-in to reach it at all).
+  const skipShrink = !!p.attributeOverride;
   const shrunkAttrs = p.ovrOverride || skipShrink ? null : shrinkAttributesForSmallSample(p, careerGames, archetypeMeans);
   const next: Player = shrunkAttrs ? { ...p, ...shrunkAttrs } : { ...p };
   if (!p.ovrOverride) {

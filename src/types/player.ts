@@ -69,7 +69,7 @@ export interface PlayerHonour {
   round: number | string;
 }
 
-export interface Player extends ImprovementRates, DeclineRates {
+export interface Player extends ImprovementRates, DeclineRates, RawAttributes {
   // --- Identity / bio ---
   PlayerID: number;
   Team: string;
@@ -346,9 +346,40 @@ export const RATED_ATTRIBUTES = [
   "positioning",
   "copeWithPressure",
   "kickMaxDistance",
-] as const satisfies readonly (keyof Player)[];
-
+] as const;
+// Round C159 — this `satisfies readonly (keyof Player)[]` check used to live inline on the array
+// literal above, but `Player` now extends `RawAttributes` (below), which is itself keyed off
+// `RatedAttribute` (== `typeof RATED_ATTRIBUTES[number]`) — an inline check here would make `Player`
+// circularly depend on its own definition via `RATED_ATTRIBUTES -> Player -> RawAttributes ->
+// RatedAttribute -> RATED_ATTRIBUTES`. Moved to a standalone one-directional assertion (after
+// `Player`/`RawAttributes` are both fully defined) so it still fails to compile if any string above
+// stops being a real `Player` key, without creating that cycle.
 export type RatedAttribute = (typeof RATED_ATTRIBUTES)[number];
+
+/**
+ * Round C159 — [[End-of-2026 Player Database Refresh]] / ROADMAP #115. One `raw_<attr>` column per
+ * `RatedAttribute`, mirroring the `imp_`/`deg_` mapped-type convention `ImprovementRates`/
+ * `DeclineRates` already establish above. This is the persisted, PRE-shrinkage baseline
+ * `engine/ratingGeneration.ts`'s `shrinkAttributesForSmallSample`/`archetypeAttributeMeans` now
+ * read from instead of the live `RatedAttribute` columns — see that file's own doc comment and
+ * Schema.md's Round C159 section for the full root cause this closes (`shrinkAttributesForSmallSample`
+ * was never a fixed point of its own output because it always treated "whatever's currently stored"
+ * as fresh input, silently compounding shrinkage every time a round's refresh ran on a player who
+ * wasn't freshly regenerated from real per-game stats that round).
+ *
+ * Optional (like every sparse-field convention in this file, `sc_trend_z` etc.) because synthetic
+ * players built by hand (`draft.ts`'s generated prospects, `testUtils/makePlayer.ts`'s test
+ * fixtures) have no CSV row and no raw baseline recorded — `ratingGeneration.ts`'s new
+ * `rawAttrValue` helper falls back to the LIVE value for any player missing a given `raw_<attr>`,
+ * so those callers keep compiling and behaving sensibly (a one-time "treat current as raw" no-op,
+ * exactly the same disclosed migration choice this round made for the real 825-player population).
+ */
+export type RawAttributes = { [K in RatedAttribute as `raw_${K}`]?: number };
+
+// See RATED_ATTRIBUTES's own comment above for why this moved here instead of an inline `satisfies`.
+type _AssertRatedAttributesAreRealPlayerKeys = RatedAttribute extends keyof Player ? true : ["RATED_ATTRIBUTES contains a name that is not a real Player key"];
+const _ratedAttributesAreRealPlayerKeys: _AssertRatedAttributesAreRealPlayerKeys = true;
+void _ratedAttributesAreRealPlayerKeys;
 
 export function playerFullName(p: Pick<Player, "fname" | "lname">): string {
   return `${p.fname} ${p.lname}`;

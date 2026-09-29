@@ -48,6 +48,16 @@ const BACKUP_PATH = join(__dirname, "..", "..", "data", "players_master.pre-roun
 /** New Round C155 CSV column — see this tool's own doc comment / Schema.md's Round C155 section for the full design. Written as "1"/"0" like `ovrOverride`/`potOverride` already are. */
 export const ATTRIBUTE_OVERRIDE_COLUMN = "attributeOverride";
 
+/** Round C159 — [[End-of-2026 Player Database Refresh]] / ROADMAP #115: the 20 new `raw_<attr>`
+ * CSV columns `types/player.ts`'s `RawAttributes` adds. `setRawAttr` writes one, matching the same
+ * dynamic-key convention this file already uses for `RatedAttribute`s. */
+function rawColumn(a: RatedAttribute): string {
+  return `raw_${a}`;
+}
+function setRawAttr(p: Record<string, unknown>, a: RatedAttribute, value: number): void {
+  p[rawColumn(a)] = value;
+}
+
 function csvField(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "boolean") return value ? "1" : "0";
@@ -80,6 +90,14 @@ export function loadPopulation(): Population {
   // (Round C155) and coerces it to a real boolean, same as `ovrOverride`/`potOverride`.
   const players: Player[] = rawRows.map(coerceRow);
   if (!header.includes(ATTRIBUTE_OVERRIDE_COLUMN)) header.push(ATTRIBUTE_OVERRIDE_COLUMN);
+  // Round C159 — defensive completeness, same convention as ATTRIBUTE_OVERRIDE_COLUMN just above:
+  // a live CSV that's already been through this round's migration always has every raw_<attr>
+  // column already, but this guards a hand-edited or pre-migration CSV from silently losing the
+  // column set on save.
+  for (const a of RATED_ATTRIBUTES) {
+    const col = rawColumn(a);
+    if (!header.includes(col)) header.push(col);
+  }
   return {
     header,
     players,
@@ -222,32 +240,39 @@ export interface PreviewResult {
  * preview endpoint, or this round's own tuning script) can see exactly what moved and by how much,
  * including any shrinkage pull the fairness pass itself introduces. */
 /**
- * Round C158 — `skipShrinkForOverride` (default `true` here, the editor's own tuning path): see
- * `ratingGeneration.ts`'s `applyFairnessPass` doc comment and Schema.md's Round C158 section for
- * the full empirical finding. `shrinkAttributesForSmallSample` is NOT a fixed point of its own
- * output — invoked again on attributes that are themselves already the result of a prior shrink
- * (exactly what happens on a SECOND save of the SAME player through this tool, since the first
- * save's fairness-shrunk output becomes the second save's input), it pulls them further toward the
- * archetype mean every time, with no attribute change from Tyler at all. Passing `true` here stops
- * that: once a player already carries `attributeOverride=1` (i.e. this isn't their first save),
- * their UNTOUCHED attributes pass straight through on every subsequent save — only the attribute(s)
- * actually named in `changes` move, exactly matching what the slider says. A player's FIRST save
- * (attributeOverride still false, real-stat-derived input) is unaffected — shrinkage still applies
- * exactly as before, since that input genuinely is fresh.
+ * Round C158 built a `skipShrinkForOverride` opt-in on `applyFairnessPass` so a SECOND save of the
+ * SAME player wouldn't keep re-shrinking their untouched attributes toward the archetype mean
+ * (`shrinkAttributesForSmallSample` was never a fixed point of its own prior output — see
+ * Schema.md's Round C158 section). Round C159 root-caused and fixed that at its actual source
+ * (`ratingGeneration.ts`'s `shrinkAttributesForSmallSample`/`archetypeAttributeMeans` now always
+ * blend from a persisted, never-overwritten-by-shrink `raw_<attr>` baseline, not from "whatever's
+ * currently stored") and made `attributeOverride`'s shrink-skip UNCONDITIONAL inside
+ * `applyFairnessPass` itself — so this function no longer needs to opt into it.
+ *
+ * **What this function now does instead, to keep a manual slider edit correct under the new
+ * architecture**: a manual edit IS a genuine fresh, deliberate input for the attribute(s) actually
+ * being touched — exactly the same class of event `refreshPlayerStats2026.ts`'s real-stat
+ * regeneration is for the 20 attributes it touches. So before running the fairness pass, this
+ * function updates `candidate`'s `raw_<attr>` for every touched attribute to Tyler's own new value
+ * (untouched attributes keep whatever raw baseline they already had — no change for them). On a
+ * player's FIRST save (`attributeOverride` still false), this makes the fairness pass's shrink step
+ * blend from Tyler's ACTUAL new value for the edited attribute(s), not a stale prior raw snapshot —
+ * matching the historically-observed, intentional behaviour that a low-career-games player's manual
+ * edit is still genuinely partially pulled toward the archetype mean. `saveChange` (below) then
+ * freezes the REST of the player's raw baseline to match on the actual save, so every subsequent
+ * save (now an `attributeOverride` player, unconditionally shrink-skipped) reads back exactly what
+ * was saved, forever — no drift, no re-shrink, on any future call from anywhere.
  */
-export function previewChange(
-  pop: Population,
-  p: Player,
-  changes: Partial<Record<RatedAttribute, number>>,
-  skipShrinkForOverride = true,
-): PreviewResult {
+export function previewChange(pop: Population, p: Player, changes: Partial<Record<RatedAttribute, number>>): PreviewResult {
   const candidate: Player = { ...p };
   for (const [attr, value] of Object.entries(changes)) {
     if (value === undefined) continue;
-    candidate[attr as RatedAttribute] = Math.max(40, Math.min(110, Math.round(value)));
+    const v = Math.max(40, Math.min(110, Math.round(value)));
+    candidate[attr as RatedAttribute] = v;
+    setRawAttr(candidate as unknown as Record<string, unknown>, attr as RatedAttribute, v);
   }
-  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, skipShrinkForOverride);
-  const after = applyFairnessPass(candidate, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, skipShrinkForOverride);
+  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
+  const after = applyFairnessPass(candidate, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
   const beforeAttrs = {} as Record<RatedAttribute, number>;
   const afterAttrs = {} as Record<RatedAttribute, number>;
   let shrinkageApplied = false;
@@ -278,6 +303,22 @@ function csvLineFor(header: string[], row: Record<string, unknown>): string {
  * copy) and only ever touching the one matching line makes single-row scoping a structural
  * guarantee, not an emergent property of today's code. Mandatory per Round C158's Part A brief for
  * every save path this tool exposes (attribute edits, metadata edits, revert-to-formula).
+ *
+ * **Round C159 fix, found while re-verifying this exact function for ROADMAP #115**: `loadPopulation`
+ * dynamically `header.push()`es a column the in-memory `header` array needs but the ON-DISK header
+ * line doesn't have yet (e.g. `ATTRIBUTE_OVERRIDE_COLUMN`/the new `raw_<attr>` columns, for any CSV
+ * that predates them — real right now, since Round C158's revert to the pre-C155 base stripped
+ * `attributeOverride` out of the CSV entirely and nothing since has put the column name back in the
+ * header row itself). The OLD `writeSingleRow` only ever touched the ONE data line, never line 0 —
+ * so a save using a dynamically-added column wrote that column's VALUE into the row (a trailing
+ * field past the header's own column count) while the header row on disk still didn't list it,
+ * making that value permanently unreachable on the next load (`parseCsvToObjects` keys every field
+ * by its position in the header row it read, so a value past the last header entry is silently
+ * dropped). Confirmed empirically, not just reasoned about: a live before/after/before save-3x test
+ * against the un-fixed function showed `attributeOverride` reading back `false` after every save.
+ * Fixed by also syncing line 0 to the caller's `header` whenever it's grown past what's on disk —
+ * still only touches the ONE data row PLUS the header row (never any other player's row), so the
+ * single-row-scope guarantee (Round C158's own mandate) still holds for every other player's data.
  */
 function writeSingleRow(id: number, header: string[], updatedRow: Record<string, unknown>): void {
   if (!existsSync(BACKUP_PATH)) copyFileSync(CSV_PATH, BACKUP_PATH);
@@ -285,6 +326,10 @@ function writeSingleRow(id: number, header: string[], updatedRow: Record<string,
   // split("\n") on a file ending in "\n" yields a trailing "" element; re-joining with "\n"
   // reproduces that exact trailing newline without any special-casing.
   const diskLines = diskText.split("\n");
+  const diskHeader = diskLines[0].split(",");
+  if (diskHeader.join(",") !== header.join(",")) {
+    diskLines[0] = header.join(",");
+  }
   const newLine = csvLineFor(header, updatedRow);
   let replaced = false;
   for (let i = 1; i < diskLines.length; i++) {
@@ -312,7 +357,17 @@ export function saveChange(pop: Population, id: number, changes: Partial<Record<
   const result = previewChange(pop, p, changes);
 
   const updated: Player & { attributeOverride?: boolean } = { ...p };
-  for (const a of RATED_ATTRIBUTES) updated[a] = result.after.attributes[a];
+  for (const a of RATED_ATTRIBUTES) {
+    updated[a] = result.after.attributes[a];
+    // Round C159 — freeze this player's raw baseline to equal their just-saved live value, for
+    // EVERY attribute (not just the one(s) Tyler actually touched this save). From this point on
+    // `attributeOverride` unconditionally skips shrinkage in `applyFairnessPass`, so raw's exact
+    // value no longer drives any future computation for this player — but keeping it in lockstep
+    // with live is the honest, disclosed meaning of "their raw baseline IS their override value,
+    // frozen" (Schema.md's Round C159 section), and it's what a future "revert to formula" (which
+    // regenerates real raw AND clears attributeOverride) correctly replaces wholesale.
+    setRawAttr(updated as unknown as Record<string, unknown>, a, result.after.attributes[a]);
+  }
   updated.OVR = result.after.OVR;
   updated.POT = result.after.POT;
   updated.attributeOverride = true;
@@ -406,11 +461,16 @@ export function revertToFormula(pop: Population, id: number): { result: PreviewR
   }
   const scorer = new AttributeZScorer(REAL_2026_SEASON_STATS);
   const freshAttrs = scorer.attributesFor(name, p.archetype as Archetype, p.Age);
+  // Round C159 — this IS a genuine fresh-data event (`AttributeZScorer` regenerating straight from
+  // real per-game stats), so `freshAttrs` becomes the new persisted `raw_<attr>` baseline here, same
+  // as `refreshPlayerStats2026.ts`'s own real-stat-refresh path — never the post-shrink `after`
+  // below. `attributeOverride: false` also means `applyFairnessPass`'s unconditional override-skip
+  // does NOT fire for this call, so the normal per-round shrink applies exactly as it would for any
+  // other real-stat-refreshed player.
   const freshBase: Player = { ...p, ...freshAttrs, attributeOverride: false } as Player;
-  // Normal (non-skip) fairness pass: freshBase's attributes are genuinely fresh real-stat output,
-  // so ordinary career-games shrinkage should apply exactly as it would on any real refresh.
-  const after = applyFairnessPass(freshBase, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, false);
-  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats, true);
+  for (const a of RATED_ATTRIBUTES) setRawAttr(freshBase as unknown as Record<string, unknown>, a, freshAttrs[a]);
+  const after = applyFairnessPass(freshBase, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
+  const before = applyFairnessPass(p, pop.archetypeMeans, pop.populationStats, 110, pop.archetypeStats);
   const beforeAttrs = {} as Record<RatedAttribute, number>;
   const afterAttrs = {} as Record<RatedAttribute, number>;
   for (const a of RATED_ATTRIBUTES) {
@@ -418,7 +478,14 @@ export function revertToFormula(pop: Population, id: number): { result: PreviewR
     afterAttrs[a] = after[a];
   }
   const updated: Player & { attributeOverride?: boolean } = { ...p };
-  for (const a of RATED_ATTRIBUTES) updated[a] = after[a];
+  for (const a of RATED_ATTRIBUTES) {
+    updated[a] = after[a];
+    // Raw baseline goes back to the FRESH (pre-shrink) real-stat output, not `after` — this player
+    // is no longer `attributeOverride`, so future ordinary refreshes should keep shrinking them from
+    // this real baseline exactly like every other non-overridden player, not treat their live value
+    // as already-raw (that would just reintroduce ROADMAP #115's bug for this one player).
+    setRawAttr(updated as unknown as Record<string, unknown>, a, freshAttrs[a]);
+  }
   updated.OVR = after.OVR;
   updated.POT = after.POT;
   updated.attributeOverride = false;

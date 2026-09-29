@@ -54,6 +54,15 @@ function main() {
   const players: Player[] = rawRows.map(coerceRow);
   console.log(`Parsed ${players.length} players`);
 
+  // Round C159 — defensive completeness (same convention `tools/player-editor/lib.ts`'s
+  // `loadPopulation` already uses for ATTRIBUTE_OVERRIDE_COLUMN): a live CSV that's already been
+  // through this round's migration always has every raw_<attr> column, but this guards a
+  // pre-migration CSV from silently dropping the new columns on write.
+  for (const a of RATED_ATTRIBUTES) {
+    const col = `raw_${a}`;
+    if (!header.includes(col)) header.push(col);
+  }
+
   copyFileSync(CSV_PATH, BACKUP_PATH);
   console.log(`Backed up pre-refresh CSV -> ${BACKUP_PATH}`);
 
@@ -95,7 +104,15 @@ function main() {
       // (AttributeZScorer.attributesFor's new optional `age` param) applies for 31+ players. See
       // progression.ts's `applyAthleticDeclineToFreshBaseline` doc comment.
       const attrs = scorer.attributesFor(name, p.archetype as Archetype, p.Age);
-      for (const a of RATED_ATTRIBUTES) p[a] = attrs[a];
+      for (const a of RATED_ATTRIBUTES) {
+        p[a] = attrs[a];
+        // Round C159 — [[End-of-2026 Player Database Refresh]] / ROADMAP #115: this IS a fresh-data
+        // event (real per-game stats regenerated straight through AttributeZScorer), so it becomes
+        // this player's new persisted raw_<attr> baseline too — the un-shrunk value
+        // `recomputeOVRWithShrinkage` (below) will shrink FROM, every round, until the next real
+        // regeneration event like this one. Never set from `applyFairnessPass`'s shrunk OUTPUT.
+        (p as unknown as Record<string, number>)[`raw_${a}`] = attrs[a];
+      }
     }
     p.clangerTend = scorer.clangerTendFor(name);
   }

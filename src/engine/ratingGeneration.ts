@@ -290,6 +290,7 @@ export function applyFairnessPass(
   populationStats: { mean: number; stdDev: number },
   ceiling = 110, // Round C147: new default rescale ceiling (was 99) — see progression.ts's ovrFromRawComposite
   archetypeOvrStats?: Record<string, { mean: number; stdDev: number }>,
+  skipShrinkForOverride = false,
 ): Player {
   // Round C148 — provenTrajectory.ts's objective rule, checked against p's FRESH (pre-shrinkage)
   // real-stat-derived attributes, exactly as that file's own doc comment requires. Round C151: also
@@ -297,7 +298,17 @@ export function applyFairnessPass(
   // updated) for the new archetype-relative fallback.
   const proven = qualifiesForProvenTrajectory(p, populationStats, archetypeOvrStats?.[p.archetype]);
   const careerGames = careerGamesFor(p) + (proven ? PROVEN_TRAJECTORY_GAMES_BONUS : 0);
-  const shrunkAttrs = p.ovrOverride ? null : shrinkAttributesForSmallSample(p, careerGames, archetypeMeans);
+  // Round C158 — `skipShrinkForOverride` (default false; every existing/real refresh-round caller
+  // omits it and keeps today's exact, unchanged behaviour). Confirmed via a live before/after/before
+  // scratch test (Schema.md's Round C158 section) that `shrinkAttributesForSmallSample` is NOT a
+  // fixed point of its own output: called again on attributes that are themselves already the
+  // output of a prior shrink (rather than fresh real-stat data), it shrinks them further toward the
+  // archetype mean every time. The Player Editor tool (`tools/player-editor/lib.ts`) is the one
+  // caller that can genuinely re-invoke this on a player's OWN already-shrunk, already-`attributeOverride`
+  // output (repeated saves of the same manual edit) — passing `true` there stops a player's untouched
+  // attributes from silently drifting further from what Tyler actually set on every additional save.
+  const skipShrink = skipShrinkForOverride && !!p.attributeOverride;
+  const shrunkAttrs = p.ovrOverride || skipShrink ? null : shrinkAttributesForSmallSample(p, careerGames, archetypeMeans);
   const next: Player = shrunkAttrs ? { ...p, ...shrunkAttrs } : { ...p };
   if (!p.ovrOverride) {
     next.OVR = ovrFromRawComposite(ovrRawComposite(next), populationStats);

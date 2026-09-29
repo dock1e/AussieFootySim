@@ -40,6 +40,9 @@
   button.primary:hover { background: #4a7be0; }
   #saveStatus { font-size: 13px; color: #9aa0ab; }
   .flag { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #4a3a1c; color: #ffb347; margin-left: 8px; }
+  .import-label { padding: 8px 16px; border-radius: 6px; border: 1px solid #3a3f4a; background: #2a3040; color: #eee; cursor: pointer; font-size: 14px; }
+  .import-label:hover { background: #333a4d; }
+  #revertBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* Round C156 — tabs + grid view */
   .tabs { display: flex; gap: 4px; }
@@ -82,6 +85,12 @@
     <button class="tab-btn" id="tabGridBtn" type="button">Grid</button>
   </div>
   <input id="search" type="text" placeholder="Search by name, club, or archetype..." autocomplete="off" />
+  <button id="exportBtn" type="button" title="Download the current players_master.csv">Export CSV</button>
+  <label class="import-label" title="Upload a CSV to bulk-apply changes (validated, confirm required)">
+    Import CSV
+    <input id="importFile" type="file" accept=".csv" style="display:none;" />
+  </label>
+  <span id="importStatus" style="font-size:12px;color:#9aa0ab;"></span>
 </header>
 <main>
   <div id="editorView" class="view active" style="flex-direction: row;">
@@ -96,6 +105,7 @@
         <div id="archetypePickerMenu" class="dropdown-menu"></div>
       </div>
       <label class="checkbox"><input type="checkbox" id="activeOnly" checked /> Active only (excl. retired/delisted)</label>
+      <button id="refreshGridBtn" type="button" title="Refetch all players (also happens automatically after any Single Player save)">↻ Refresh</button>
       <div id="columnPicker">
         <button id="columnPickerBtn" type="button">Columns ▾</button>
         <div id="columnPickerMenu"></div>

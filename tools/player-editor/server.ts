@@ -20,7 +20,22 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname } from "node:path";
 import { RATED_ATTRIBUTES, type RatedAttribute } from "../../src/types/player.ts";
-import { loadPopulation, searchPlayers, findPlayer, playerDetail, previewChange, saveChange, gridRows, type Population } from "./lib.ts";
+import {
+  loadPopulation,
+  searchPlayers,
+  findPlayer,
+  playerDetail,
+  previewChange,
+  saveChange,
+  saveMetadata,
+  revertToFormula,
+  gridRows,
+  exportCsv,
+  importCsv,
+  METADATA_FIELDS,
+  type MetadataField,
+  type Population,
+} from "./lib.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 5155);
@@ -54,6 +69,21 @@ function readBody(req: import("node:http").IncomingMessage): Promise<string> {
 
 function isRatedAttribute(k: string): k is RatedAttribute {
   return (RATED_ATTRIBUTES as readonly string[]).includes(k);
+}
+
+function isMetadataField(k: string): k is MetadataField {
+  return (METADATA_FIELDS as readonly string[]).includes(k);
+}
+
+function parseMetadataChanges(raw: unknown): Partial<Record<MetadataField, string | number>> {
+  const changes: Partial<Record<MetadataField, string | number>> = {};
+  if (!raw || typeof raw !== "object") return changes;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (isMetadataField(k) && (typeof v === "string" || typeof v === "number")) {
+      changes[k] = v;
+    }
+  }
+  return changes;
 }
 
 function parseChanges(raw: unknown): Partial<Record<RatedAttribute, number>> {
@@ -113,6 +143,54 @@ const server = createServer(async (req, res) => {
       // external script (e.g. this round's own tuning helper) has written the CSV directly.
       pop = loadPopulation();
       return sendJson(res, 200, { reloaded: true, players: pop.players.length });
+    }
+
+    // Round C158 Part C#4 — bio/metadata-only save (no attribute/OVR/POT recompute at all).
+    if (req.method === "POST" && url.pathname === "/api/save-metadata") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const id = Number(body.id);
+      if (!findPlayer(pop, id)) return sendJson(res, 404, { error: `No player with id ${id}` });
+      const changes = parseMetadataChanges(body.changes);
+      const player = saveMetadata(pop, id, changes);
+      return sendJson(res, 200, { player: playerDetail(pop, player) });
+    }
+
+    // Round C158 Part C#1 — "Revert to formula": regenerate this one player's attributes fresh
+    // from their real per-game stats, clearing attributeOverride. Row-scoped like every other save.
+    if (req.method === "POST" && url.pathname === "/api/revert") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const id = Number(body.id);
+      if (!findPlayer(pop, id)) return sendJson(res, 404, { error: `No player with id ${id}` });
+      const { result, player } = revertToFormula(pop, id);
+      return sendJson(res, 200, { result, player: playerDetail(pop, player) });
+    }
+
+    // Round C158 Part C#3 — CSV export: streams the current on-disk players_master.csv verbatim.
+    if (req.method === "GET" && url.pathname === "/api/export") {
+      const csv = exportCsv();
+      res.writeHead(200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="players_master_export_${new Date().toISOString().slice(0, 10)}.csv"`,
+        "Content-Length": Buffer.byteLength(csv),
+      });
+      res.end(csv);
+      return;
+    }
+
+    // Round C158 Part C#3 — CSV import. Two-step protocol: POST with `confirm: false` (or omitted)
+    // returns a dry-run report (row/column validation + which PlayerIDs would change) WITHOUT
+    // writing anything; the client shows that report and asks the user to confirm; only a second
+    // POST with `confirm: true` actually overwrites the file (after a fresh backup). This is
+    // deliberately a bulk whole-file replace, not row-scoped like every single-player save above —
+    // an import is inherently a bulk operation on Tyler's own explicit request.
+    if (req.method === "POST" && url.pathname === "/api/import") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const csvText = String(body.csv ?? "");
+      const confirm = body.confirm === true;
+      if (!csvText.trim()) return sendJson(res, 400, { error: "No CSV content provided" });
+      const result = importCsv(csvText, confirm);
+      if (result.applied) pop = loadPopulation();
+      return sendJson(res, 200, result);
     }
 
     // --- Static file serving for the client ---

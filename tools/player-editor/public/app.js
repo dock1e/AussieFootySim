@@ -21,9 +21,26 @@ const ATTRIBUTE_GROUPS = [
   },
 ];
 
+// Round C158 Part C#4 — bio/metadata fields, plain inputs alongside the attribute sliders. Never
+// trigger a recompute (see lib.ts's METADATA_FIELDS doc comment).
+const METADATA_FIELDS = [
+  { key: "Team", label: "Club (Team)", kind: "text" },
+  { key: "OriginClub", label: "Origin Club", kind: "text" },
+  { key: "jumperNumber", label: "Jumper #", kind: "number" },
+  { key: "height", label: "Height (cm)", kind: "number" },
+  { key: "weight", label: "Weight (kg)", kind: "number" },
+  { key: "homeState", label: "Home State", kind: "text" },
+  { key: "age_day", label: "DOB day", kind: "number" },
+  { key: "age_month", label: "DOB month", kind: "number" },
+  { key: "age_year", label: "DOB year", kind: "number" },
+  { key: "Age", label: "Age", kind: "number" },
+];
+
 let currentPlayer = null; // full detail from /api/players/:id
 let pendingChanges = {}; // attr -> new value
+let pendingMeta = {}; // metadata field -> new value
 let debounceTimer = null;
+let gridStale = true; // Round C158 Part C#2 — set true by any save so the Grid tab always refetches
 
 const resultsEl = document.getElementById("results");
 const editorEl = document.getElementById("editor");
@@ -75,7 +92,13 @@ function renderEditor() {
     <div class="actions">
       <button id="saveBtn" class="primary">Save</button>
       <button id="resetBtn">Reset changes</button>
+      <button id="revertBtn" title="${p.canRevertToFormula ? "Clear all manual attribute edits and regenerate fresh from real stats" : "No real 2026 season stat row for this player — nothing to revert to"}" ${p.canRevertToFormula ? "" : "disabled"}>Revert to formula</button>
       <span id="saveStatus"></span>
+    </div>
+    <div class="group" id="metaGroup">
+      <h3>Bio / metadata (no recompute)</h3>
+      <div id="metaFields"></div>
+      <div class="actions"><button id="saveMetaBtn">Save bio fields</button><span id="metaStatus"></span></div>
     </div>
   `;
   const groupsEl = document.getElementById("groups");
@@ -108,6 +131,70 @@ function renderEditor() {
     pendingChanges = {};
     renderEditor();
   });
+  document.getElementById("revertBtn").addEventListener("click", doRevert);
+
+  const metaFieldsEl = document.getElementById("metaFields");
+  pendingMeta = {};
+  for (const f of METADATA_FIELDS) {
+    const val = p.metadata[f.key];
+    const row = document.createElement("div");
+    row.className = "attr-row";
+    row.style.gridTemplateColumns = "170px 1fr";
+    row.innerHTML = `
+      <label for="meta-${f.key}">${f.label}</label>
+      <input type="${f.kind === "number" ? "number" : "text"}" id="meta-${f.key}" value="${val ?? ""}" />
+    `;
+    row.querySelector("input").addEventListener("input", (e) => {
+      pendingMeta[f.key] = f.kind === "number" ? Number(e.target.value) : e.target.value;
+    });
+    metaFieldsEl.appendChild(row);
+  }
+  document.getElementById("saveMetaBtn").addEventListener("click", doSaveMetadata);
+}
+
+async function doRevert() {
+  if (!currentPlayer) return;
+  if (!confirm(`Revert ${currentPlayer.name}'s attributes to the standard real-stat formula? This clears all manual edits for this player only.`)) return;
+  const statusEl = document.getElementById("saveStatus");
+  statusEl.textContent = "Reverting...";
+  try {
+    const { result, player } = await api("/api/revert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: currentPlayer.id }),
+    });
+    currentPlayer = player;
+    pendingChanges = {};
+    gridStale = true;
+    renderEditor();
+    document.getElementById("saveStatus").textContent = `Reverted to formula. OVR ${result.before.OVR} -> ${result.after.OVR}, POT ${result.before.POT} -> ${result.after.POT}.`;
+  } catch (err) {
+    statusEl.textContent = `Revert failed: ${err.message}`;
+  }
+}
+
+async function doSaveMetadata() {
+  if (!currentPlayer) return;
+  const statusEl = document.getElementById("metaStatus");
+  if (Object.keys(pendingMeta).length === 0) {
+    statusEl.textContent = "No bio field changes to save.";
+    return;
+  }
+  statusEl.textContent = "Saving...";
+  try {
+    const { player } = await api("/api/save-metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: currentPlayer.id, changes: pendingMeta }),
+    });
+    currentPlayer = player;
+    pendingMeta = {};
+    gridStale = true;
+    renderEditor();
+    document.getElementById("metaStatus").textContent = "Bio fields saved.";
+  } catch (err) {
+    statusEl.textContent = `Save failed: ${err.message}`;
+  }
 }
 
 function schedulePreview() {
@@ -161,6 +248,7 @@ async function doSave() {
     statusEl.textContent = `Saved. OVR ${currentPlayer.OVR} -> ${result.after.OVR}, POT ${currentPlayer.POT} -> ${result.after.POT}. attributeOverride set.`;
     currentPlayer = player;
     pendingChanges = {};
+    gridStale = true; // Round C158 Part C#2 — force the Grid tab to refetch next time it's shown
     renderEditor();
     document.getElementById("saveStatus").textContent = `Saved OK. OVR now ${player.OVR}, POT now ${player.POT}.`;
   } catch (err) {
@@ -206,11 +294,17 @@ function colValue(row, col) {
   return col.attr ? row.attributes[col.key] : row[col.key];
 }
 
-function ensureGridLoaded() {
-  if (gridLoaded) return Promise.resolve();
+// Round C158 Part C#2 — Grid staleness fix. `force` refetches unconditionally (the explicit
+// Refresh button); otherwise a fetch only happens on first load OR when `gridStale` was set by a
+// save/revert/metadata-save/import elsewhere in this session (switchTab("grid") always passes
+// nothing, i.e. force=false, so it's the `gridStale` flag — not just "never loaded before" — that
+// makes activating the Grid tab after a Single Player save always show fresh data).
+function ensureGridLoaded(force = false) {
+  if (gridLoaded && !gridStale && !force) return Promise.resolve();
   return api("/api/players/all").then((data) => {
     gridData = data;
     gridLoaded = true;
+    gridStale = false;
     buildArchetypeMenu();
     buildColumnPickerMenu();
     renderGrid();
@@ -407,6 +501,51 @@ document.getElementById("gridSearch").addEventListener("input", (e) => {
 document.getElementById("activeOnly").addEventListener("change", (e) => {
   gridFilters.activeOnly = e.target.checked;
   renderGrid();
+});
+
+document.getElementById("refreshGridBtn").addEventListener("click", () => ensureGridLoaded(true));
+
+// --- Round C158 Part C#3 — CSV export/import ---
+document.getElementById("exportBtn").addEventListener("click", () => {
+  window.location.href = "/api/export";
+});
+
+document.getElementById("importFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  const statusEl = document.getElementById("importStatus");
+  statusEl.textContent = "Validating...";
+  try {
+    const dryRun = await api("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv: text, confirm: false }),
+    });
+    if (dryRun.error) {
+      statusEl.textContent = `Import rejected: ${dryRun.error}`;
+      e.target.value = "";
+      return;
+    }
+    const msg = `Import will replace ${dryRun.rowCount} rows (expected ${dryRun.expectedRowCount}) and change ${dryRun.changedPlayerIds.length} players' OVR/POT/attributes. Proceed?`;
+    if (!confirm(msg)) {
+      statusEl.textContent = "Import cancelled.";
+      e.target.value = "";
+      return;
+    }
+    const applied = await api("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv: text, confirm: true }),
+    });
+    statusEl.textContent = `Imported. ${applied.changedPlayerIds.length} players changed.`;
+    gridStale = true;
+    doSearch(searchEl.value);
+    if (document.getElementById("gridView").classList.contains("active")) ensureGridLoaded(true);
+  } catch (err) {
+    statusEl.textContent = `Import failed: ${err.message}`;
+  }
+  e.target.value = "";
 });
 
 document.getElementById("archetypePickerBtn").addEventListener("click", () => {

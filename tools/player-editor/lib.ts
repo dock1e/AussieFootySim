@@ -386,7 +386,7 @@ function csvLineFor(header: string[], row: Record<string, unknown>): string {
  * still only touches the ONE data row PLUS the header row (never any other player's row), so the
  * single-row-scope guarantee (Round C158's own mandate) still holds for every other player's data.
  */
-function writeSingleRow(id: number, header: string[], updatedRow: Record<string, unknown>): void {
+export function writeSingleRow(id: number, header: string[], updatedRow: Record<string, unknown>): void {
   if (!existsSync(BACKUP_PATH)) copyFileSync(CSV_PATH, BACKUP_PATH);
   const diskText = readFileSync(CSV_PATH, "utf-8");
   // split("\n") on a file ending in "\n" yields a trailing "" element; re-joining with "\n"

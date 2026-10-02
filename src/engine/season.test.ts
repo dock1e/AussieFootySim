@@ -6,6 +6,7 @@ import { simulateMatch } from "./match";
 import { mulberry32 } from "./rng";
 import { generateMatchCoachesVotes, applyVotesToBoxScore, applyBrownlowVotesToBoxScore } from "./coachesVotes";
 import { MIN_CONDITION } from "./progression";
+import { groundForMatch } from "../data/clubGrounds";
 import { makePlayer } from "../testUtils/makePlayer";
 import type { Player } from "../types/player";
 import type { Archetype } from "../types/archetype";
@@ -260,6 +261,9 @@ describe("season with in-season condition/fatigue tracking", () => {
       const rawExpected = simulateMatch(home, away, mulberry32(seed), seed, {
         homeCondition: season.condition,
         awayCondition: season.condition,
+        // Round C161: simulateRound also passes the home club's real ground (clubGrounds.ts) — this
+        // reproduction predates that and silently simulated every match at the MCG default instead.
+        stadium: groundForMatch(m.homeClubId, nextRound, season.fixture),
       });
       // Round 99 bugfix: this reproduction stopped at the raw simulateMatch call, but rounds 90/91
       // ([[Coaches Votes and MVP Award]], the Brownlow-style 3-2-1) added a 3-step post-processing pass

@@ -3142,7 +3142,6 @@ function resolveUnpressuredDisposal(
   // advances the zone here) can ever cross the forward50/defensive50 boundary this function decides.
   // Deliberately NOT credited on the free-kick-out-of-bounds branch just below (the kick never
   // actually completed its delivery) — a disclosed simplification, not the full real-AFL definition.
-  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
 
   if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
     const newSide = otherSide(state.possession);
@@ -3186,6 +3185,10 @@ function resolveUnpressuredDisposal(
     );
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
+  // Round C161 — computed only AFTER the out-on-the-full branch: zoneEntryDeltas bumps the box score
+  // as a side effect, so calling it before that branch credited inside50s/rebound50s the comment above
+  // says it deliberately doesn't (and the free-kick log line never carried them).
+  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
 
   // Aug 2026 round 109 — this disposal's own stat credit (disposals/kicks-or-
   // handballs, plus any carried-forward gatherDeltas) used to be logged here,
@@ -3259,6 +3262,10 @@ function resolveUnpressuredDisposal(
     // Aug 2026 round 55 — a genuine jump-ball, nobody specific found — breaks the chain the same
     // way a spoil/fumble does, see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = null;
+    // Round C161 — the disposal was already credited to the box score above, so its stat deltas
+    // must be logged here too or the event log under-counts it (match.test.ts's statDeltas replay).
+    // Fixed text and skipPositionNudge keep this RNG- and position-neutral: outcomes are unchanged.
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", `${carrier.lname} ${isKick ? "kicks" : "handballs"} it into a contest`, [carrier.PlayerID], disposalDeltas, true);
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   // Aug 2026 round 27 — every other kick/handball reception, generalising the
@@ -3810,7 +3817,6 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // pool below, right where it already was.
   const newZone = isKick ? newZoneIfKick : state.zone;
   // Round 135 — see zoneEntryDeltas' own doc comment / resolveUnpressuredDisposal's identical site.
-  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
 
   // Out on the Full — Aug 2026 round 19, see P_KICK_GOES_OUT_ON_FULL's own
   // doc comment. Only a kick can literally sail out on the full; the
@@ -3856,6 +3862,10 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     );
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
+  // Round C161 — computed only AFTER the out-on-the-full branch: zoneEntryDeltas bumps the box score
+  // as a side effect, so calling it before that branch credited inside50s/rebound50s the comment above
+  // says it deliberately doesn't (and the free-kick log line never carried them).
+  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
 
   // Aug 2026 round 109 — this disposal's own stat credit (disposals/kicks-or-
   // handballs/defender's tackleAttempts, plus any carried-forward
@@ -3933,6 +3943,8 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // Aug 2026 round 55 — a genuine jump-ball, nobody specific found — breaks the chain the same
     // way a spoil/fumble does, see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = null;
+    // Round C161 — see resolveUnpressuredDisposal's identical branch: log the already-credited disposal.
+    log(ctx, newZone, state.possession, "GENERAL_PLAY", `${carrier.lname} gets it away under pressure from ${defender.lname} — it spills into a contest`, [carrier.PlayerID, defender.PlayerID], disposalDeltas, true, undefined, true);
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   // Aug 2026 round 27 — same generalisation as resolveUnpressuredDisposal's

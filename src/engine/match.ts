@@ -1,14 +1,27 @@
 import type { Player } from "../types/player.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
-import type { Rng } from "./rng.ts";
+import { mulberry32, type Rng } from "./rng.ts";
 import { computeContestRating, resolveContest, resolveThreshold } from "./contest.ts";
 import type { ContestType } from "./contestTypes.ts";
-import { advanceZone, isForward50, isDefensive50, otherSide, MIDFIELD, type Side, type Zone } from "./zones.ts";
+import { advanceZone, isForward50, isDefensive50, otherSide, zoneAt, MIDFIELD, type Side, type Zone } from "./zones.ts";
 import type { MatchTeam } from "./team.ts";
-import { bestByRating, onGroundPlayers, benchPlayers } from "./team.ts";
-import { weightedPlayerChoice, weightedChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick } from "./involvement.ts";
+import { bestByRating, onGroundPlayers, benchPlayers, pinnedReliever, cloneMatchTeam } from "./team.ts";
+import { POSITION_WORKLOAD, ROTATION_THRESHOLD, BENCH_READY_FITNESS, fitRank, planReset } from "./rotation.ts";
+import { attributeFor, injuryRiskMultiplier, withFatigue } from "./fatigue.ts";
+import {
+  CONTACT_RATE_PER_EVENT,
+  CONTACT_STATS,
+  MAX_INJURIES_PER_TEAM_PER_MATCH,
+  SOFT_TISSUE_RATE_PER_TICK,
+  WET_CONTACT_MULTIPLIER,
+  isConcussionProne,
+  pickInjuryType,
+  softTissueProneness,
+  type InjuryKind,
+} from "./injury.ts";
+import { weightedPlayerChoice, weightedChoice, weightedHandballTarget, nearbyDefenders, closestDefender, weightedKickTarget, type KickPick, type NearbyPick } from "./involvement.ts";
 import { carrierPosition, proximityFor, realDistanceBetween, proximityWeight, spaceWeight, SHORT_KICK_MAX_DISTANCE, shotGeometry, type AbstractPosition } from "./positioning.ts";
-import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, type TrackedPosition } from "./movement.ts";
+import { stepPositions, initialPositions, resolveMatchups, snapshotPositions, nudgeInvolvedPositions, newMovementTickCache, type MovementTickCache, type TrackedPosition } from "./movement.ts";
 import { getStadium, DEFAULT_STADIUM_ID, type AFLStadium } from "../data/stadiums.ts";
 import {
   tacticGroupForSlot,
@@ -355,9 +368,13 @@ export interface MatchEvent {
     incomingId: number;
     /** Where the incoming player plays. */
     position: Position;
-    /** Round 130 — a cover chain also moves one on-field player to a different position. */
+    /** Round 130 — a cover chain also moves one on-field player to a different position (older saves only). */
     moved?: { playerId: number; position: Position };
+    /** ROADMAP #16 — on-field players re-sorted into new positions at a goal reset; set on that side's last swap event. */
+    moves?: { playerId: number; position: Position }[];
   };
+  /** Oct 2026 — [[Injuries]]: a player hurt at this moment; he's off for the rest of the match. */
+  injury?: MatchInjury;
   /**
    * Sep 2026 round 111 — which real kind of stoppage this STOPPAGE/CLEARANCE
    * event actually is: a genuine centre bounce (always `MIDFIELD` zone), or a
@@ -376,7 +393,18 @@ export interface MatchEvent {
    * rendering changes.
    */
   stoppageType?: "centreBounce" | "throwIn";
+  /**
+   * ROADMAP #11 / gap #76 (Oct 2026) — set on the event where the umpire pays a free kick: which
+   * rule, who it went to and who gave it away (absent for an Out on the Full taker's opposite number,
+   * since nobody but the kicker conceded it). Lets the viewer stop play while it's sorted out
+   * (`engine/pacing.ts`) and lets anything else read the free kick without matching description text.
+   * Undefined on every other event and on older saves.
+   */
+  freeKick?: { kind: FreeKickKind; forId: number; againstId: number };
 }
+
+/** The free-kick rules the engine pays. See `P_HIGH_CONTACT_FREE_KICK` and `P_HOLDING_THE_BALL_WITH_PRIOR`. */
+export type FreeKickKind = "highContact" | "outOnTheFull" | "holdingTheBall" | "inTheBack";
 
 export interface TeamResult {
   name: string;
@@ -393,9 +421,36 @@ export interface MatchResult {
   events: MatchEvent[];
   /** Keyed by PlayerID. Every selected player on both teams gets a line, zeros if they never touched it. */
   boxScore: Record<number, BoxScoreLine>;
+  /**
+   * Oct 2026 — per PlayerID, fatigue-weighted on-ground ticks (see `Ctx.injuryExposure` and
+   * fatigue.ts's `injuryRiskMultiplier`). ~1 per tick for a fresh player, up to 3 for an exhausted
+   * one, so a player who's run into the ground scores well above his raw minutes. Absent on results
+   * from older saves.
+   */
+  injuryExposure?: Record<number, number>;
+  /** Oct 2026 — [[Injuries]]: everyone hurt in this match, in order. Absent on results from older saves. */
+  injuries?: MatchInjury[];
+  /** Oct 2026 — wet conditions (raises contact-injury risk). Absent = dry / older result. */
+  wet?: boolean;
+}
+
+export interface MatchInjury {
+  side: Side;
+  playerId: number;
+  typeId: string;
+  kind: InjuryKind;
+  quarter: number;
 }
 
 export interface SimulateMatchOptions {
+  /**
+   * Oct 2026 — [[Injuries]]: extra per-player soft-tissue multipliers on top of each player's own
+   * proneness — the club's Sports Science level and any recent soft-tissue history (see
+   * `season.ts`'s `matchInjuryOptions`). Missing player = 1.
+   */
+  softTissueRisk?: Map<number, number>;
+  /** Oct 2026 — wet weather: contact injuries are a little more likely. */
+  wet?: boolean;
   ticksPerQuarter?: number;
   /** Keep the full event log (costs memory at scale — the balance simulator turns this off for 10,000-game runs). */
   recordEvents?: boolean;
@@ -798,7 +853,10 @@ export const SHOT_DIFFICULTY_BASE = -50;
 // comment ("goal square 97-99%", "50m dead square 33-84%"), are consumed
 // linearly downstream (`runShot`'s difficulty roll), so this rescale is
 // exact, not a re-tune.
-export const SHOT_DEPTH_PENALTY_SCALE = 2.25;
+// Oct 2026 (continuous ball) — 2.25 -> 2.0, recalibrated alongside GOAL_ACCURACY_DEPTH_PENALTY below once
+// shots came from real distances (avg ~22m, was ~3m when carriers drifted toward goal). Most distance
+// effect now sits in goal-vs-behind, since a real missed shot is usually a behind, not a no-score.
+export const SHOT_DEPTH_PENALTY_SCALE = 2.0;
 // Round 108 — Tyler: "the close 60° shot now runs higher than a long
 // straight one, because depth dominates angle at that range... revise the
 // way we calculate [it]." 85 -> 120: `positioning.ts`'s `shotGeometry` (see
@@ -840,7 +898,12 @@ export const SHOT_ANGLE_PENALTY_SCALE = 120;
 const SHOT_DIFFICULTY_JITTER = 8;
 const GOAL_ACCURACY_MAX = 0.995;
 const GOAL_ACCURACY_MIN = 0.3;
-const GOAL_ACCURACY_DEPTH_PENALTY = 0.07;
+// Oct 2026 — bug fix. Round 107 converted `depth` from ~40m abstract units to real metres and
+// rescaled SHOT_DEPTH_PENALTY_SCALE ÷40 to match, but this constant was missed: 0.07 *per metre*
+// floored the goal-given-on-target chance at GOAL_ACCURACY_MIN for any shot ~10m+ out. It stayed
+// hidden because, before the ball was continuous, carriers drifted toward goal and ~95% of shots
+// came from inside 10m. 0.07 / 40 restores round 42's intended per-unit slope.
+const GOAL_ACCURACY_DEPTH_PENALTY = 0.014; // then recalibrated with the continuous ball: ~85% close in, ~55% at 30m, ~30% at 50m (before angle)
 // Round 108 — reviewed alongside `SHOT_ANGLE_PENALTY_SCALE` above (same
 // `angleSeverity` input, now the true-subtended-angle version) but
 // deliberately left at its existing value: this constant only shapes the
@@ -1016,6 +1079,79 @@ const P_GETTABLE_MISS_IS_CLANGER_BASE = 0.4;
 const P_HIGH_CONTACT_FREE_KICK = 0.04;
 const P_KICK_GOES_OUT_ON_FULL = 0.03;
 /**
+ * Holding the Ball — ROADMAP #11 / gap #76, Oct 2026. Round 19 left this out because the engine
+ * couldn't tell whether a tackled carrier had "prior opportunity." It can now, well enough: a carrier
+ * who gathered the ball uncontested (`State.carrierUncontested`) or has been running with it
+ * (`State.runTicks`) has had his chance, and a carrier run down from behind always has. A landed tackle
+ * on one of those is usually paid as Holding the Ball; on a carrier who'd only just won it under
+ * pressure it occasionally is (no genuine attempt to dispose).
+ *
+ * The possession outcome is the same as before: a landed tackle already gave the ball to the tackler's
+ * side. The difference is the umpire stops play: the tackler gets the free kick, stands the mark and
+ * plays on unpressured (or has a shot from inside 50), and both players get the free kick stats.
+ * Reasoned rates, tuned so the league lands at roughly 3 Holding the Ball frees per team per match.
+ */
+const P_HOLDING_THE_BALL_WITH_PRIOR = 0.3;
+const P_HOLDING_THE_BALL_NO_PRIOR = 0.05;
+/**
+ * In the Back — ROADMAP #11 / gap #76, Oct 2026. A genuine marking duel (a defender close enough to
+ * contest the drop) sometimes ends with the defender infringing: pushing in the back, holding, or
+ * chopping the arms. The marking player gets the free kick before the contest is ever resolved, the
+ * same way High Contact pre-empts the tackle roll. Reasoned, tuned for roughly 1.5 per team per match.
+ */
+const P_IN_THE_BACK_FREE_KICK = 0.11;
+const IN_THE_BACK_PHRASES: ((marker: string, defender: string) => string)[] = [
+  (m, d) => `Free kick to ${m} — ${d} pushed him in the back`,
+  (m, d) => `${d} chops the arms! Free kick to ${m}`,
+  (m, d) => `${d} is pinged for holding — free kick to ${m} in the marking contest`,
+  (m, d) => `In the back! ${m} gets the free kick over ${d}`,
+];
+const HOLDING_THE_BALL_PHRASES: ((tackler: string, carrier: string) => string)[] = [
+  (t, c) => `${t} wraps up ${c} — holding the ball! Free kick to ${t}`,
+  (t, c) => `Holding the ball! ${c} had his chance and ${t} pins him`,
+  (t, c) => `${t} catches ${c} holding it — free kick`,
+  (t, c) => `Great tackle from ${t}, and the umpire pays holding the ball against ${c}`,
+];
+const RUN_DOWN_HOLDING_PHRASES: ((tackler: string, carrier: string) => string)[] = [
+  (t, c) => `${t} runs ${c} down from behind — holding the ball! Free kick to ${t}`,
+  (t, c) => `${c} takes one bounce too many, ${t} runs him down — holding the ball`,
+];
+
+/**
+ * A landed tackle paid as Holding the Ball (see `P_HOLDING_THE_BALL_WITH_PRIOR`). `tackleDeltas` is
+ * everything the ordinary landed-tackle branch would have logged (tackle credit, turnover, clanger);
+ * this adds the free kick on top, logs it and hands the tackler a free kick from where he is.
+ */
+function payHoldingTheBall(ctx: Ctx, state: State, tackler: Player, carrier: Player, tackleDeltas: StatDelta[], runDown: boolean): State {
+  const newSide = otherSide(state.possession);
+  lineFor(ctx, tackler).freeKicksFor += 1;
+  lineFor(ctx, carrier).freeKicksAgainst += 1;
+  const gotShot = isForward50(state.zone, newSide) && ctx.rng() < shotChanceFromSpot(ctx, tackler, newSide);
+  if (!gotShot) standTheMark(ctx, tackler.PlayerID, newSide);
+  const phrases = runDown ? RUN_DOWN_HOLDING_PHRASES : HOLDING_THE_BALL_PHRASES;
+  log(
+    ctx,
+    state.zone,
+    state.possession,
+    "GENERAL_PLAY",
+    phrases[Math.floor(ctx.rng() * phrases.length)](tackler.lname, carrier.lname),
+    [tackler.PlayerID, carrier.PlayerID],
+    [
+      ...tackleDeltas,
+      { playerId: tackler.PlayerID, stat: "freeKicksFor", delta: 1 },
+      { playerId: carrier.PlayerID, stat: "freeKicksAgainst", delta: 1 },
+    ],
+  );
+  tagFreeKick(ctx, "holdingTheBall", tackler.PlayerID, carrier.PlayerID);
+  return freeKickState(state.zone, newSide, tackler, gotShot);
+}
+
+/** Marks the event just logged as a free kick — see `MatchEvent.freeKick`. Call right after its `log()`. */
+function tagFreeKick(ctx: Ctx, kind: FreeKickKind, forId: number, againstId: number): void {
+  if (!ctx.recordEvents) return;
+  ctx.events[ctx.events.length - 1].freeKick = { kind, forId, againstId };
+}
+/**
  * Standing the Mark — Aug 2026 round 92. Tyler: "the player that takes the
  * mark should backup 10 meters from the mark to give himself space to kick."
  * `0.25` zoneFrac-units lands at ~10m via the length axis's ~40m/unit rate
@@ -1123,6 +1259,8 @@ function freeKickState(zone: Zone, side: Side, taker: Player, gotShot: boolean):
  * for disposal comfort, rather than inventing a second, parallel one.
  */
 const P_RUN_AND_CARRY_BASE = 0.14;
+/** Oct 2026 (continuous ball) — real ground covered by one Run and Carry tick, in zone-units (~40m each). 1.0 keeps the old one-zone step's distance, now measured from where the carrier actually is. */
+const RUN_AND_CARRY_DISTANCE = 1;
 const RUN_AND_CARRY_BASELINE_RATING = 75; // Round C147: +20 recentre (was 55) — a plausible league-average speed+agility composite on the new 40-110 attribute scale, same "deliberately roughed in, pending the balance simulator" status as every other constant here
 const MAX_CONSECUTIVE_RUN_TICKS = 2;
 
@@ -1200,10 +1338,16 @@ const TACKLE_HOLD_DOWN_TICKS = 5;
  * test the real production values directly rather than guessing/copying
  * them — see this section's own top doc comment.
  */
-/** How often (in ticks) automatic rotation is even considered — not every tick, so a swap reads as a periodic, deliberate-feeling interchange rather than a jittery tick-by-tick fitness chase. Comfortably more than one full check needs to land inside a quarter (DEFAULT_TICKS_PER_QUARTER = 130) to feel "periodic... during the match", not just "once at the very end". */
+/** How often (in ticks) the mid-play emergency swap is considered (see `EMERGENCY_FITNESS`). Since ROADMAP #16 ordinary rotation happens at goal resets instead — see `engine/rotation.ts`. */
 // Phase 6 rebalancing pass: rescaled 15 -> 35 (x2.31, same ratio as DEFAULT_TICKS_PER_QUARTER's own 130->300 change)
 // so a check still lands about as often relative to a quarter's length as before.
 export const FITNESS_CHECK_INTERVAL_TICKS = 35;
+/**
+ * ROADMAP #16 — the safety valve for a long goalless stretch: an on-ground player this spent comes off
+ * mid-play, like for like (a ready bench player suited to his exact slot takes it, nobody else moves).
+ * Everything else waits for the next goal reset.
+ */
+export const EMERGENCY_FITNESS = 50;
 /** Fitness lost per tick spent on-ground. Calibrated so a fresh (100) player run flat-out for a whole quarter with no rotation at all lands in the high-50s — comfortably below FITNESS_ROTATION_THRESHOLD, never actually reaching FITNESS_FLOOR on its own within one quarter. */
 // Phase 6 rebalancing pass: rescaled 0.3 -> 0.13 (divided by the same x2.31 ratio as DEFAULT_TICKS_PER_QUARTER's own
 // 130->300 change, since more ticks per quarter means drain-per-tick must shrink to keep the same
@@ -1213,8 +1357,8 @@ export const ON_GROUND_FITNESS_DRAIN = 0.13;
 // Phase 6 rebalancing pass: rescaled 1.2 -> 0.52 (divided by the same x2.31 ratio, same reasoning as
 // ON_GROUND_FITNESS_DRAIN's own rescale above).
 export const BENCH_FITNESS_RECOVERY = 0.52;
-/** Below this, a group's lowest on-ground player becomes a genuine automatic-rotation candidate (subject to an eligible, sufficiently-rested bench replacement actually being available — see `rotateSideForFitness`). */
-export const FITNESS_ROTATION_THRESHOLD = 70;
+/** Below this an on-ground player is a candidate to come off at the next goal reset — now `engine/rotation.ts`'s `ROTATION_THRESHOLD`, re-exported under its old name for `scripts/verify_round48_scratch.ts`. */
+export const FITNESS_ROTATION_THRESHOLD = ROTATION_THRESHOLD;
 /** Minimum ticks a player must have spent on the bench before being eligible to rotate back on — stops an immediate ping-pong swap-back the very next check once they've barely recovered. Deliberately more than one FITNESS_CHECK_INTERVAL_TICKS cycle. */
 // Phase 6 rebalancing pass: rescaled 25 -> 58 (x2.31, same ratio as DEFAULT_TICKS_PER_QUARTER's own 130->300 change).
 export const MIN_BENCH_REST_TICKS = 58;
@@ -1457,10 +1601,32 @@ export interface Ctx {
    */
   restUntilTick: Map<number, number>;
   /**
-   * Round 130 — covers currently in effect, per side, keyed by the resting player: where he played,
-   * who covered him and (for a chain) who filled the mover's spot. Emptied as each rester returns.
+   * Oct 2026 — per player, on-ground ticks weighted by `injuryRiskMultiplier` (1 per fresh tick, up
+   * to 3 per exhausted tick). The input the injury system will roll against; surfaced on
+   * `MatchResult.injuryExposure`.
    */
-  activeCovers: Record<Side, Map<number, ActiveCover>>;
+  injuryExposure: Map<number, number>;
+  /**
+   * Oct 2026 — [[Injuries]]. Injury rolls use their own random stream (seeded from the match seed),
+   * so a match where nobody gets hurt plays out exactly as it would have without the injury system.
+   */
+  injuryRng: Rng;
+  softTissueRisk: Map<number, number>;
+  wet: boolean;
+  injuries: MatchInjury[];
+  /** Injuries rolled mid-phase, applied at the end of the tick (see `applyPendingInjuries`). */
+  pendingInjuries: { side: Side; player: Player; kind: InjuryKind }[];
+  /**
+   * Oct 2026 — the ball's continuous position (raw home-relative zoneFrac 0-4, lane -1..1). `State.zone`
+   * is derived from it (`zoneAt`) at the end of every tick (`settleBall`), so the integer zone every
+   * gameplay check reads is a label on a real spot, not the spot itself. Handlers move it at the moment
+   * the ball moves (a kick sets it to the aim point); a carrier carries it.
+   */
+  ball: AbstractPosition;
+  /** ROADMAP #16 — set when a goal is kicked; the quarter loop runs the goal reset (rotation + 6-6-6 realign) before the next centre bounce. */
+  goalResetPending: boolean;
+  /** ROADMAP #16 — each player's selected slot (INT for the bench), so the re-sort leans back toward the coach's own line-up. */
+  homeSlots: Record<Side, Map<number, Position>>;
   /**
    * Aug 2026 round 55 — [[Season Stats and Records]] Goal Assists, the one gap stat the design
    * note itself flagged as needing "a new piece of match `ctx` state, not just a new field on an
@@ -1694,8 +1860,9 @@ function log(
   // `ctx.trackedPositions` still feeds nothing gameplay/stats-relevant, see
   // this function's own doc comment.
   if (!skipPositionNudge) {
-    ctx.trackedPositions = nudgeInvolvedPositions(ctx.home, ctx.away, zone, playerIds, ctx.trackedPositions, ctx.stadium);
+    ctx.trackedPositions = nudgeInvolvedPositions(ctx.home, ctx.away, ballFracIn(ctx, zone), playerIds, ctx.trackedPositions, ctx.stadium);
   }
+  if (statDeltas.some((d) => CONTACT_STATS.has(d.stat))) maybeContactInjury(ctx, playerIds);
   if (!ctx.recordEvents) return;
   ctx.events.push({
     tick: ctx.tick,
@@ -2684,7 +2851,7 @@ function shotChanceGivenReceiver(ctx: Ctx, state: State, possessingPlan: TeamPla
  * comment for the calibration this is built around.
  */
 function decideKickVsHandball(ctx: Ctx, carrier: Player, kickOpenness: number, handballOpenness: number, pressure: number): boolean {
-  const rating = carrier.readPlay + (kickOpenness - handballOpenness) * KICK_DECISION_OPENNESS_WEIGHT - pressure * KICK_DECISION_PRESSURE_PENALTY;
+  const rating = attributeFor(carrier, "readPlay") + (kickOpenness - handballOpenness) * KICK_DECISION_OPENNESS_WEIGHT - pressure * KICK_DECISION_PRESSURE_PENALTY;
   return resolveThreshold(rating, KICK_DECISION_BASE_DIFFICULTY, ctx.rng).success;
 }
 
@@ -2731,45 +2898,8 @@ function resolveLongKickExecution(ctx: Ctx, carrier: Player, receiverPick: KickP
   return { distance: Math.max(0, receiverPick.distance - LONG_KICK_MISS_DISTANCE_PENALTY), missed: true };
 }
 
-/**
- * Aug 2026 round 43 — Tyler, live testing: a Full Back (Moore) received a
- * forward-50 kick and shot on goal; a spoil (Petty) rendered at the wrong
- * end of the ground. Root cause, shared by both: `ctx.trackedPositions` is
- * now real-distance ground truth for `weightedKickTarget`/`nearbyDefenders`
- * (rounds 33-36) and round 42's own `shotGeometry`, but several places in
- * this file assign a player as the carrier/representative AT a given zone
- * without that player's own tracked position ever being confirmed — or
- * set — to actually match it. Two call sites do this (Run and Carry's own
- * player-driven zone advance, and `runContest`'s zone-only-weighted
- * `attackerRep` pick — see each call site's own comment for why); this is
- * the one shared primitive both use to close the gap the same way: a hard
- * set, not a bounded nudge, because both call sites are exactly the moment
- * this engine gains concrete, authoritative knowledge of where that player
- * now is — there's nothing fuzzy left to blend toward. `zoneFrac`/`Zone`
- * share the same 0-4 home-relative scale directly (the same convention
- * `carrierPosition`, positioning.ts, already relies on), so no mirroring is
- * needed here either.
- *
- * Aug 2026 round 44 — extended to the six remaining `weightedPlayerChoice`
- * call sites disclosed as gap #85 when this function was first built: free
- * kick takers (x2, out-of-bounds-on-the-full), loose-ball recoverers (x3,
- * fumbled contested-mark/groundball/handball receptions), and the kick-in
- * taker. Same reasoning applies at every one — each picks a player by pure
- * positional/zone fit with no real-distance check, then immediately hands
- * them the ball as carrier at that zone.
- *
- * Sep 2026 round 110 — every one of those six `weightedPlayerChoice`-paired
- * call sites now calls `snapZoneBlindPick` below instead of this function —
- * see that function's own doc comment for why a genuinely zone-blind pick
- * needs its LANE fixed too, not just its zone. This function's only
- * remaining call site is Run and Carry's own zone advance, the one case
- * that was never a `weightedPlayerChoice` pick — the SAME carrier keeps
- * carrying, so their lane is still current, not stale.
- */
-function snapTrackedZone(ctx: Ctx, playerId: number, zone: Zone): void {
-  const existing = ctx.trackedPositions.get(playerId);
-  ctx.trackedPositions.set(playerId, { zoneFrac: zone, lane: existing?.lane ?? 0 });
-}
+// Round 43's `snapTrackedZone` (snap a carrier's tracked depth to a whole zone) is gone: its last caller,
+// Run and Carry, now sets the carrier's real end-of-run position (Oct 2026, continuous ball).
 
 /**
  * Sep 2026 round 110 — Tyler, live testing: Steele was tackled just inside
@@ -2812,7 +2942,41 @@ function snapTrackedZone(ctx: Ctx, playerId: number, zone: Zone): void {
  * pairs with this instead.
  */
 function snapZoneBlindPick(ctx: Ctx, player: Player, zone: Zone, team: MatchTeam): void {
-  ctx.trackedPositions.set(player.PlayerID, carrierPosition(player, team.positions?.get(player.PlayerID), zone, team.positions));
+  // Oct 2026 (continuous ball): onto the ball's real spot along the ground when it's in this zone, not the zone's centre line.
+  ctx.trackedPositions.set(player.PlayerID, carrierPosition(player, team.positions?.get(player.PlayerID), ballFracIn(ctx, zone), team.positions));
+}
+
+/**
+ * Oct 2026 (continuous ball) — the chance a player in the forward 50 has a shot from where he
+ * actually is (a free kick, a won contest). It used to be a flat 50% anywhere in the zone, which was
+ * fine while "forward 50" only ever meant a deep spot. Now the zone is the real 50m arc, so a 48m free
+ * kick on a tight angle and a 15m one dead in front can't be the same coin flip. This uses the same
+ * depth/angle formula a kick-entry shot already uses.
+ */
+function shotChanceFromSpot(ctx: Ctx, player: Player, side: Side): number {
+  const pos = ctx.trackedPositions.get(player.PlayerID) ?? ctx.ball;
+  const { depth, angleSeverity } = shotGeometry(pos, side, ctx.stadium);
+  return shotChanceOnEntry(depth, angleSeverity);
+}
+
+/** Oct 2026 — where along the ground (zoneFrac) play in `zone` is happening: the ball's real spot if it's in that zone, else the zone's centre. */
+function ballFracIn(ctx: Ctx, zone: Zone): number {
+  return zoneAt(ctx.ball.zoneFrac, ctx.stadium.lengthMeters) === zone ? ctx.ball.zoneFrac : zone;
+}
+
+/**
+ * Oct 2026 — the end-of-tick reconciliation that makes the ball's position continuous. If someone
+ * holds it, the ball is wherever that player actually is (a mark at the aim point, a tackler where he
+ * made the tackle, a Run and Carry where the run ended). If nobody does, it stays where it already
+ * was, unless the handler moved play to a different zone (a centre bounce after a goal, a kick-in),
+ * in which case it goes to that zone keeping its lane. Either way `state.zone` becomes `zoneAt` of the
+ * real spot.
+ */
+function settleBall(ctx: Ctx, state: State): void {
+  const held = state.carrier ? ctx.trackedPositions.get(state.carrier.PlayerID) : undefined;
+  if (held) ctx.ball = { zoneFrac: held.zoneFrac, lane: held.lane };
+  else if (zoneAt(ctx.ball.zoneFrac, ctx.stadium.lengthMeters) !== state.zone) ctx.ball = { zoneFrac: state.zone, lane: ctx.ball.lane };
+  state.zone = zoneAt(ctx.ball.zoneFrac, ctx.stadium.lengthMeters);
 }
 
 /**
@@ -2915,7 +3079,7 @@ function unpressuredKickInstantMarkPhrase(ctx: Ctx, carrier: string, receiver: s
   const phrases: ((c: string, r: string) => string)[] = standingTheMark
     ? isLongKick
       ? [
-          (c, r) => `${c} plays on and finds ${r} deep with a long kick — an easy uncontested mark`,
+          (c, r) => `${c} plays on and finds ${r} with a long kick — an easy uncontested mark`, // no "deep": a long kick can go backward (ROADMAP #18's reason clause says which way)
           (c, r) => `${c} plays on from the mark, going long to ${r}, who marks it untouched`,
         ]
       : [
@@ -3099,6 +3263,88 @@ function zoneEntryDeltas(ctx: Ctx, carrier: Player, side: Side, oldZone: Zone, n
   return deltas;
 }
 
+/**
+ * Oct 2026 — ROADMAP #18, the literal kick aim point. Before this, every kick moved the ball exactly
+ * one zone forward (`advanceZone`) wherever the receiver actually stood, so a switch across the
+ * ground or a kick back to a defender still "gained" a full zone. Now the ball lands in the zone of
+ * the chosen receiver's real position (`KickPick.aim`): a lateral kick keeps it in the zone, a
+ * backward one gives ground up, a long one can gain two. `fallback` (the old one-step zone) is only
+ * used if there's somehow no aim.
+ */
+/**
+ * Oct 2026 — a disposal that turns into a 50-50 contest (`P_DISPOSAL_BECOMES_CONTEST`) used to return
+ * straight into the CONTEST phase without logging anything. Round 109 removed the generic disposal line
+ * that had carried its credit, so the disposal, kick or handball, any inside-50/rebound-50, the
+ * defender's tackle attempt and the carried-in gather credit all reached the box score with no event
+ * behind them: invisible in the play-by-play, and the cause of match.test's long-failing "statDeltas
+ * replayed from the event log" check. Phrase picked by tick, not `ctx.rng`, so no match outcome moves.
+ */
+function logDisposalIntoContest(ctx: Ctx, zone: Zone, side: Side, carrier: Player, defender: Player | null, isKick: boolean, deltas: StatDelta[]): void {
+  const pressure = defender ? ` under pressure from ${defender.lname}` : "";
+  const phrases = isKick
+    ? [`${carrier.lname} bombs it long${pressure} — it's a contest where it lands`, `${carrier.lname} gets a kick away${pressure}, nobody marks it cleanly`]
+    : [`${carrier.lname} fires off a scrappy handball${pressure} — the ball's loose`, `${carrier.lname} flicks it out by hand${pressure}, it spills into a contest`];
+  const ids = defender ? [carrier.PlayerID, defender.PlayerID] : [carrier.PlayerID];
+  log(ctx, zone, side, "GENERAL_PLAY", phrases[ctx.tick % phrases.length], ids, deltas, true);
+}
+
+/**
+ * Oct 2026 — ROADMAP #18, the last piece: *why* a kick went to the player it did. `weightedKickTarget`
+ * already weighs direction, range, space and forward progress, but the play-by-play never said which
+ * of those decided it. This reads the winning pick and names its dominant reason, checked in order:
+ * - a backward kick to keep the ball
+ * - an entry into the forward 50
+ * - a switch across the ground
+ * - a big gain of ground
+ * - picking out a free player
+ * - the safe short option
+ * Anything else gets no clause, so a routine kick doesn't get a tag. The reason folds into the kick's
+ * existing line as a short aside, not a second event (round 24's concern was doubling the event log).
+ * The variant is chosen by tick, not `ctx.rng`, so no match outcome moves.
+ */
+export const KICK_REASON_FREE_METRES = 15;
+export const KICK_REASON_SHORT_METRES = 20;
+export function kickReason(pick: KickPick, side: Side, fromZone: Zone, toZone: Zone, groundLengthMetres: number, tick: number, missed = false): string | null {
+  const pickOf = (options: string[]) => options[tick % options.length];
+  if (pick.progress < -0.2) return pickOf(["going back to keep the ball", "a backwards kick to reset the play"]);
+  if (!isForward50(fromZone, side) && isForward50(toZone, side)) return pickOf(["the entry inside 50", "looking for a target inside 50"]);
+  if (Math.abs(pick.progress) < 0.3 && Math.abs(pick.aim.lane - pick.from.lane) >= 0.8) return pickOf(["switching play to the open side", "a switch across the ground"]);
+  if (pick.progress >= 0.9) {
+    const metres = Math.round((pick.progress * groundLengthMetres) / 4 / 5) * 5;
+    return missed ? `aiming for a ${metres}-metre gain` : `gaining ${metres} metres`;
+  }
+  if (missed) return null;
+  if (pick.distance >= KICK_REASON_FREE_METRES) return pickOf(["picking out the free man", "finding the loose player"]);
+  if (pick.kickDistance <= KICK_REASON_SHORT_METRES) return pickOf(["the safe short option", "a short kick to keep possession"]);
+  return null;
+}
+
+function withKickReason(ctx: Ctx, text: string, pick: KickPick, side: Side, fromZone: Zone, toZone: Zone, missed = false): string {
+  const reason = kickReason(pick, side, fromZone, toZone, ctx.stadium.lengthMeters, ctx.tick, missed);
+  return reason ? `${text} (${reason})` : text;
+}
+
+/**
+ * Oct 2026 — where a disposal puts the ball, and its new zone. A kick lands at its aim point. A handball
+ * goes to the receiver's real tracked spot: short, but it can still cross the 50 arc. Before this, a
+ * handball always "stayed in the zone", so a handball over the arc never earned an inside-50. Sets
+ * `ctx.ball` and returns the zone that spot is in.
+ */
+function disposalLanding(ctx: Ctx, isKick: boolean, kick: KickPick, handball: NearbyPick, fallbackKickZone: Zone, currentZone: Zone): Zone {
+  if (isKick) {
+    ctx.ball = { zoneFrac: kick.aim.zoneFrac, lane: kick.aim.lane };
+    return kickLandingZone(kick, fallbackKickZone, ctx.stadium.lengthMeters);
+  }
+  const receiverAt = ctx.trackedPositions.get(handball.player.PlayerID);
+  if (!receiverAt) return currentZone;
+  ctx.ball = { zoneFrac: receiverAt.zoneFrac, lane: receiverAt.lane };
+  return zoneAt(receiverAt.zoneFrac, ctx.stadium.lengthMeters);
+}
+
+function kickLandingZone(pick: KickPick, fallback: Zone, groundLengthMetres?: number): Zone {
+  return pick.aim ? zoneAt(pick.aim.zoneFrac, groundLengthMetres) : fallback;
+}
+
 function resolveUnpressuredDisposal(
   ctx: Ctx,
   state: State,
@@ -3137,12 +3383,13 @@ function resolveUnpressuredDisposal(
   const isKick = decideKickVsHandball(ctx, carrier, spaceWeight(kickCandidate.distance), spaceWeight(handballCandidate.distance), 0);
   if (isKick) line.kicks += 1;
   else line.handballs += 1;
-  const newZone = isKick ? newZoneIfKick : state.zone;
-  // Round 135 — see zoneEntryDeltas' own doc comment. Only a kick (not a handball, which never
-  // advances the zone here) can ever cross the forward50/defensive50 boundary this function decides.
-  // Deliberately NOT credited on the free-kick-out-of-bounds branch just below (the kick never
-  // actually completed its delivery) — a disclosed simplification, not the full real-AFL definition.
-  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
+  // ROADMAP #18 / Oct 2026 continuous ball — the ball goes where it was aimed (the receiver's real spot)
+  // for a handball as well as a kick; see disposalLanding.
+  const newZone = disposalLanding(ctx, isKick, kickCandidate, handballCandidate, newZoneIfKick, state.zone);
+  // Round 135 — see zoneEntryDeltas' own doc comment. A kick or (Oct 2026) a handball that carries the ball
+  // across the 50 arc earns the inside-50 / rebound-50. The free-kick-out-of-bounds branch just below uses
+  // the same deltas.
+  const zoneDeltas = zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone);
 
   if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
     const newSide = otherSide(state.possession);
@@ -3165,7 +3412,7 @@ function resolveUnpressuredDisposal(
     ctx.lastEffectiveDisposal = null;
     // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
     // taker's own attacking 50 can now roll straight into a shot at goal.
-    const freeKickGotShot = isForward50(newZone, newSide) && ctx.rng() < 0.5;
+    const freeKickGotShot = isForward50(newZone, newSide) && ctx.rng() < shotChanceFromSpot(ctx, freeKickTaker, newSide);
     if (!freeKickGotShot) standTheMark(ctx, freeKickTaker.PlayerID, newSide);
     log(
       ctx,
@@ -3184,6 +3431,7 @@ function resolveUnpressuredDisposal(
         { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
       ],
     );
+    tagFreeKick(ctx, "outOnTheFull", freeKickTaker.PlayerID, carrier.PlayerID);
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
 
@@ -3232,14 +3480,16 @@ function resolveUnpressuredDisposal(
       ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
       return resolveUncontestedMarkOutcome(
         ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, true,
-        unpressuredKickInstantMarkPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, isLongKick),
+        withKickReason(ctx, unpressuredKickInstantMarkPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, isLongKick), receiverPick, state.possession, state.zone, newZone),
         [carrier.PlayerID, receiver.PlayerID],
         disposalDeltas,
       );
     }
-    const kickLabel = missed
-      ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname)
-      : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
+    const kickLabel = withKickReason(
+      ctx,
+      missed ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname) : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark),
+      receiverPick, state.possession, state.zone, newZone, missed,
+    );
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
     // launch, not reception — if the reception later fails, whichever site resolves that failure
     // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
@@ -3259,6 +3509,7 @@ function resolveUnpressuredDisposal(
     // Aug 2026 round 55 — a genuine jump-ball, nobody specific found — breaks the chain the same
     // way a spoil/fumble does, see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = null;
+    logDisposalIntoContest(ctx, newZone, state.possession, carrier, null, isKick, disposalDeltas);
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   // Aug 2026 round 27 — every other kick/handball reception, generalising the
@@ -3284,14 +3535,16 @@ function resolveUnpressuredDisposal(
       ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
       return resolveUncontestedMarkOutcome(
         ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, false,
-        unpressuredKickInstantMarkPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, false),
+        withKickReason(ctx, unpressuredKickInstantMarkPhrase(ctx, carrier.lname, receiver.lname, standingTheMark, receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE), receiverPick, state.possession, state.zone, newZone),
         [carrier.PlayerID, receiver.PlayerID],
         disposalDeltas,
       );
     }
-    const kickLabel = missed
-      ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname)
-      : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark);
+    const kickLabel = withKickReason(
+      ctx,
+      missed ? unpressuredKickMissedPhrase(ctx, carrier.lname, receiver.lname) : unpressuredKickContestedPhrase(ctx, carrier.lname, receiver.lname, standingTheMark),
+      receiverPick, state.possession, state.zone, newZone, missed,
+    );
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID], disposalDeltas, true);
@@ -3303,10 +3556,9 @@ function resolveUnpressuredDisposal(
       markContestDistance: markDistance,
     };
   }
-  // Round 106, item 5 — this branch is only reached when !isKick, so
-  // newZone === state.zone here; handballCandidate (computed against
-  // state.zone above, before the decision) is exactly the same search a
-  // fresh weightedHandballTarget(..., newZone, ...) call would repeat.
+  // Round 106, item 5 — this branch is only reached when !isKick; handballCandidate (computed above,
+  // before the decision) is the pick. Since Oct 2026 newZone is the receiver's real zone, which is
+  // usually state.zone but can differ when the handball crosses a zone line (see disposalLanding).
   const handballPick = handballCandidate;
   const receiver = handballPick.player;
   const handballTargetUnderPressure = proximityWeight(handballPick.distance) !== 0;
@@ -3427,7 +3679,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       P_RUN_AND_CARRY_BASE * (runRating / RUN_AND_CARRY_BASELINE_RATING) * gameStyleDisposalMultiplier(styleFor(possessingPlan)),
     );
     if (ctx.rng() < runChance) {
-      const newZone = advanceZone(state.zone, state.possession);
+      // Oct 2026 (continuous ball): the run starts from where the carrier actually is and covers
+      // RUN_AND_CARRY_DISTANCE of real ground, instead of jumping to the next zone's centre line.
+      const runStart = ctx.trackedPositions.get(carrier.PlayerID) ?? carrierPosition(carrier, possessingTeam.positions?.get(carrier.PlayerID), ballFracIn(ctx, state.zone), possessingTeam.positions);
+      const runEnd = { zoneFrac: Math.min(4, Math.max(0, runStart.zoneFrac + (state.possession === "home" ? 1 : -1) * RUN_AND_CARRY_DISTANCE)), lane: runStart.lane };
+      const newZone = zoneAt(runEnd.zoneFrac, ctx.stadium.lengthMeters);
       // Round 135 — [[Season Statistics Balance Pass]]: this function's own flavour text already
       // narrates "bouncing along the way" every time this branch fires; this is the first stat field
       // that reads it. One `bounces` credit per successful Run and Carry tick (not per whole burst —
@@ -3457,7 +3713,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       // consecutive run tick. Other players' own tracked positions are
       // deliberately left untouched here — teammates and opponents genuinely
       // haven't moved just because the carrier bounced past them.
-      snapTrackedZone(ctx, carrier.PlayerID, newZone);
+      ctx.trackedPositions.set(carrier.PlayerID, runEnd);
 
       // Persistent chase — Aug 2026 round 24, see CHASE_PURSUIT_DISTANCE's
       // own doc comment. The SAME chaser (state.chaserId), re-looked-up by
@@ -3518,6 +3774,16 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
           lineFor(ctx, carrier).turnovers += 1;
           lineFor(ctx, carrier).clangers += 1;
           ctx.lastEffectiveDisposal = null;
+          const runDownDeltas: StatDelta[] = [
+            ...gatherDeltas,
+            { playerId: chaser.PlayerID, stat: "tackles", delta: 1 },
+            { playerId: chaser.PlayerID, stat: "tackleAttempts", delta: 1 },
+            { playerId: chaser.PlayerID, stat: "tackleWins", delta: 1 },
+            { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+            { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
+          ];
+          // ROADMAP #11 / gap #76 — a carrier run down mid-run has had every chance to dispose of it.
+          if (ctx.rng() < P_HOLDING_THE_BALL_WITH_PRIOR) return payHoldingTheBall(ctx, state, chaser, carrier, runDownDeltas, true);
           log(
             ctx,
             state.zone,
@@ -3525,14 +3791,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
             "GENERAL_PLAY",
             `${chaser.lname} runs ${carrier.lname} down from behind and drags him to ground`,
             [chaser.PlayerID, carrier.PlayerID],
-            [
-              ...gatherDeltas,
-              { playerId: chaser.PlayerID, stat: "tackles", delta: 1 },
-              { playerId: chaser.PlayerID, stat: "tackleAttempts", delta: 1 },
-              { playerId: chaser.PlayerID, stat: "tackleWins", delta: 1 },
-              { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
-              { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
-            ],
+            runDownDeltas,
           );
           const newSide = otherSide(state.possession);
           return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: chaser };
@@ -3610,7 +3869,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     lineFor(ctx, defender).freeKicksAgainst += 1;
     // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
     // carrier's own attacking 50 can now roll straight into a shot at goal.
-    const freeKickGotShot = isForward50(state.zone, state.possession) && ctx.rng() < 0.5;
+    const freeKickGotShot = isForward50(state.zone, state.possession) && ctx.rng() < shotChanceFromSpot(ctx, carrier, state.possession);
     if (!freeKickGotShot) standTheMark(ctx, carrier.PlayerID, state.possession);
     log(
       ctx,
@@ -3625,6 +3884,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: defender.PlayerID, stat: "freeKicksAgainst", delta: 1 },
       ],
     );
+    tagFreeKick(ctx, "highContact", carrier.PlayerID, defender.PlayerID);
     return freeKickState(state.zone, state.possession, carrier, freeKickGotShot);
   }
 
@@ -3678,22 +3938,20 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     lineFor(ctx, carrier).turnovers += 1;
     lineFor(ctx, carrier).clangers += 1;
     ctx.lastEffectiveDisposal = null;
-    log(
-      ctx,
-      state.zone,
-      state.possession,
-      "GENERAL_PLAY",
-      describeTackleLanded(ctx, defender.lname, carrier.lname),
-      [defender.PlayerID, carrier.PlayerID],
-      [
-        ...gatherDeltas,
-        { playerId: defender.PlayerID, stat: "tackles", delta: 1 },
-        { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
-        { playerId: defender.PlayerID, stat: "tackleWins", delta: 1 },
-        { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
-        { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
-      ],
-    );
+    const tackleDeltas: StatDelta[] = [
+      ...gatherDeltas,
+      { playerId: defender.PlayerID, stat: "tackles", delta: 1 },
+      { playerId: defender.PlayerID, stat: "tackleAttempts", delta: 1 },
+      { playerId: defender.PlayerID, stat: "tackleWins", delta: 1 },
+      { playerId: carrier.PlayerID, stat: "turnovers", delta: 1 },
+      { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
+    ];
+    // ROADMAP #11 / gap #76 — prior opportunity: he gathered it in space or has been running with it.
+    const hadPriorOpportunity = !!state.carrierUncontested || runTicksSoFar > 0;
+    if (ctx.rng() < (hadPriorOpportunity ? P_HOLDING_THE_BALL_WITH_PRIOR : P_HOLDING_THE_BALL_NO_PRIOR)) {
+      return payHoldingTheBall(ctx, state, defender, carrier, tackleDeltas, false);
+    }
+    log(ctx, state.zone, state.possession, "GENERAL_PLAY", describeTackleLanded(ctx, defender.lname, carrier.lname), [defender.PlayerID, carrier.PlayerID], tackleDeltas);
     const newSide = otherSide(state.possession);
     return { phase: "GENERAL_PLAY", zone: state.zone, possession: newSide, carrier: defender };
   }
@@ -3806,11 +4064,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // after one travelled a full lane's width across the ground). See also the
   // real "Triangle Handball" pattern, [[Tactics and Positional Play]] Part 3
   // — controlled ball movement *out of trouble*, not a ground-gaining play.
-  // Kicks alone advance the zone; a handball keeps play, and the receiver
-  // pool below, right where it already was.
-  const newZone = isKick ? newZoneIfKick : state.zone;
+  // Oct 2026 (continuous ball): a handball still only covers a short distance (its own range cap), but
+  // the ball goes to the receiver's real spot, so a handball across the 50 arc changes the zone.
+  const newZone = disposalLanding(ctx, isKick, kickCandidate, handballCandidate, newZoneIfKick, state.zone);
   // Round 135 — see zoneEntryDeltas' own doc comment / resolveUnpressuredDisposal's identical site.
-  const zoneDeltas = isKick ? zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone) : [];
+  const zoneDeltas = zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone);
 
   // Out on the Full — Aug 2026 round 19, see P_KICK_GOES_OUT_ON_FULL's own
   // doc comment. Only a kick can literally sail out on the full; the
@@ -3834,7 +4092,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     ctx.lastEffectiveDisposal = null;
     // Aug 2026 round 92 — see freeKickState's own doc comment: a free kick this deep in the
     // taker's own attacking 50 can now roll straight into a shot at goal.
-    const freeKickGotShot = isForward50(newZone, newSide) && ctx.rng() < 0.5;
+    const freeKickGotShot = isForward50(newZone, newSide) && ctx.rng() < shotChanceFromSpot(ctx, freeKickTaker, newSide);
     if (!freeKickGotShot) standTheMark(ctx, freeKickTaker.PlayerID, newSide);
     log(
       ctx,
@@ -3854,6 +4112,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
         { playerId: carrier.PlayerID, stat: "clangers", delta: 1 },
       ],
     );
+    tagFreeKick(ctx, "outOnTheFull", freeKickTaker.PlayerID, carrier.PlayerID);
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
 
@@ -3906,14 +4165,16 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
       return resolveUncontestedMarkOutcome(
         ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, true,
-        pressuredKickInstantMarkPhrase(ctx, carrier.lname, defender.lname, receiver.lname, isLongKick),
+        withKickReason(ctx, pressuredKickInstantMarkPhrase(ctx, carrier.lname, defender.lname, receiver.lname, isLongKick), receiverPick, state.possession, state.zone, newZone),
         [carrier.PlayerID, receiver.PlayerID, defender.PlayerID],
         disposalDeltas,
       );
     }
-    const kickLabel = missed
-      ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname)
-      : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
+    const kickLabel = withKickReason(
+      ctx,
+      missed ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname) : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname),
+      receiverPick, state.possession, state.zone, newZone, missed,
+    );
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. Set at the moment of
     // launch, not reception — if the reception later fails, whichever site resolves that failure
     // already clears this again (a spoil, a fumble intercepted, a fumble recovered by defence).
@@ -3933,6 +4194,7 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     // Aug 2026 round 55 — a genuine jump-ball, nobody specific found — breaks the chain the same
     // way a spoil/fumble does, see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = null;
+    logDisposalIntoContest(ctx, newZone, state.possession, carrier, defender, isKick, disposalDeltas);
     return { phase: "CONTEST", zone: newZone, possession: state.possession, carrier: null };
   }
   // Aug 2026 round 27 — same generalisation as resolveUnpressuredDisposal's
@@ -3955,14 +4217,16 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
       return resolveUncontestedMarkOutcome(
         ctx, newZone, state.possession, receiver, defendingSide, defendingTeam, false,
-        pressuredKickInstantMarkPhrase(ctx, carrier.lname, defender.lname, receiver.lname, false),
+        withKickReason(ctx, pressuredKickInstantMarkPhrase(ctx, carrier.lname, defender.lname, receiver.lname, receiverPick.kickDistance > SHORT_KICK_MAX_DISTANCE), receiverPick, state.possession, state.zone, newZone),
         [carrier.PlayerID, receiver.PlayerID, defender.PlayerID],
         disposalDeltas,
       );
     }
-    const kickLabel = missed
-      ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname)
-      : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname);
+    const kickLabel = withKickReason(
+      ctx,
+      missed ? pressuredKickMissedPhrase(ctx, carrier.lname, defender.lname, receiver.lname) : pressuredKickContestedPhrase(ctx, carrier.lname, defender.lname, receiver.lname),
+      receiverPick, state.possession, state.zone, newZone, missed,
+    );
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment.
     ctx.lastEffectiveDisposal = { playerId: carrier.PlayerID, side: state.possession };
     log(ctx, newZone, state.possession, "GENERAL_PLAY", kickLabel, [carrier.PlayerID, receiver.PlayerID, defender.PlayerID], disposalDeltas, true);
@@ -3974,10 +4238,9 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
       markContestDistance: markDistance,
     };
   }
-  // Round 106, item 5 — this branch is only reached when !isKick, so
-  // newZone === state.zone here; handballCandidate (computed against
-  // state.zone above, before the decision) is exactly the same search a
-  // fresh weightedHandballTarget(..., newZone, ...) call would repeat.
+  // Round 106, item 5 — this branch is only reached when !isKick; handballCandidate (computed above,
+  // before the decision) is the pick. Since Oct 2026 newZone is the receiver's real zone, which is
+  // usually state.zone but can differ when the handball crosses a zone line (see disposalLanding).
   const handballPick = handballCandidate;
   const receiver = handballPick.player;
   const handballTargetUnderPressure = proximityWeight(handballPick.distance) !== 0;
@@ -4125,7 +4388,7 @@ function resolveUncontestedGather(
   // Aug 2026 round 92 — same reordering as runContest's own identical-shaped site: the shot-chance
   // roll now runs ahead of log() (no change to when/how often it fires) so standTheMark can apply
   // before this event's own log() only on the non-SHOT branch.
-  const wonForward50ShotRoll = isForward50(state.zone, attackingSide) && ctx.rng() < 0.5;
+  const wonForward50ShotRoll = isForward50(state.zone, attackingSide) && ctx.rng() < shotChanceFromSpot(ctx, attackerRep, attackingSide);
   const isMarkContext = contestType === "markContested" || contestType === "markLead";
   if (isMarkContext && !wonForward50ShotRoll) standTheMark(ctx, attackerRep.PlayerID, attackingSide);
   log(
@@ -4354,7 +4617,7 @@ function runContest(ctx: Ctx, state: State): State {
     // Aug 2026 round 92 — the shot-chance roll moved ahead of log() (no change to when/how often it
     // fires, just its position relative to a non-rng-consuming call) so standTheMark can run before
     // this event's own log() only on the non-SHOT branch — see that function's own doc comment.
-    const wonForward50ShotRoll = isForward50(state.zone, attackingSide) && ctx.rng() < 0.5;
+    const wonForward50ShotRoll = isForward50(state.zone, attackingSide) && ctx.rng() < shotChanceFromSpot(ctx, attackerRep, attackingSide);
     const isMarkContext = contestType === "markContested" || contestType === "markLead";
     if (isMarkContext && !wonForward50ShotRoll) standTheMark(ctx, attackerRep.PlayerID, attackingSide);
     log(
@@ -4547,6 +4810,29 @@ function runMarkingContest(ctx: Ctx, state: State): State {
   if (!nearby) return attemptUncontestedMark();
 
   const defender = nearby.player;
+
+  // In the Back — ROADMAP #11 / gap #76, see P_IN_THE_BACK_FREE_KICK. Paid before the duel resolves.
+  if (ctx.rng() < P_IN_THE_BACK_FREE_KICK) {
+    lineFor(ctx, receiver).freeKicksFor += 1;
+    lineFor(ctx, defender).freeKicksAgainst += 1;
+    const gotShot = isForward50(zone, possessingSide) && ctx.rng() < shotChanceFromSpot(ctx, receiver, possessingSide);
+    if (!gotShot) standTheMark(ctx, receiver.PlayerID, possessingSide);
+    log(
+      ctx,
+      zone,
+      possessingSide,
+      "MARKING_CONTEST",
+      IN_THE_BACK_PHRASES[Math.floor(ctx.rng() * IN_THE_BACK_PHRASES.length)](receiver.lname, defender.lname),
+      [receiver.PlayerID, defender.PlayerID],
+      [
+        { playerId: receiver.PlayerID, stat: "freeKicksFor", delta: 1 },
+        { playerId: defender.PlayerID, stat: "freeKicksAgainst", delta: 1 },
+      ],
+    );
+    tagFreeKick(ctx, "inTheBack", receiver.PlayerID, defender.PlayerID);
+    return freeKickState(zone, possessingSide, receiver, gotShot);
+  }
+
   const defenderInForwardHalf = isForward50(zone, defendingSide);
   const attackerMult =
     contestRatingMultiplier(tacticFor(possessingPlan, receiver, possessingTeam.positions), "markContested", "attacker") *
@@ -4996,6 +5282,8 @@ function runShot(ctx: Ctx, state: State): State {
       false,
       isSetShot,
     );
+    ctx.goalResetPending = true;
+    ctx.ball = { zoneFrac: MIDFIELD, lane: 0 }; // back to the centre square
     return { phase: "STOPPAGE", zone: MIDFIELD, possession: state.possession, carrier: null };
   }
 
@@ -5088,8 +5376,15 @@ export interface MatchInProgress {
   ticksPerQuarter: number;
 }
 
-/** Sets up a match ready for `simulateQuarter()`, identical initial state to what `simulateMatch()` itself used to build inline. */
-export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: number, opts: SimulateMatchOptions = {}): MatchInProgress {
+/**
+ * Sets up a match ready for `simulateQuarter()`, identical initial state to what `simulateMatch()` itself used to build inline.
+ * Oct 2026: plays on its own copies of `home`/`away` (read the live ones from `match.ctx.home`/`away`).
+ * Interchanges, re-sorts and injuries mutate the teams during a match, and with the caller's objects
+ * that state leaked into the next match played with the same team.
+ */
+export function startMatch(homeTeam: MatchTeam, awayTeam: MatchTeam, rng: Rng, seed: number, opts: SimulateMatchOptions = {}): MatchInProgress {
+  const home = cloneMatchTeam(homeTeam);
+  const away = cloneMatchTeam(awayTeam);
   const ticksPerQuarter = opts.ticksPerQuarter ?? DEFAULT_TICKS_PER_QUARTER;
   const recordEvents = opts.recordEvents ?? true;
   const homePlan = opts.homePlan ? sanitizePlan(home.players, opts.homePlan, home.positions) : null;
@@ -5127,7 +5422,15 @@ export function startMatch(home: MatchTeam, away: MatchTeam, rng: Rng, seed: num
     homeFitness: new Map(home.players.map((p) => [p.PlayerID, 100])),
     awayFitness: new Map(away.players.map((p) => [p.PlayerID, 100])),
     restUntilTick: new Map(),
-    activeCovers: { home: new Map(), away: new Map() },
+    goalResetPending: false,
+    ball: { zoneFrac: MIDFIELD, lane: 0 },
+    injuryExposure: new Map(),
+    injuryRng: mulberry32((seed ^ 0x1badb002) >>> 0),
+    softTissueRisk: opts.softTissueRisk ?? new Map(),
+    wet: opts.wet ?? false,
+    injuries: [],
+    pendingInjuries: [],
+    homeSlots: { home: new Map(home.positions ?? []), away: new Map(away.positions ?? []) },
     // Aug 2026 round 55 — see Ctx.lastEffectiveDisposal's own doc comment. No disposal chain
     // exists yet at kick-off, same as at every other stoppage.
     lastEffectiveDisposal: null,
@@ -5168,8 +5471,17 @@ function stepFitnessSide(ctx: Ctx, side: Side, team: MatchTeam, fitness: Map<num
     const { focus } = lineCoachStateFor(ctx, side, p);
     // Round 130 — the side's game style now really changes how hard players work (`STYLE_FATIGUE`).
     const style = styleFor(side === "home" ? ctx.homePlan : ctx.awayPlan);
-    const drain = ON_GROUND_FITNESS_DRAIN * digDeeperFitnessDrainMultiplier(focus) * styleFatigueDrainMultiplier(style);
-    fitness.set(p.PlayerID, Math.max(FITNESS_FLOOR, (fitness.get(p.PlayerID) ?? 100) - drain));
+    // ROADMAP #16 — and the position he's playing (midfielders run most, key position players least).
+    const workload = POSITION_WORKLOAD[team.positions?.get(p.PlayerID) ?? "HBF"] || 1;
+    const drain = ON_GROUND_FITNESS_DRAIN * workload * digDeeperFitnessDrainMultiplier(focus) * styleFatigueDrainMultiplier(style);
+    const next = Math.max(FITNESS_FLOOR, (fitness.get(p.PlayerID) ?? 100) - drain);
+    fitness.set(p.PlayerID, next);
+    // Oct 2026 — a tired player on the ground is more injury-prone (fatigue.ts); the injury system reads this.
+    const risk = injuryRiskMultiplier(next);
+    ctx.injuryExposure.set(p.PlayerID, (ctx.injuryExposure.get(p.PlayerID) ?? 0) + risk);
+    // [[Injuries]] — soft tissue: fatigue, proneness, recent history and Sports Science (softTissueRisk).
+    const chance = SOFT_TISSUE_RATE_PER_TICK * risk * softTissueProneness(p) * (ctx.softTissueRisk.get(p.PlayerID) ?? 1);
+    if (ctx.injuryRng() < chance) queueInjury(ctx, side, p, "softTissue");
   }
   for (const p of benchPlayers(team)) {
     fitness.set(p.PlayerID, Math.min(100, (fitness.get(p.PlayerID) ?? 100) + BENCH_FITNESS_RECOVERY));
@@ -5182,7 +5494,7 @@ function stepFitnessSide(ctx: Ctx, side: Side, team: MatchTeam, fitness: Map<num
  * `position` by the caller) takes their exact slot — Engine.md's original
  * "like-for-like interchange swaps" read literally: the incoming player
  * inherits the outgoing player's precise real slot, nothing more elaborate.
- * Shared by automatic fitness-driven rotation (`rotateSideForFitness` below)
+ * Shared by the mid-play emergency swap (`emergencySwap` below)
  * and manual interchange (the exported `attemptInterchange`) — one execution
  * path for both, so neither can drift out of sync with the other on what a
  * swap actually does.
@@ -5198,7 +5510,7 @@ function stepFitnessSide(ctx: Ctx, side: Side, team: MatchTeam, fitness: Map<num
  * individual map entries across by hand.
  */
 function performInterchangeSwap(ctx: Ctx, team: MatchTeam, outgoing: Player, incoming: Player, position: Position, state: State, reason: "fitness" | "manual"): void {
-  if (!team.onGround || !team.positions) return; // defensive — callers already guard this, see rotateSideForFitness/attemptInterchange
+  if (!team.onGround || !team.positions) return; // defensive — callers already guard this, see emergencySwap/attemptInterchange
   team.onGround.delete(outgoing.PlayerID);
   team.onGround.add(incoming.PlayerID);
   team.positions.set(outgoing.PlayerID, "INT");
@@ -5222,200 +5534,204 @@ function performInterchangeSwap(ctx: Ctx, team: MatchTeam, outgoing: Player, inc
   }
 }
 
-/** Every `FITNESS_CHECK_INTERVAL_TICKS`, considers one automatic swap per side — see this section's own top doc comment for the full mechanism. */
+/**
+ * ROADMAP #16 (Oct 2026) — rotation now happens at goal resets (see `goalReset` and
+ * `engine/rotation.ts`). Between goals, this check only fires the safety valve: a player under
+ * `EMERGENCY_FITNESS` swaps like for like with a ready bench player suited to his exact slot.
+ */
 function maybeRotateForFitness(ctx: Ctx, state: State): void {
   if (ctx.tick % FITNESS_CHECK_INTERVAL_TICKS !== 0) return;
-  rotateSideForFitness(ctx, ctx.home, ctx.homeFitness, state);
-  rotateSideForFitness(ctx, ctx.away, ctx.awayFitness, state);
+  emergencySwap(ctx, ctx.home, ctx.homeFitness, state);
+  emergencySwap(ctx, ctx.away, ctx.awayFitness, state);
 }
 
-/**
- * Aug 2026 round 48 — the first version of this function only ever looked at
- * the SINGLE lowest-fitness on-ground player and gave up for the whole check
- * if nobody on the bench happened to be eligible for that one player's exact
- * slot — even when a DIFFERENT, genuinely tired on-ground player (in a
- * different, actually-covered position) had a real replacement sitting ready.
- * `scripts/verify_round48_scratch.ts`'s Section 5 caught this directly: real
- * matches converged to every on-ground player pinned at FITNESS_FLOOR and
- * every bench player sitting untouched at 100 — rotation had effectively
- * stalled almost everywhere except whichever one slot happened to have
- * bench cover AND happened to also be the global minimum at a given check.
- * Fixed by walking every below-threshold on-ground player tiredest-first and
- * taking the first one that actually has an available replacement, rather
- * than stopping dead at the single tiredest. A position with genuinely no
- * bench cover at all (a real, expected limit of a 5-player bench covering 18
- * on-ground slots — see MatchTeam.interchangeEligibility's own doc comment)
- * is still correctly left alone; it just no longer blocks every OTHER,
- * coverable position from rotating too.
- */
-interface ActiveCover {
-  resterPos: Position;
-  by: number;
-  /** Chain only: the mover's own position, and who came on in it. */
-  byPos?: Position;
-  fill?: number;
-}
+const rested = (ctx: Ctx, id: number) => ctx.tick >= (ctx.restUntilTick.get(id) ?? 0);
 
-/** Round 130 — a rester comes back once he's recovered this far (and has sat at least `MIN_BENCH_REST_TICKS`). */
-export const COVER_RETURN_FITNESS = 85;
-
-/**
- * One rotation step with an optional third player moving across — the general form behind both a
- * straight swap and a cover chain. `outgoing` goes to the bench, `incoming` comes on at
- * `incomingPos`, `moved` (if any) changes position on the ground. Logged with structured
- * `interchange` data so a viewer can replay who's on at any tick.
- */
-function executeRotation(
-  ctx: Ctx,
-  team: MatchTeam,
-  state: State,
-  outgoing: Player,
-  incoming: Player,
-  incomingPos: Position,
-  moved: { player: Player; position: Position } | null,
-  description: string,
-): void {
+function emergencySwap(ctx: Ctx, team: MatchTeam, fitness: Map<number, number>, state: State): void {
   if (!team.onGround || !team.positions) return;
-  team.onGround.delete(outgoing.PlayerID);
-  team.onGround.add(incoming.PlayerID);
-  team.positions.set(outgoing.PlayerID, "INT");
-  team.positions.set(incoming.PlayerID, incomingPos);
-  if (moved) team.positions.set(moved.player.PlayerID, moved.position);
-  ctx.restUntilTick.set(outgoing.PlayerID, ctx.tick + MIN_BENCH_REST_TICKS);
-  ctx.matchups = resolveMatchups(ctx.home, ctx.away);
-  const ids = [outgoing.PlayerID, incoming.PlayerID, ...(moved ? [moved.player.PlayerID] : [])];
-  log(ctx, state.zone, state.possession, state.phase, description, ids, [], true);
-  if (ctx.recordEvents) {
-    const side: Side = team === ctx.home ? "home" : "away";
-    ctx.events[ctx.events.length - 1].interchange = {
-      side,
-      outgoingId: outgoing.PlayerID,
-      incomingId: incoming.PlayerID,
-      position: incomingPos,
-      moved: moved ? { playerId: moved.player.PlayerID, position: moved.position } : undefined,
-    };
+  const spent = onGroundPlayers(team)
+    .filter((p) => team.restPolicy?.get(p.PlayerID) !== "never" && (fitness.get(p.PlayerID) ?? 100) < EMERGENCY_FITNESS)
+    .sort((a, b) => (fitness.get(a.PlayerID) ?? 100) - (fitness.get(b.PlayerID) ?? 100));
+  for (const out of spent) {
+    const pos = team.positions.get(out.PlayerID);
+    if (!pos || pos === "INT") continue;
+    const options = benchPlayers(team).filter(
+      (b) =>
+        rested(ctx, b.PlayerID) &&
+        (fitness.get(b.PlayerID) ?? 100) >= BENCH_READY_FITNESS &&
+        fitRank(b, pos) >= 2 &&
+        (team.interchangeEligibility?.get(b.PlayerID)?.has(pos) ?? true),
+    );
+    const pinned = team.covers?.get(out.PlayerID);
+    const incoming =
+      options.find((b) => pinned && b.PlayerID === pinnedReliever(pinned)) ??
+      options.sort((a, b) => fitRank(b, pos) - fitRank(a, pos) || (fitness.get(b.PlayerID) ?? 100) - (fitness.get(a.PlayerID) ?? 100))[0];
+    if (!incoming) continue;
+    performInterchangeSwap(ctx, team, out, incoming, pos, state, "fitness");
+    return; // one per side per check
   }
 }
 
-/**
- * Round 130 (Match Day flow v2) — rotation for a side with a coach's cover plan (`MatchTeam.covers`).
- * Same fitness model and cadence as `rotateSideForFitness`, but WHO relieves WHOM comes from the
- * plan: a straight swap with a named bench player, or a chain where a teammate moves across and a
- * bench player fills his spot (van Rooyen FP → R for Gawn, Henderson on at FP). A rester comes back
- * once recovered, reversing the chain. One change per side per check; a player tied up in one cover
- * can't start another until it ends. Anyone without a cover plays through.
- */
-function rotateByCovers(ctx: Ctx, team: MatchTeam, fitness: Map<number, number>, state: State): void {
-  if (!team.onGround || !team.positions || !team.covers) return;
-  const side: Side = team === ctx.home ? "home" : "away";
-  const active = ctx.activeCovers[side];
-  const byId = new Map(team.players.map((p) => [p.PlayerID, p]));
-  const onGround = (id: number) => team.onGround!.has(id);
-  const rested = (id: number) => ctx.tick >= (ctx.restUntilTick.get(id) ?? 0);
+interface PendingInterchangeLog {
+  side: Side;
+  description: string;
+  ids: number[];
+  outgoingId: number;
+  incomingId: number;
+  position: Position;
+  moves?: { playerId: number; position: Position }[];
+}
 
-  // Returns first: a recovered rester comes back on and the chain unwinds.
-  for (const [resterId, a] of active) {
-    if (!rested(resterId) || (fitness.get(resterId) ?? 100) < COVER_RETURN_FITNESS) continue;
-    const rester = byId.get(resterId);
-    const by = byId.get(a.by);
-    if (!rester || !by) {
-      active.delete(resterId);
+// --- Injuries — Oct 2026, [[Injuries]] -------------------------------------------------------------------
+
+function queueInjury(ctx: Ctx, side: Side, player: Player, kind: InjuryKind): void {
+  if (ctx.pendingInjuries.some((q) => q.player.PlayerID === player.PlayerID)) return;
+  // A side that's lost bench players tires faster, which raises soft tissue risk, which costs more
+  // bench players. Capping it stops that spiral (a side losing 4+ in a match is vanishingly rare).
+  const already = ctx.injuries.filter((i) => i.side === side).length + ctx.pendingInjuries.filter((q) => q.side === side).length;
+  if (already >= MAX_INJURIES_PER_TEAM_PER_MATCH) return;
+  ctx.pendingInjuries.push({ side, player, kind });
+}
+
+/** A contact moment: bad luck only (wet weather nudges it up). One of the players in it may be hurt. */
+function maybeContactInjury(ctx: Ctx, playerIds: number[]): void {
+  const chance = CONTACT_RATE_PER_EVENT * (ctx.wet ? WET_CONTACT_MULTIPLIER : 1);
+  if (ctx.injuryRng() >= chance) return;
+  const candidates: { side: Side; player: Player }[] = [];
+  for (const id of new Set(playerIds)) {
+    for (const side of ["home", "away"] as const) {
+      const team = teamOf(ctx, side);
+      const p = team.players.find((x) => x.PlayerID === id);
+      if (p && onGroundPlayers(team).includes(p)) candidates.push({ side, player: p });
+    }
+  }
+  if (!candidates.length) return;
+  const victim = candidates[Math.floor(ctx.injuryRng() * candidates.length)];
+  queueInjury(ctx, victim.side, victim.player, "contact");
+}
+
+/**
+ * Applied at the end of a tick, so a phase never loses a player halfway through resolving. A player
+ * still holding the ball waits until he's disposed of it. The injured man leaves the ground for good;
+ * the best-suited bench player comes on in his slot, ready or not. With nobody left on the bench the
+ * side plays a man short.
+ */
+function applyPendingInjuries(ctx: Ctx, state: State): void {
+  if (!ctx.pendingInjuries.length) return;
+  const waiting: Ctx["pendingInjuries"] = [];
+  for (const q of ctx.pendingInjuries) {
+    if (state.carrier?.PlayerID === q.player.PlayerID) {
+      waiting.push(q);
       continue;
     }
-    if (a.fill !== undefined && a.byPos) {
-      const fill = byId.get(a.fill);
-      if (!fill || !onGround(fill.PlayerID) || !onGround(by.PlayerID)) {
-        active.delete(resterId);
-        continue;
-      }
-      executeRotation(ctx, team, state, fill, rester, a.resterPos, { player: by, position: a.byPos }, `${rester.lname} back on at ${a.resterPos} — ${by.lname} returns to ${a.byPos}, ${fill.lname} to the bench.`);
-    } else {
-      if (!onGround(by.PlayerID)) {
-        active.delete(resterId);
-        continue;
-      }
-      executeRotation(ctx, team, state, by, rester, a.resterPos, null, `${rester.lname} back on at ${a.resterPos} — ${by.lname} to the bench.`);
+    const team = teamOf(ctx, q.side);
+    if (team.injuredOut?.has(q.player.PlayerID)) continue;
+    const type = pickInjuryType(q.kind, ctx.injuryRng, isConcussionProne(q.player));
+    const injury: MatchInjury = { side: q.side, playerId: q.player.PlayerID, typeId: type.id, kind: q.kind, quarter: ctx.quarter };
+    ctx.injuries.push(injury);
+    (team.injuredOut ??= new Set()).add(q.player.PlayerID);
+    const pos = team.positions?.get(q.player.PlayerID);
+    const wasOn = team.onGround ? team.onGround.has(q.player.PlayerID) : true;
+    const fitness = q.side === "home" ? ctx.homeFitness : ctx.awayFitness;
+    const replacement =
+      wasOn && team.onGround && team.positions && pos && pos !== "INT"
+        ? benchPlayers(team).sort((a, b) => fitRank(b, pos) - fitRank(a, pos) || (fitness.get(b.PlayerID) ?? 100) - (fitness.get(a.PlayerID) ?? 100))[0]
+        : undefined;
+    const verb = type.concussion ? "is assessed for concussion and won't return" : type.kind === "softTissue" ? "pulls up sore" : "is helped from the ground";
+    const what = type.concussion ? "" : ` — ${type.label.toLowerCase()}`;
+    if (team.onGround && wasOn) team.onGround.delete(q.player.PlayerID);
+    if (team.positions) team.positions.set(q.player.PlayerID, "INT");
+    let description = `INJURY: ${q.player.lname} ${verb}${what}.`;
+    if (replacement && pos) {
+      team.onGround!.add(replacement.PlayerID);
+      team.positions!.set(replacement.PlayerID, pos);
+      description += ` ${replacement.lname} on at ${pos}.`;
+    } else if (wasOn) {
+      description += ` ${team.name} are down to ${team.onGround?.size ?? 17} on the ground.`;
     }
-    active.delete(resterId);
-    return;
+    ctx.matchups = resolveMatchups(ctx.home, ctx.away);
+    log(ctx, state.zone, state.possession, state.phase, description, replacement ? [q.player.PlayerID, replacement.PlayerID] : [q.player.PlayerID], [], true);
+    if (ctx.recordEvents) {
+      const ev = ctx.events[ctx.events.length - 1];
+      ev.injury = injury;
+      if (replacement && pos) ev.interchange = { side: q.side, outgoingId: q.player.PlayerID, incomingId: replacement.PlayerID, position: pos };
+    }
   }
+  ctx.pendingInjuries = waiting;
+}
 
-  // Then goes: the tiredest covered player whose cover is free right now.
-  const busy = new Set<number>();
-  for (const [r, a] of active) {
-    busy.add(r);
-    busy.add(a.by);
-    if (a.fill !== undefined) busy.add(a.fill);
-  }
-  const tired = onGroundPlayers(team)
-    .filter((p) => team.covers!.has(p.PlayerID) && !busy.has(p.PlayerID) && (fitness.get(p.PlayerID) ?? 100) < FITNESS_ROTATION_THRESHOLD)
-    .sort((a, b) => (fitness.get(a.PlayerID) ?? 100) - (fitness.get(b.PlayerID) ?? 100));
-  for (const rester of tired) {
-    const c = team.covers.get(rester.PlayerID)!;
-    const resterPos = team.positions.get(rester.PlayerID);
-    const by = byId.get(c.by);
-    if (!resterPos || resterPos === "INT" || !by || busy.has(by.PlayerID)) continue;
-    if (!onGround(by.PlayerID)) {
-      if (!rested(by.PlayerID)) continue;
-      executeRotation(ctx, team, state, rester, by, resterPos, null, `${rester.lname} to the bench — ${by.lname} on at ${resterPos}.`);
-      active.set(rester.PlayerID, { resterPos, by: by.PlayerID });
-      return;
+/**
+ * The 30-second pause after a goal (Tyler: "Players celebrate the goal. Then 2-4 players interchange,
+ * and as the new players come onto the field they reset the ground to the 6-6-6 starting positions").
+ * Both sides rotate per `planReset`, every on-ground player realigns to his centre-bounce anchor, and
+ * only then are the changes logged, so each interchange event's position snapshot already shows the
+ * new men on.
+ */
+function goalReset(ctx: Ctx, state: State): void {
+  ctx.goalResetPending = false;
+  const logs = [...resetRotation(ctx, ctx.home, ctx.homeFitness), ...resetRotation(ctx, ctx.away, ctx.awayFitness)];
+  ctx.trackedPositions = initialPositions(ctx.home, ctx.away, styleFor(ctx.homePlan), styleFor(ctx.awayPlan), MIDFIELD, state.possession);
+  if (logs.length) ctx.matchups = resolveMatchups(ctx.home, ctx.away);
+  for (const l of logs) {
+    log(ctx, state.zone, state.possession, state.phase, l.description, l.ids, [], true);
+    if (ctx.recordEvents) {
+      ctx.events[ctx.events.length - 1].interchange = { side: l.side, outgoingId: l.outgoingId, incomingId: l.incomingId, position: l.position, moves: l.moves };
     }
-    const fill = c.fill !== undefined ? byId.get(c.fill) : undefined;
-    const byPos = team.positions.get(by.PlayerID);
-    if (!fill || busy.has(fill.PlayerID) || onGround(fill.PlayerID) || !rested(fill.PlayerID) || !byPos || byPos === "INT") continue;
-    executeRotation(ctx, team, state, rester, fill, byPos, { player: by, position: resterPos }, `${rester.lname} to the bench — ${by.lname} moves ${byPos} → ${resterPos}, ${fill.lname} on at ${byPos}.`);
-    active.set(rester.PlayerID, { resterPos, by: by.PlayerID, byPos, fill: fill.PlayerID });
-    return;
   }
 }
 
-function rotateSideForFitness(ctx: Ctx, team: MatchTeam, fitness: Map<number, number>, state: State): void {
-  if (team.covers) {
-    rotateByCovers(ctx, team, fitness, state);
-    return;
+/** Applies one side's reset rotation to `team` in place and returns what to log. */
+function resetRotation(ctx: Ctx, team: MatchTeam, fitness: Map<number, number>): PendingInterchangeLog[] {
+  if (!team.onGround || !team.positions) return [];
+  const side: Side = team === ctx.home ? "home" : "away";
+  const onGround = onGroundPlayers(team);
+  const current = new Map<number, Position>();
+  for (const p of onGround) {
+    const pos = team.positions.get(p.PlayerID);
+    if (!pos || pos === "INT") return []; // a topped-up player with no slot — no shape to re-sort, leave this side alone
+    current.set(p.PlayerID, pos);
   }
-  // No real position/eligibility data for this side (e.g. a pickBest22
-  // stand-in with no Selection Committee lineup behind it) — nothing safe to
-  // rotate, same "no bench distinction" degradation onGroundPlayers/
-  // benchPlayers already apply. See MatchTeam.interchangeEligibility's own
-  // doc comment.
-  if (!team.onGround || !team.positions || !team.interchangeEligibility) return;
-
-  const tiredCandidates = onGroundPlayers(team)
-    .map((p) => ({ player: p, position: team.positions!.get(p.PlayerID), fitness: fitness.get(p.PlayerID) ?? 100 }))
-    // Only a real, known slot (a top-up player with no assigned position is
-    // left alone — there's no clean "like-for-like" slot to hand an incoming
-    // player), and only genuinely below the rotation threshold.
-    .filter((c): c is { player: Player; position: Position; fitness: number } => !!c.position && c.position !== "INT" && c.fitness < FITNESS_ROTATION_THRESHOLD)
-    .sort((a, b) => a.fitness - b.fitness);
-
-  for (const candidate of tiredCandidates) {
-    // The freshest eligible, sufficiently-rested bench replacement for this
-    // exact position — "the new lowest fitness in his group" read as "among
-    // whoever's actually allowed to fill this slot", Tyler's own worked
-    // examples (a small defender never eligible for a tall defender's Back
-    // Pocket) are exactly what `interchangeEligibility` exists to enforce
-    // here.
-    let replacement: Player | null = null;
-    let replacementFitness = -Infinity;
-    for (const b of benchPlayers(team)) {
-      if (!team.interchangeEligibility.get(b.PlayerID)?.has(candidate.position)) continue;
-      if (ctx.tick < (ctx.restUntilTick.get(b.PlayerID) ?? 0)) continue; // still recharging
-      const f = fitness.get(b.PlayerID) ?? 100;
-      if (f > replacementFitness) {
-        replacementFitness = f;
-        replacement = b;
-      }
-    }
-    if (replacement) {
-      performInterchangeSwap(ctx, team, candidate.player, replacement, candidate.position, state, "fitness");
-      return; // one swap per side per check, same as before
-    }
-  }
-  // Every currently-tired on-ground player either has no eligible bench
-  // cover at all, or their only eligible cover is still recharging — nobody
-  // rotates this check, and the tired players just keep playing.
+  const plan = planReset({
+    onGround,
+    bench: benchPlayers(team),
+    current,
+    home: ctx.homeSlots[side],
+    eligibility: team.interchangeEligibility,
+    fitness: (id) => fitness.get(id) ?? 100,
+    rested: (id) => rested(ctx, id),
+    policy: (id) => team.restPolicy?.get(id),
+    pin: (id) => {
+      const c = team.covers?.get(id);
+      return c ? pinnedReliever(c) : undefined;
+    },
+  });
+  const positions = plan.positions;
+  if (!positions) return [];
+  const swapped = new Set(plan.swaps.flatMap((s) => [s.outgoing.PlayerID, s.incoming.PlayerID]));
+  const moves = onGround
+    .filter((p) => !swapped.has(p.PlayerID) && positions.get(p.PlayerID) !== current.get(p.PlayerID))
+    .map((p) => ({ player: p, position: positions.get(p.PlayerID)! }));
+  for (const m of moves) team.positions.set(m.player.PlayerID, m.position);
+  return plan.swaps.map(({ outgoing, incoming }, i) => {
+    const pos = positions.get(incoming.PlayerID)!;
+    team.onGround!.delete(outgoing.PlayerID);
+    team.onGround!.add(incoming.PlayerID);
+    team.positions!.set(outgoing.PlayerID, "INT");
+    team.positions!.set(incoming.PlayerID, pos);
+    ctx.restUntilTick.set(outgoing.PlayerID, ctx.tick + MIN_BENCH_REST_TICKS);
+    const last = i === plan.swaps.length - 1 && moves.length > 0;
+    const outFit = Math.round(fitness.get(outgoing.PlayerID) ?? 100);
+    const shifts = last ? ` ${moves.map((m) => `${m.player.lname} ${current.get(m.player.PlayerID)} → ${m.position}`).join(", ")}.` : "";
+    return {
+      side,
+      description: `Interchange: ${incoming.lname} on at ${pos}, ${outgoing.lname} (${outFit}%) to the bench.${shifts}`,
+      ids: [outgoing.PlayerID, incoming.PlayerID, ...(last ? moves.map((m) => m.player.PlayerID) : [])],
+      outgoingId: outgoing.PlayerID,
+      incomingId: incoming.PlayerID,
+      position: pos,
+      moves: last ? moves.map((m) => ({ playerId: m.player.PlayerID, position: m.position })) : undefined,
+    };
+  });
 }
 
 /**
@@ -5437,15 +5753,11 @@ export function attemptInterchange(match: MatchInProgress, side: Side, outgoingI
   if (!outgoing || !incoming) return { ok: false, reason: "Player not found on this team." };
   if (!team.onGround.has(outgoingId)) return { ok: false, reason: `${outgoing.lname} isn't currently on the ground.` };
   if (team.onGround.has(incomingId)) return { ok: false, reason: `${incoming.lname} is already on the ground.` };
+  if (team.injuredOut?.has(incomingId)) return { ok: false, reason: `${incoming.lname} is injured.` };
   const position = team.positions.get(outgoingId);
   if (!position || position === "INT") return { ok: false, reason: `${outgoing.lname} has no real slot to hand off.` };
   if (!team.interchangeEligibility.get(incomingId)?.has(position)) {
     return { ok: false, reason: `${incoming.lname} isn't eligible for ${position}.` };
-  }
-  // Round 130 — a manual change overrides any cover it cuts across: that cover no longer unwinds itself.
-  const active = match.ctx.activeCovers[side];
-  for (const [r, a] of active) {
-    if ([r, a.by, a.fill].includes(outgoingId) || [r, a.by, a.fill].includes(incomingId)) active.delete(r);
   }
   performInterchangeSwap(match.ctx, team, outgoing, incoming, position, match.state, "manual");
   return { ok: true };
@@ -5457,8 +5769,19 @@ export function fitnessFor(match: MatchInProgress, side: Side, playerId: number)
   return fitness.get(playerId) ?? 100;
 }
 
+function clearTickCache(c: MovementTickCache): void {
+  c.home.clear();
+  c.maxStep.clear();
+}
+
 /** Runs exactly one quarter's worth of ticks, then resets to a centre stoppage — the exact same per-quarter body `simulateMatch()`'s own loop used to run inline, just callable one quarter at a time. Mutates `match` in place (and returns it, for chaining/assignment convenience). */
 export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4): MatchInProgress {
+  // Oct 2026 — in-match fatigue scales attributes for everything this quarter reads (see fatigue.ts).
+  const { homeFitness, awayFitness } = match.ctx;
+  return withFatigue((id) => homeFitness.get(id) ?? awayFitness.get(id) ?? 100, () => runQuarter(match, quarter));
+}
+
+function runQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4): MatchInProgress {
   match.ctx.quarter = quarter;
   // Aug 2026 round 28, decoupled round 106 — step every on-ground player's
   // off-ball position once per RAW FRAME consumed below (both the main loop
@@ -5479,6 +5802,9 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
   // dispatch) keeps firing at exactly its old cadence — see
   // `TICK_RATE_MULTIPLIER`'s own doc comment for the full reasoning and why
   // that split is what lets every existing per-tick constant stay untouched.
+  // Oct 2026 perf pass — see MovementTickCache (movement.ts). Cleared at the start of every decision
+  // tick, so it only ever spans the raw frames that share one zone/possession/positions/fitness state.
+  const tickCache = newMovementTickCache();
   const stepTickPositions = () => {
     match.ctx.trackedPositions = stepPositions(
       match.ctx.home,
@@ -5487,12 +5813,13 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       match.ctx.awayPlan,
       styleFor(match.ctx.homePlan),
       styleFor(match.ctx.awayPlan),
-      match.state.zone,
+      match.ctx.ball.zoneFrac, // Oct 2026: team shape follows the real ball, not a zone step
       match.state.possession,
       match.state.carrier,
       match.ctx.matchups,
       match.ctx.trackedPositions,
       match.ctx.stadium,
+      tickCache,
     );
   };
   // Raw frames this quarter: `TICK_RATE_MULTIPLIER` for every one decision
@@ -5502,6 +5829,7 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
   // `MatchResult`. See `TICK_RATE_MULTIPLIER`'s own doc comment for why.
   const rawFrameCount = match.ticksPerQuarter * TICK_RATE_MULTIPLIER;
   for (let frame = 0; frame < rawFrameCount; frame++) {
+    if (frame % TICK_RATE_MULTIPLIER === 0) clearTickCache(tickCache);
     stepTickPositions();
     // Every raw frame moves players; only every `TICK_RATE_MULTIPLIER`-th
     // one is an actual decision — same cadence as before this round.
@@ -5532,6 +5860,9 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
         match.state = runShot(match.ctx, match.state);
         break;
     }
+    settleBall(match.ctx, match.state);
+    applyPendingInjuries(match.ctx, match.state);
+    if (match.ctx.goalResetPending) goalReset(match.ctx, match.state);
   }
   // Aug 2026 round 25, extended round 26, made a real loop round 27: a
   // stoppage or a launched kick/handball that happens to land on literally
@@ -5572,19 +5903,25 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
   for (let guard = 0; guard < MAX_DANGLING_PHASE_TICKS; guard++) {
     if (match.state.phase === "CLEARANCE") {
       match.ctx.tick += 1;
+      clearTickCache(tickCache);
       stepTickPositions();
       stepFitness(match.ctx);
       match.state = runClearance(match.ctx, match.state);
+      settleBall(match.ctx, match.state);
     } else if (match.state.phase === "MARKING_CONTEST") {
       match.ctx.tick += 1;
+      clearTickCache(tickCache);
       stepTickPositions();
       stepFitness(match.ctx);
       match.state = runMarkingContest(match.ctx, match.state);
+      settleBall(match.ctx, match.state);
     } else if (match.state.phase === "HANDBALL_CONTEST") {
       match.ctx.tick += 1;
+      clearTickCache(tickCache);
       stepTickPositions();
       stepFitness(match.ctx);
       match.state = runHandballContest(match.ctx, match.state);
+      settleBall(match.ctx, match.state);
     } else if (match.state.phase === "SHOT") {
       // The one phase in this chain that ISN'T a phase this same loop
       // resolved a tick earlier in the ordinary case too — SHOT is only ever
@@ -5594,15 +5931,22 @@ export function simulateQuarter(match: MatchInProgress, quarter: 1 | 2 | 3 | 4):
       // MARKING_CONTEST -> SHOT link in the proven chain above is actually
       // walked, not just reasoned about.
       match.ctx.tick += 1;
+      clearTickCache(tickCache);
       stepTickPositions();
       stepFitness(match.ctx);
       match.state = runShot(match.ctx, match.state);
+      settleBall(match.ctx, match.state);
     } else {
       break;
     }
   }
-  // Quarter-time: reset to a centre stoppage regardless of where play was up to.
+  // Quarter-time: reset to a centre stoppage regardless of where play was up to. A goal on the siren
+  // has no reset of its own — the break is the coach's moment to change things.
+  match.ctx.goalResetPending = false;
+  // Anyone hurt on the final ticks (or still holding the ball when he was) goes off at the break.
+  applyPendingInjuries(match.ctx, { ...match.state, carrier: null });
   match.state = { phase: "STOPPAGE", zone: MIDFIELD, possession: quarter % 2 === 1 ? "away" : "home", carrier: null };
+  match.ctx.ball = { zoneFrac: MIDFIELD, lane: 0 };
   // Aug 2026 round 28 — real assigned positions don't change mid-match, so
   // this is the same `resolveMatchups` result recomputed for nothing; only
   // `trackedPositions` actually needs resetting here, back to each side's
@@ -5667,6 +6011,9 @@ export function matchResultSoFar(match: MatchInProgress): MatchResult {
     away,
     events: match.ctx.events,
     boxScore: match.ctx.box,
+    injuryExposure: Object.fromEntries([...match.ctx.injuryExposure].map(([id, v]) => [id, Math.round(v * 10) / 10])),
+    injuries: [...match.ctx.injuries],
+    wet: match.ctx.wet,
   };
 }
 

@@ -45,6 +45,27 @@ export function advanceZone(zone: Zone, side: Side): Zone {
   return Math.min(4, Math.max(0, next)) as Zone;
 }
 
+/**
+ * The zone the ball's real position sits in. `zoneFrac` runs goal line (0) to goal line (4), one unit
+ * a quarter of the ground's length. Real geometry:
+ * - the two 50s are the real 50m arcs (venue-length aware)
+ * - the ground between them splits into equal thirds (back half, midfield, forward half)
+ *
+ * History:
+ * - ROADMAP #18 (Oct 2026) first used nearest-integer rounding. That puts the forward-50 line ~20m from
+ *   goal, but was needed while the team press stepped between whole zones.
+ * - With the ball continuous (Oct 2026), the press follows the real ball, so the real arcs no longer
+ *   disturb positioning. They're what lets a forward who marks 40m out actually be "inside 50".
+ */
+export const ARC_METRES = 50;
+export function zoneAt(zoneFrac: number, groundLengthMetres = 160): Zone {
+  const arc = (ARC_METRES * 4) / groundLengthMetres;
+  if (zoneFrac <= arc) return 0;
+  if (zoneFrac >= 4 - arc) return 4;
+  const third = (4 - 2 * arc) / 3;
+  return (1 + Math.min(2, Math.floor((zoneFrac - arc) / third))) as Zone;
+}
+
 export function otherSide(side: Side): Side {
   return side === "home" ? "away" : "home";
 }

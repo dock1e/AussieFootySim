@@ -4,6 +4,7 @@ import { playerFullName } from "../types/player";
 import { clubByName, clubById } from "../types/club";
 import { useGameStore } from "../store/useGameStore";
 import { DayOne, type DayOneTarget } from "./onboarding/DayOne";
+import { ClubStatusCard } from "./ClubStatusCard";
 import { useSeasonStore } from "../store/useSeasonStore";
 import { useSaveStore } from "../store/useSaveStore";
 import { useSelectionStore } from "../store/useSelectionStore";
@@ -77,9 +78,11 @@ interface DashboardProps {
   onGoToSeason?: () => void;
   /** New Game Onboarding — the Day one dashboard's links (shown until Round 1 is played). */
   onDayOne?: (target: DayOneTarget) => void;
+  /** ROADMAP #14 — the club-status card's link to Football Dept > Club History. */
+  onOpenClubHistory?: () => void;
 }
 
-export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDayOne }: DashboardProps) {
+export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDayOne, onOpenClubHistory }: DashboardProps) {
   const myClub = useGameStore((s) => s.myClub);
   const club = clubByName(myClub);
   const myClubId = club?.ClubID;
@@ -89,6 +92,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDa
   const seasonArchives = useSaveStore((s) => s.seasonArchives);
   const watchlist = useSaveStore((s) => s.watchlist);
   const togglePin = useSaveStore((s) => s.togglePin);
+  const hasSeasonBooks = useSaveStore((s) => (s.clubFinance[myClub]?.history ?? []).some((h) => h.source === "sim"));
   const myLineup = useSelectionStore((s) => s.lineupFor(myClub));
   const [fixtureRound, setFixtureRound] = useState(1);
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -205,7 +209,14 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDa
   // New Game Onboarding: until Round 1 is played, the Dashboard is the Day one screen (it replaces the
   // old "No season in progress" empty state).
   if (myClubId !== undefined && (!season || season.played.length === 0)) {
-    return <DayOne myClub={myClub} onGo={(t) => onDayOne?.(t)} />;
+    // ROADMAP #14: once a season's books have closed, pre-season is when last year's verdict matters
+    // most, so the club-status card sits above Day one (a brand-new game has nothing to show yet).
+    return (
+      <div className="space-y-4">
+        {hasSeasonBooks && <ClubStatusCard onOpenHistory={onOpenClubHistory} />}
+        <DayOne myClub={myClub} onGo={(t) => onDayOne?.(t)} />
+      </div>
+    );
   }
 
   return (
@@ -225,7 +236,7 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDa
         </div>
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
           <KpiTile value={clubAvgOvr.toFixed(1)} label="List avg OVR" />
-          <KpiTile value={eliteCount} label="Elite 84+" tone="accent" />
+          <KpiTile value={eliteCount} label="Elite 104+" tone="accent" />
           <KpiTile value={players.length} label="List size" />
         </div>
       </Card>
@@ -286,6 +297,8 @@ export function Dashboard({ onGoToSelection, onGoToContracts, onGoToSeason, onDa
               />
             </div>
           </div>
+
+          <ClubStatusCard onOpenHistory={onOpenClubHistory} />
 
           {heroStory && (
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>

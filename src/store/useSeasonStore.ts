@@ -10,8 +10,11 @@ import {
   nextUnplayedRound,
   isHomeAndAwayComplete,
   presetResultKey,
+  type RoundOptions,
   type Season,
 } from "../engine/season";
+import { facilityLevel } from "../engine/clubFinance";
+import type { ClubMedical } from "../engine/injury";
 import { matchesInRound, tagSpecialFixtures } from "../engine/fixture";
 import { applyBigGameHonours } from "../engine/bigGameHonours";
 import { ALL_PLAYERS, loadPool } from "../data/loadPlayers";
@@ -21,7 +24,7 @@ import type { MatchResult } from "../engine/match";
 import type { MatchTeam } from "../engine/team";
 import type { Position } from "../types/archetype";
 import { aiTeamPlan, type TeamPlan } from "../engine/tactics";
-import { defaultCovers, isLineupComplete, lineupToMatchTeam } from "../engine/selection";
+import { isLineupComplete, lineupToMatchTeam, validCovers } from "../engine/selection";
 import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
 import { useGameStore } from "./useGameStore";
 import { useSelectionStore } from "./useSelectionStore";
@@ -106,10 +109,11 @@ function buildTeamsForMyClub(): Map<number, MatchTeam> {
   const myLineup = useSelectionStore.getState().lineupFor(myClub);
   const myEligibility = useSelectionStore.getState().eligibilityFor(myClub);
   if (myClubId !== undefined && myLineup && isLineupComplete(myLineup)) {
-    // Round 130 — your club's covers (or the defaults derived from its line-up) apply to headless rounds too.
+    // Your club's pinned relievers and rest policies apply to headless rounds too (ROADMAP #16).
     const myPlayers = getPlayersByClub(myClub);
-    const myCovers = useSelectionStore.getState().covers[myClub] ?? defaultCovers(myLineup, myPlayers, myEligibility);
-    overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, myPlayers, myEligibility, myCovers));
+    const sel = useSelectionStore.getState();
+    const myCovers = validCovers(myLineup, sel.covers[myClub] ?? {});
+    overrides.set(myClubId, lineupToMatchTeam(myClub, myLineup, myPlayers, myEligibility, myCovers, sel.restPolicy[myClub]));
   }
   // [[Interchange Rotation]], round 48 — thread every club's saved
   // eligibility overrides through (see buildTeams's own doc comment for why
@@ -156,6 +160,18 @@ function currentPlans(): Map<number, TeamPlan> {
   return plans;
 }
 
+/** [[Injuries]] — every club's injury-related facility levels (Sports Science, Recovery Centre, Medical Suite). */
+export function roundOptions(): RoundOptions {
+  const finance = useSaveStore.getState().clubFinance;
+  const medical = new Map<number, ClubMedical>();
+  for (const club of CLUBS) {
+    const state = finance[club.name];
+    if (!state) continue;
+    medical.set(club.ClubID, { sportsScience: facilityLevel(state, "sportsScience"), recovery: facilityLevel(state, "recovery"), medical: facilityLevel(state, "medical") });
+  }
+  return { medical };
+}
+
 /**
  * Owns the one active season's progress — Engine.md "Season lifecycle":
  * `Pre-season -> [Round 1 ... Round 23] -> Finals -> ...`. Deliberately a
@@ -181,7 +197,7 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     // AI-side Selection Committee UI exists, gap #22 still stands for that
     // specific piece).
     const clubIds = CLUBS.map((c) => c.ClubID);
-    set({ season: initSeason(seed, clubIds), teams: buildTeamsForMyClub() });
+    set({ season: initSeason(seed, clubIds, ALL_PLAYERS), teams: buildTeamsForMyClub() });
   },
 
   simulateNextRound: () => {
@@ -189,7 +205,7 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     if (!season || !teams) return;
     const round = nextUnplayedRound(season);
     if (round === null) return;
-    set({ season: settleHonours(simulateRound(season, round, teams, currentPlans())) });
+    set({ season: settleHonours(simulateRound(season, round, teams, currentPlans(), undefined, roundOptions())) });
   },
 
   simulateAllRemaining: () => {
@@ -197,9 +213,10 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     let season = get().season;
     if (!season || !teams) return;
     const plans = currentPlans();
+    const opts = roundOptions();
     let round = nextUnplayedRound(season);
     while (round !== null) {
-      season = simulateRound(season, round, teams, plans);
+      season = simulateRound(season, round, teams, plans, undefined, opts);
       round = nextUnplayedRound(season);
     }
     set({ season: settleHonours(season) });
@@ -213,14 +230,14 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     const nextTeams = new Map(teams);
     nextTeams.set(myClubId, myTeam);
     const preset = new Map([[presetResultKey(mine.homeClubId, mine.awayClubId), result]]);
-    set({ season: settleHonours(simulateRound(season, round, nextTeams, currentPlans(), preset)), teams: nextTeams });
+    set({ season: settleHonours(simulateRound(season, round, nextTeams, currentPlans(), preset, roundOptions())), teams: nextTeams });
     return true;
   },
 
   playFinalsWeek: () => {
     const { season, teams } = get();
     if (!season || !teams || !isHomeAndAwayComplete(season)) return;
-    set({ season: settleHonours(runFinalsWeek(season, teams, currentPlans())) });
+    set({ season: settleHonours(runFinalsWeek(season, teams, currentPlans(), undefined, roundOptions())) });
   },
 
   recordLiveFinal: (key, result, myClubId, myTeam) => {
@@ -231,7 +248,7 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
     const nextTeams = new Map(teams);
     nextTeams.set(myClubId, myTeam);
     const preset = new Map([[presetResultKey(mine.homeClubId, mine.awayClubId), result]]);
-    set({ season: settleHonours(runFinalsWeek(season, nextTeams, currentPlans(), preset)), teams: nextTeams });
+    set({ season: settleHonours(runFinalsWeek(season, nextTeams, currentPlans(), preset, roundOptions())), teams: nextTeams });
     return true;
   },
 
@@ -258,7 +275,7 @@ export const useSeasonStore = create<SeasonStoreState>((set, get) => ({
   playFinals: () => {
     const { season, teams } = get();
     if (!season || !teams || !isHomeAndAwayComplete(season)) return;
-    set({ season: settleHonours(runFinals(season, teams, currentPlans())) });
+    set({ season: settleHonours(runFinals(season, teams, currentPlans(), roundOptions())) });
   },
 
   // An older save's fixture gets its special rounds tagged on the way in (a no-op once tagged).

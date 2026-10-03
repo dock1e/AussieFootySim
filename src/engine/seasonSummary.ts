@@ -482,8 +482,13 @@ function mergeTotals(maps: Map<number, SeasonPlayerTotals>[]): Map<number, Seaso
     for (const [id, t] of map) {
       const existing = result.get(id) ?? emptyTotals(id);
       existing.gamesPlayed += t.gamesPlayed;
-      existing.fantasyPoints += t.fantasyPoints;
-      for (const key of LEADERBOARD_STAT_FIELDS) existing[key] += t[key];
+      existing.fantasyPoints += t.fantasyPoints ?? 0;
+      // `?? 0` for the same reason as `aggregateBoxScores` above, one level up: a `SeasonArchiveEntry`
+      // archived before a stat existed (e.g. round 135's inside50s/rebound50s/bounces/smothers/
+      // onePercenters/clangers) has no key for it in its persisted `playerTotals`, and summing that
+      // `undefined` poisoned every all-time total for the stat to NaN (Dashboard Record Watch showed
+      // "NaN inside 50s"). Missing = not tracked that season, so it contributes nothing.
+      for (const key of LEADERBOARD_STAT_FIELDS) existing[key] += t[key] ?? 0;
       result.set(id, existing);
     }
   }

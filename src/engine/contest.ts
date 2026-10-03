@@ -2,6 +2,7 @@ import type { Player, RatedAttribute } from "../types/player.ts";
 import type { Archetype } from "../types/archetype.ts";
 import { ARCHETYPE_CONTEST_BONUS, CONTEST_CONFIG, type ContestType } from "./contestTypes.ts";
 import type { Rng } from "./rng.ts";
+import { attributeFor } from "./fatigue.ts";
 
 export interface ContestResult {
   type: ContestType;
@@ -45,7 +46,7 @@ export function computeContestRating(
   }
   let sum = 0;
   for (const attr of attributes) {
-    sum += player[attr];
+    sum += attributeFor(player, attr); // in-match fatigue, see fatigue.ts
   }
   let rating = sum / attributes.length;
   if (opts?.heightWeighted) {

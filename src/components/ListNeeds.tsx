@@ -95,7 +95,7 @@ export function ListNeeds({
                 </div>
                 <div>
                   <div className="tabular-nums text-base font-semibold">{line.elite.length}</div>
-                  <div className="text-slate-500">Elite 84+</div>
+                  <div className="text-slate-500">Elite 104+</div>
                 </div>
                 <div>
                   <div className="tabular-nums text-base font-semibold">{line.avgAge.toFixed(1)}</div>

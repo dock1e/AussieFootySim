@@ -4,9 +4,10 @@ import type { MatchTeam } from "./team.ts";
 import { onGroundPlayers } from "./team.ts";
 import { laneFor } from "./involvement.ts";
 import { proximityFor, distanceBetween, realDistanceBetween, type AbstractPosition } from "./positioning.ts";
-import { ownZone, type Side, type Zone } from "./zones.ts";
+import { zoneAt, type Side, type Zone } from "./zones.ts";
 import { tacticGroupForSlot, resolveTactic, type Tactic, type TeamPlan, type GameStyle } from "./tactics.ts";
 import type { AFLStadium } from "../data/stadiums.ts";
+import { attributeFor } from "./fatigue.ts";
 
 /**
  * Off-ball movement — Aug 2026 round 28. Tyler: "I want to keep developing
@@ -293,7 +294,7 @@ const MIN_STEP_MULTIPLIER = 0.5;
 const REFERENCE_METRES_PER_ZONE_UNIT = 40;
 
 function maxStepFor(player: Player, stadium: AFLStadium): number {
-  const rating = (player.speed + player.acceleration) / 2;
+  const rating = (attributeFor(player, "speed") + attributeFor(player, "acceleration")) / 2; // in-match fatigue, see fatigue.ts
   const base = BASE_STEP_PER_TICK * Math.max(MIN_STEP_MULTIPLIER, rating / REFERENCE_SPEED_ACCEL);
   const actualMetresPerZoneUnit = stadium.lengthMeters / 4;
   return base * (REFERENCE_METRES_PER_ZONE_UNIT / actualMetresPerZoneUnit);
@@ -343,7 +344,7 @@ const DEFAULT_DEFENDER_TACTIC: Tactic = "General Defender";
 /** Third Man Up's pull point is nudged this much further toward the live ball zone (lane toward centre) on top of its own goal-side-offset opponent point — "+team hit-out/contest win rate at stoppages near this player's zone" (`thirdManUpRuckMultiplier`'s own doc comment) read as a real positional habit: crashing toward contests, not just their own direct opponent. */
 const THIRD_MAN_UP_BALL_PULL = 0.15;
 
-function defenderTarget(side: Side, home: AbstractPosition, opponent: AbstractPosition, tactic: Tactic | undefined, zone: Zone): AbstractPosition {
+function defenderTarget(side: Side, home: AbstractPosition, opponent: AbstractPosition, tactic: Tactic | undefined, zone: number): AbstractPosition {
   const key = tactic && DEFENDER_TRACK_WEIGHT[tactic] !== undefined ? tactic : DEFAULT_DEFENDER_TACTIC;
   const track = DEFENDER_TRACK_WEIGHT[key] as number;
   const offset = DEFENDER_GOAL_SIDE_OFFSET[key] as number;
@@ -407,11 +408,12 @@ const HIGH_PRESS_IDLE_WEIGHT = 0.25;
 const HIGH_PRESS_IDLE_PUSH = 0.25;
 
 /** True when `side`'s own team currently holds the ball somewhere genuinely deliverable to a leading forward — their own attacking half or deeper, matching the same "forward-half or forward-50" reading `isForward50`-adjacent checks use elsewhere in this engine. */
-function isDeliverable(side: Side, zone: Zone, possession: Side): boolean {
-  return possession === side && ownZone(side, zone) >= 3;
+function isDeliverable(side: Side, zone: number, possession: Side): boolean {
+  // Oct 2026: `zone` is the ball's continuous position; deliverable from the forward half (zone 3) on, by the same real geometry as zones.ts's `zoneAt`.
+  return possession === side && zoneAt(side === "home" ? zone : 4 - zone) >= 3;
 }
 
-function forwardTarget(side: Side, home: AbstractPosition, opponent: AbstractPosition, tactic: Tactic | undefined, zone: Zone, possession: Side): AbstractPosition {
+function forwardTarget(side: Side, home: AbstractPosition, opponent: AbstractPosition, tactic: Tactic | undefined, zone: number, possession: Side): AbstractPosition {
   const key = tactic && FORWARD_LEAD_WEIGHT[tactic] !== undefined ? tactic : DEFAULT_FORWARD_TACTIC;
   if (!isDeliverable(side, zone, possession)) {
     if (key !== "High Press") return home;
@@ -637,7 +639,7 @@ export function individualPullFactor(playerId: number): number {
 export const AMBIENT_ROAM_RADIUS = 0.12;
 
 /** Exported Aug 2026 round 92 for verify_round92_scratch.ts's own direct unit tests — no behaviour change, visibility only. */
-export function midfieldAmbientOffset(playerId: number, zone: Zone): AbstractPosition {
+export function midfieldAmbientOffset(playerId: number, zone: number): AbstractPosition {
   const angle = individualPhase(playerId) * Math.PI * 2 + zone * 0.9;
   return { zoneFrac: Math.sin(angle) * AMBIENT_ROAM_RADIUS, lane: Math.cos(angle) * AMBIENT_ROAM_RADIUS };
 }
@@ -674,7 +676,7 @@ export function midfieldTarget(
   tactic: Tactic | undefined,
   rank: number | undefined,
   playerId: number,
-  zone: Zone,
+  zone: number,
   stadium: AFLStadium,
 ): AbstractPosition {
   // Round 92 — no genuine opponent carrier to crash toward (own side has the
@@ -696,19 +698,17 @@ export function midfieldTarget(
 
 function targetFor(
   player: Player,
-  side: Side,
+  home: AbstractPosition,
   position: Position | undefined,
   plan: TeamPlan | null,
-  style: GameStyle,
-  zone: Zone,
+  side: Side,
+  zone: number,
   possession: Side,
   opponentPos: AbstractPosition | undefined,
-  teamPositions: Map<number, Position> | undefined,
   opponentCarrierPos: AbstractPosition | undefined,
   midfieldRank: number | undefined,
   stadium: AFLStadium,
 ): AbstractPosition {
-  const home = proximityFor(player, side, position, zone, possession, style, teamPositions);
   const group = tacticGroupForSlot(position, player.archetype as Archetype);
   const tactic = resolvedTactic(plan, player, position);
   if (group === "Defender" && opponentPos) return defenderTarget(side, home, opponentPos, tactic, zone);
@@ -726,24 +726,62 @@ function stepSide(
   side: Side,
   plan: TeamPlan | null,
   style: GameStyle,
-  zone: Zone,
+  zone: number,
   possession: Side,
   matchups: Map<number, number>,
   current: Map<number, AbstractPosition>,
   out: Map<number, AbstractPosition>,
   carrierPos: AbstractPosition | undefined,
   stadium: AFLStadium,
+  cache?: MovementTickCache,
+  carrierId?: number,
 ): void {
   const carrierIsOpponent = carrierPos !== undefined && possession !== side;
   const ranks = carrierIsOpponent ? midfieldRanks(team, carrierPos, current, stadium) : undefined;
   for (const player of onGroundPlayers(team)) {
-    const position = team.positions?.get(player.PlayerID);
-    const opponentId = matchups.get(player.PlayerID);
+    const id = player.PlayerID;
+    const position = team.positions?.get(id);
+    const opponentId = matchups.get(id);
     const opponentPos = opponentId !== undefined ? current.get(opponentId) : undefined;
-    const target = targetFor(player, side, position, plan, style, zone, possession, opponentPos, team.positions, carrierIsOpponent ? carrierPos : undefined, ranks?.get(player.PlayerID), stadium);
-    const from = current.get(player.PlayerID) ?? target;
-    out.set(player.PlayerID, stepToward(from, target, maxStepFor(player, stadium)));
+    let home = cache?.home.get(id);
+    if (!home) {
+      home = proximityFor(player, side, position, zone, possession, style, team.positions);
+      cache?.home.set(id, home);
+    }
+    let maxStep = cache?.maxStep.get(id);
+    if (maxStep === undefined) {
+      maxStep = maxStepFor(player, stadium);
+      cache?.maxStep.set(id, maxStep);
+    }
+    // Oct 2026 (continuous ball): the player holding the ball stays where he is between decisions, so the
+    // ball (which is wherever its carrier is) doesn't drift back toward his home spot. Run and Carry moves
+    // him explicitly (match.ts).
+    if (id === carrierId && current.has(id)) {
+      out.set(id, current.get(id)!);
+      continue;
+    }
+    const target = targetFor(player, home, position, plan, side, zone, possession, opponentPos, carrierIsOpponent ? carrierPos : undefined, ranks?.get(id), stadium);
+    const from = current.get(id) ?? target;
+    out.set(id, stepToward(from, target, maxStep));
   }
+}
+
+/**
+ * Oct 2026 (test-suite/engine performance pass) — per-decision-tick memo for `stepPositions`. Each
+ * player's home anchor (`proximityFor`) and top speed (`maxStepFor`) depend only on things that change
+ * at decision ticks: zone, possession, style, the team's positions (interchanges, re-sorts and injuries
+ * all happen at a decision tick) and fitness. They were being recomputed on every one of the
+ * `TICK_RATE_MULTIPLIER` raw movement frames between ticks. The caller clears it at the start of every
+ * new decision tick; omitting it recomputes every frame, exactly as before. Results are byte-identical
+ * either way.
+ */
+export interface MovementTickCache {
+  home: Map<number, AbstractPosition>;
+  maxStep: Map<number, number>;
+}
+
+export function newMovementTickCache(): MovementTickCache {
+  return { home: new Map(), maxStep: new Map() };
 }
 
 /** One real simulated tick's worth of movement for every on-ground player of both teams — `match.ts`'s `simulateQuarter` calls this once per tick, using the CURRENT (i.e. most recently resolved) `zone`/`possession`/`carrier`, mirroring exactly how `ground.ts`'s own `pressLineFor` already reads "the current event's own zone/possession" as its input. `carrier` (Aug 2026 round 31) is `match.ts`'s own `State.carrier` — see `midfieldTarget`'s doc comment for why Midfield/Ruck needs the actual live carrier rather than a fixed matchup. Pure function of already-decided state (no `Rng` consumed) — same determinism-safety class as `ground.ts`'s rendering, just now living in the engine so it can be snapshotted onto real match events instead of only ever existing for one animation frame at a time. */
@@ -754,17 +792,18 @@ export function stepPositions(
   awayPlan: TeamPlan | null,
   homeStyle: GameStyle,
   awayStyle: GameStyle,
-  zone: Zone,
+  zone: number, // Oct 2026: the ball's continuous position along the ground (0-4)
   possession: Side,
   carrier: Player | null,
   matchups: Map<number, number>,
   current: Map<number, AbstractPosition>,
   stadium: AFLStadium,
+  cache?: MovementTickCache,
 ): Map<number, AbstractPosition> {
   const carrierPos = carrier ? current.get(carrier.PlayerID) : undefined;
   const next = new Map<number, AbstractPosition>();
-  stepSide(home, "home", homePlan, homeStyle, zone, possession, matchups, current, next, carrierPos, stadium);
-  stepSide(away, "away", awayPlan, awayStyle, zone, possession, matchups, current, next, carrierPos, stadium);
+  stepSide(home, "home", homePlan, homeStyle, zone, possession, matchups, current, next, carrierPos, stadium, cache, carrier?.PlayerID);
+  stepSide(away, "away", awayPlan, awayStyle, zone, possession, matchups, current, next, carrierPos, stadium, cache, carrier?.PlayerID);
   return next;
 }
 
@@ -829,7 +868,8 @@ export function initialPositions(home: MatchTeam, away: MatchTeam, homeStyle: Ga
 export function nudgeInvolvedPositions(
   home: MatchTeam,
   away: MatchTeam,
-  zone: Zone,
+  zone: number, // Oct 2026: the ball's continuous position, so involved players are pulled toward the real ball, not a zone centre
+
   playerIds: number[],
   current: Map<number, AbstractPosition>,
   // Round 110 — see `maxStepFor`'s own doc comment (BASE_STEP_PER_TICK):

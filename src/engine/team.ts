@@ -2,6 +2,7 @@ import type { Player } from "../types/player.ts";
 import type { MatchEvent } from "./match.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
+import type { RestPolicy } from "./rotation.ts";
 
 export interface MatchTeam {
   name: string;
@@ -60,18 +61,27 @@ export interface MatchTeam {
    */
   interchangeEligibility?: Map<number, Set<Position>>;
   /**
-   * Round 130 (Match Day flow v2) — the coach's per-player rotation plan, keyed by the player who
-   * rests. `by` on the bench is a straight swap; `by` on the ground with `fill` on the bench is a
-   * chain (`by` moves across into the rester's position, `fill` comes on in `by`'s). When present,
-   * automatic rotation follows these covers instead of `interchangeEligibility`; a player with no
-   * cover plays through. Absent for AI clubs, which keep the position-eligibility rotation.
+   * Round 130 (Match Day flow v2) introduced these as fixed one-to-one covers; since ROADMAP #16
+   * (Oct 2026) they're optional pinned relievers, keyed by the player who rests: when he comes off at
+   * a reset, the pinned bench player is preferred if he's fresh and keeps the shape. A chain cover's
+   * `fill` is the bench player who comes on (the re-sort moves `by` across by itself). See
+   * `engine/rotation.ts`.
    */
   covers?: Map<number, Cover>;
+  /** ROADMAP #16 — per-player rest policy (absent = "normal"). See `engine/rotation.ts`. */
+  restPolicy?: Map<number, RestPolicy>;
+  /** Oct 2026 — [[Injuries]]: players hurt during this match. Off the ground for good and never on the bench list again. */
+  injuredOut?: Set<number>;
 }
 
 export interface Cover {
   by: number;
   fill?: number;
+}
+
+/** The bench player a cover actually brings on: `by` for a straight swap, `fill` for a chain. */
+export function pinnedReliever(c: Cover): number {
+  return c.fill ?? c.by;
 }
 
 /**
@@ -106,7 +116,7 @@ export function onGroundPlayers(team: MatchTeam): Player[] {
  */
 export function benchPlayers(team: MatchTeam): Player[] {
   if (!team.onGround) return [];
-  return team.players.filter((p) => !team.onGround!.has(p.PlayerID));
+  return team.players.filter((p) => !team.onGround!.has(p.PlayerID) && !team.injuredOut?.has(p.PlayerID));
 }
 
 /**
@@ -206,6 +216,8 @@ export function cloneMatchTeam(t: MatchTeam): MatchTeam {
     onGround: t.onGround ? new Set(t.onGround) : undefined,
     interchangeEligibility: t.interchangeEligibility ? new Map(t.interchangeEligibility) : undefined,
     covers: t.covers ? new Map(t.covers) : undefined,
+    restPolicy: t.restPolicy ? new Map(t.restPolicy) : undefined,
+    injuredOut: t.injuredOut ? new Set(t.injuredOut) : undefined,
   };
 }
 
@@ -219,6 +231,12 @@ export function teamAtEvent(kickoff: MatchTeam, side: "home" | "away", events: r
   const t = cloneMatchTeam(kickoff);
   const last = Math.min(uptoIndex, events.length - 1);
   for (let i = 0; i <= last; i++) {
+    const inj = events[i].injury;
+    if (inj && inj.side === side) {
+      (t.injuredOut ??= new Set()).add(inj.playerId);
+      t.onGround?.delete(inj.playerId);
+      t.positions?.set(inj.playerId, "INT");
+    }
     const x = events[i].interchange;
     if (!x || x.side !== side) continue;
     t.onGround?.delete(x.outgoingId);
@@ -226,6 +244,7 @@ export function teamAtEvent(kickoff: MatchTeam, side: "home" | "away", events: r
     t.positions?.set(x.outgoingId, "INT");
     t.positions?.set(x.incomingId, x.position);
     if (x.moved) t.positions?.set(x.moved.playerId, x.moved.position);
+    for (const m of x.moves ?? []) t.positions?.set(m.playerId, m.position);
   }
   return t;
 }

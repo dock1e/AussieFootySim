@@ -24,6 +24,12 @@ import { clubTokensFor, type ClubTokens } from "../theme/clubTokens";
 import { fantasyPointsFor } from "../engine/ratings";
 import { PX_PER_METRE, boundaryPath, goalSquare, goalPosts, arcPath, BOUNDARY_SAMPLES } from "../engine/groundGeometry";
 import type { PlayerMatchFantasyMetrics } from "../engine/fantasyEngine";
+import { isBallHeldDead } from "../engine/pacing";
+
+/** ROADMAP #11 — the held ball's idle wobble at a mark or free kick: a slow sway, a pixel or two and ~8°. */
+const HELD_WOBBLE_PERIOD_MS = 140;
+const HELD_WOBBLE_PX = 1.2;
+const HELD_WOBBLE_RAD = 0.14;
 
 /**
  * Sep 2026, Phase 10 round 104 — [[Venue-Accurate Ground Renderer]]. Renamed
@@ -972,7 +978,16 @@ export function GroundView({
         }
         const kickStart = kickStartRef.current;
         const lift = kickStart === null ? 0 : Math.sin(Math.PI * Math.min(1, (now - kickStart) / KICK_ARC_MS));
-        drawBall(ctx, ballRenderedRef.current, ballRotationRef.current, nightRef.current, lift);
+        // ROADMAP #11 — PC11's idle "jiggle": at a mark or free kick the ball wobbles slightly in the
+        // holder's hands while he decides. Drawn only; the smoothed ball position itself is untouched.
+        const wobble = isPlayingRef.current && isBallHeldDead(currentEvent) ? Math.sin(now / HELD_WOBBLE_PERIOD_MS) : 0;
+        drawBall(
+          ctx,
+          { x: ballRenderedRef.current.x + wobble * HELD_WOBBLE_PX, y: ballRenderedRef.current.y },
+          ballRotationRef.current + wobble * HELD_WOBBLE_RAD,
+          nightRef.current,
+          lift,
+        );
 
         const selId = selectedPlayerIdRef.current;
         const selDot = selId != null ? drawn.find((d) => d.playerId === selId) : undefined;

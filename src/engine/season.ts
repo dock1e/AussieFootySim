@@ -1,8 +1,21 @@
 import { CLUBS, clubById } from "../types/club.ts";
 import type { Position } from "../types/archetype.ts";
+import type { Player } from "../types/player.ts";
 import { getPlayersByClub } from "../data/loadPlayers.ts";
-import type { MatchTeam } from "./team.ts";
-import { simulateMatch, type MatchResult } from "./match.ts";
+import { cloneMatchTeam, type MatchTeam } from "./team.ts";
+import { simulateMatch, type MatchResult, type SimulateMatchOptions } from "./match.ts";
+import type { AFLStadium } from "../data/stadiums.ts";
+import {
+  NO_MEDICAL,
+  injuryType,
+  isWetMatch,
+  recurrenceMultiplier,
+  rollWeeksOut,
+  sportsScienceRiskMultiplier,
+  type ActiveInjury,
+  type ClubMedical,
+  type InjuryRecord,
+} from "./injury.ts";
 import { mulberry32 } from "./rng.ts";
 import { generateFixture, matchesInRound, SEASON_ROUNDS, type FixtureMatch } from "./fixture.ts";
 import { computeLadder, top8, type LadderRow, type MatchOutcome } from "./ladder.ts";
@@ -12,7 +25,7 @@ import type { SpecialEventId } from "../data/specialEvents.ts";
 import { STADIUM_CONFIGS } from "../data/stadiums.ts";
 import type { TeamPlan } from "./tactics.ts";
 import { updateConditionAfterRound } from "./progression.ts";
-import { autoFillLineup, lineupToMatchTeam } from "./selection.ts";
+import { autoFillLineup, lineupToMatchTeam, withAvailablePlayers } from "./selection.ts";
 import { nextDisgruntlementState, type DisgruntlementState } from "./disgruntlement.ts";
 import { generateMatchCoachesVotes, applyVotesToBoxScore, applyBrownlowVotesToBoxScore, type MatchCoachesVotes } from "./coachesVotes.ts";
 import { groundForMatch } from "../data/clubGrounds.ts";
@@ -124,6 +137,84 @@ export interface Season {
    * that reads a finished series is unchanged.
    */
   finalsInProgress?: FinalsMatch[];
+  /**
+   * Oct 2026 — [[Injuries]]: PlayerID -> the injury he's currently serving. Absent on older saves
+   * (= nobody injured). See `engine/injury.ts`.
+   */
+  injuries?: Map<number, ActiveInjury>;
+  /** Oct 2026 — every injury this season, oldest first (soft tissue recurrence reads it). */
+  injuryLog?: InjuryRecord[];
+}
+
+// --- Injuries — Oct 2026, [[Injuries]] -------------------------------------------------------------------
+
+/** Per-round options for injuries: each club's facility levels. A club that isn't listed has none. */
+export interface RoundOptions {
+  medical?: Map<number, ClubMedical>;
+}
+
+/** Players who can't be picked this round. */
+export function unavailablePlayerIds(season: Season): Set<number> {
+  const out = new Set<number>();
+  for (const [id, i] of season.injuries ?? []) if (i.weeksRemaining > 0) out.add(id);
+  return out;
+}
+
+/** The team this club actually fields this round: a fresh copy (a match mutates its teams), with injured players covered. */
+export function teamForRound(team: MatchTeam, clubId: number, unavailable: ReadonlySet<number>): MatchTeam {
+  const club = clubById(clubId);
+  const patched = club ? withAvailablePlayers(team, getPlayersByClub(club.name), unavailable) : team;
+  return cloneMatchTeam(patched);
+}
+
+/** The injury inputs for one match: each player's extra soft tissue risk (Sports Science, recent history) and the weather. */
+export function matchInjuryOptions(
+  season: Season,
+  round: number,
+  home: MatchTeam,
+  away: MatchTeam,
+  homeClubId: number,
+  awayClubId: number,
+  seed: number,
+  stadium: AFLStadium | undefined,
+  opts?: RoundOptions,
+): Pick<SimulateMatchOptions, "softTissueRisk" | "wet"> {
+  const log = season.injuryLog ?? [];
+  const risk = new Map<number, number>();
+  for (const [team, clubId] of [[home, homeClubId], [away, awayClubId]] as const) {
+    const ss = sportsScienceRiskMultiplier(opts?.medical?.get(clubId) ?? NO_MEDICAL);
+    for (const p of team.players) risk.set(p.PlayerID, ss * recurrenceMultiplier(p.PlayerID, log, round));
+  }
+  return { softTissueRisk: risk, wet: isWetMatch(seed, stadium) };
+}
+
+/**
+ * Advances the injury list by one round: everyone already injured serves a week, then this round's
+ * new injuries are diagnosed (matches missed rolled per type, shortened by the club's Recovery Centre
+ * and Medical Suite).
+ */
+function foldInjuries(
+  season: Season,
+  round: number,
+  played: { homeClubId: number; awayClubId: number; result: MatchResult; seed: number }[],
+  opts?: RoundOptions,
+): Pick<Season, "injuries" | "injuryLog"> {
+  const injuries = new Map<number, ActiveInjury>();
+  for (const [id, i] of season.injuries ?? []) if (i.weeksRemaining > 1) injuries.set(id, { ...i, weeksRemaining: i.weeksRemaining - 1 });
+  const log = [...(season.injuryLog ?? [])];
+  for (const m of played) {
+    const rng = mulberry32((m.seed ^ 0x7e57ab1e) >>> 0);
+    for (const inj of m.result.injuries ?? []) {
+      const type = injuryType(inj.typeId);
+      if (!type) continue;
+      const clubId = inj.side === "home" ? m.homeClubId : m.awayClubId;
+      const weeks = rollWeeksOut(type, rng, opts?.medical?.get(clubId) ?? NO_MEDICAL);
+      const record: InjuryRecord = { playerId: inj.playerId, clubId, typeId: type.id, kind: type.kind, round, weeks };
+      injuries.set(inj.playerId, { ...record, weeksRemaining: weeks });
+      log.push(record);
+    }
+  }
+  return { injuries, injuryLog: log };
 }
 
 /**
@@ -169,8 +260,21 @@ export function buildTeams(
   return map;
 }
 
-export function initSeason(seed: number, clubIds: number[] = CLUBS.map((c) => c.ClubID)): Season {
+/**
+ * `players` (Oct 2026, [[Injuries]]): the pool, so a player still recovering from an ACL
+ * (`Player.longTermInjury`, set at the off-season) starts the season on the injury list.
+ */
+export function initSeason(seed: number, clubIds: number[] = CLUBS.map((c) => c.ClubID), players?: readonly Player[]): Season {
+  const injuries = new Map<number, ActiveInjury>();
+  for (const p of players ?? []) {
+    const c = p.longTermInjury;
+    const type = c ? injuryType(c.typeId) : undefined;
+    const club = CLUBS.find((x) => x.name === p.Team);
+    if (!c || !type || !club || p.delisted) continue;
+    injuries.set(p.PlayerID, { playerId: p.PlayerID, clubId: club.ClubID, typeId: type.id, kind: type.kind, round: 0, weeksRemaining: c.weeksRemaining, weeks: c.weeksRemaining });
+  }
   return {
+    ...(injuries.size ? { injuries } : {}),
     seed,
     clubIds,
     fixture: generateFixture(clubIds),
@@ -240,17 +344,23 @@ export function simulateRound(
   teams: Map<number, MatchTeam>,
   plans?: Map<number, TeamPlan>,
   presetResults?: Map<string, MatchResult>,
+  opts?: RoundOptions,
 ): Season {
   if (isRoundPlayed(season, round)) return season;
   const roundMatches = matchesInRound(season.fixture, round);
+  // [[Injuries]] — every club fields its team minus whoever's injured, on a fresh copy.
+  const unavailable = unavailablePlayerIds(season);
+  const roundTeams = new Map([...teams].map(([id, t]) => [id, teamForRound(t, id, unavailable)]));
+  const seeds: { homeClubId: number; awayClubId: number; result: MatchResult; seed: number }[] = [];
 
   const newlyPlayed: PlayedMatch[] = roundMatches.map((m, i) => {
-    const home = teams.get(m.homeClubId);
-    const away = teams.get(m.awayClubId);
+    const home = roundTeams.get(m.homeClubId);
+    const away = roundTeams.get(m.awayClubId);
     if (!home || !away) {
       throw new Error(`simulateRound: missing MatchTeam for club ${m.homeClubId} or ${m.awayClubId}`);
     }
     const seed = matchSeed(season.seed, round, i);
+    const stadium = groundForMatch(m.homeClubId, round, season.fixture);
     const homePlan = plans?.get(m.homeClubId);
     const awayPlan = plans?.get(m.awayClubId);
     // Round 107 — [[Simulation Engine Report Review]] Phase C: the real venue this
@@ -264,8 +374,10 @@ export function simulateRound(
         awayPlan,
         homeCondition: season.condition,
         awayCondition: season.condition,
-        stadium: groundForMatch(m.homeClubId, round, season.fixture),
+        stadium,
+        ...matchInjuryOptions(season, round, home, away, m.homeClubId, m.awayClubId, seed, stadium, opts),
       });
+    seeds.push({ homeClubId: m.homeClubId, awayClubId: m.awayClubId, result: rawResult, seed });
     // [[Coaches Votes and MVP Award]], round 90 — generated here, not lazily, because
     // `generateMatchCoachesVotes` needs `rawResult.events` (see that function's own doc comment),
     // which is still in memory now but gets stripped at archive time.
@@ -292,9 +404,9 @@ export function simulateRound(
 
   const played = [...season.played, ...newlyPlayed];
   const ladder = computeLadder(season.clubIds, played.map(toOutcome));
-  const condition = nextConditionMap(season.condition, teams);
-  const disgruntlement = nextDisgruntlementState(season.disgruntlement, round, teams, ladder, season.seed);
-  return { ...season, played, ladder, condition, disgruntlement };
+  const condition = nextConditionMap(season.condition, roundTeams);
+  const disgruntlement = nextDisgruntlementState(season.disgruntlement, round, roundTeams, ladder, season.seed);
+  return { ...season, played, ladder, condition, disgruntlement, ...foldInjuries(season, round, seeds, opts) };
 }
 
 /** The next finals week's fixtures (empty before the home-and-away season is done, or once the Grand Final is played). */
@@ -313,16 +425,22 @@ export function finalsPlayed(season: Season): FinalsMatch[] {
  * on Match Day, folded in exactly like a headless one. The Grand Final gets its Norm Smith Medal here.
  * Once the Grand Final is played the series moves from `finalsInProgress` to `finals`.
  */
-export function runFinalsWeek(season: Season, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>, preset?: Map<string, MatchResult>): Season {
+export function runFinalsWeek(season: Season, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>, preset?: Map<string, MatchResult>, opts?: RoundOptions): Season {
   const week = nextFinalsPairings(season);
   if (!week.length) return season;
   const done = [...(season.finalsInProgress ?? [])];
+  // [[Injuries]] — finals weeks count on from the last home-and-away round.
+  const injuryRound = SEASON_ROUNDS + week[0].week;
+  const unavailable = unavailablePlayerIds(season);
+  const seeds: { homeClubId: number; awayClubId: number; result: MatchResult; seed: number }[] = [];
   for (const p of week) {
-    const home = teams.get(p.homeClubId);
-    const away = teams.get(p.awayClubId);
-    if (!home || !away) {
+    const frozenHome = teams.get(p.homeClubId);
+    const frozenAway = teams.get(p.awayClubId);
+    if (!frozenHome || !frozenAway) {
       throw new Error(`runFinals: missing MatchTeam for club ${p.homeClubId} or ${p.awayClubId}`);
     }
+    const home = teamForRound(frozenHome, p.homeClubId, unavailable);
+    const away = teamForRound(frozenAway, p.awayClubId, unavailable);
     const seed = matchSeed(season.seed, SEASON_ROUNDS + 1, done.length);
     // A final isn't one of a club's own fixture rounds, so the home seed's primary ground (no round
     // exceptions); real finals are often at a neutral venue — a disclosed simplification. The Grand
@@ -336,7 +454,9 @@ export function runFinalsWeek(season: Season, teams: Map<number, MatchTeam>, pla
         homeCondition: season.condition,
         awayCondition: season.condition,
         stadium,
+        ...matchInjuryOptions(season, injuryRound, home, away, p.homeClubId, p.awayClubId, seed, stadium, opts),
       });
+    seeds.push({ homeClubId: p.homeClubId, awayClubId: p.awayClubId, result: raw, seed });
     // [[Coaches Votes and MVP Award]], round 90 — the Gary-Ayres-Medal-equivalent finals tally, while
     // the events are still in memory.
     const coachesVotes = generateMatchCoachesVotes(raw, home, away);
@@ -349,16 +469,17 @@ export function runFinalsWeek(season: Season, teams: Map<number, MatchTeam>, pla
     done.push(match);
   }
   const gf = done.find((m) => m.key === "GF");
-  if (gf) return { ...season, finalsInProgress: undefined, finals: { matches: done, premierClubId: gf.winnerClubId }, premierClubId: gf.winnerClubId };
-  return { ...season, finalsInProgress: done };
+  const injuries = foldInjuries(season, injuryRound, seeds, opts);
+  if (gf) return { ...season, ...injuries, finalsInProgress: undefined, finals: { matches: done, premierClubId: gf.winnerClubId }, premierClubId: gf.winnerClubId };
+  return { ...season, ...injuries, finalsInProgress: done };
 }
 
 /** Runs whatever is left of the finals series (all of it, from the end of the home-and-away season). Requires the home-and-away season to be complete; a no-op if finals have already been run. `plans` behaves the same as in `simulateRound`. Every finals match uses whatever `season.condition` was left at h&a-completion — see this file's doc comment for why that's not advanced further across the 4-week bracket. */
-export function runFinals(season: Season, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>): Season {
+export function runFinals(season: Season, teams: Map<number, MatchTeam>, plans?: Map<number, TeamPlan>, opts?: RoundOptions): Season {
   if (!isHomeAndAwayComplete(season)) {
     throw new Error("runFinals: home-and-away season is not complete yet");
   }
   let s = season;
-  while (!s.finals) s = runFinalsWeek(s, teams, plans);
+  while (!s.finals) s = runFinalsWeek(s, teams, plans, undefined, opts);
   return s;
 }

@@ -39,6 +39,7 @@ export function AssistantCoaches() {
   const hireCoach = useSaveStore((s) => s.hireCoach);
   const releaseCoachRole = useSaveStore((s) => s.releaseCoachRole);
   const setScoutFocusArea = useSaveStore((s) => s.setScoutFocusArea);
+  const seniorCoaches = useSaveStore((s) => s.seniorCoaches);
 
   const [role, setRole] = useState<CoachRole>("Talent Scout");
   const [selectedCoachId, setSelectedCoachId] = useState<number | null>(null);
@@ -56,7 +57,11 @@ export function AssistantCoaches() {
   const staffSpend = committedStaffSpend(coachContracts);
   const staffPct = Math.min(100, Math.round((staffSpend / FOOTBALL_DEPT_CEILING) * 100));
 
-  const sortedCoaches = [...ASSISTANT_COACH_POOL].sort((a, b) => b.ratings[role].ovr - a.ratings[role].ovr);
+  // Anyone currently seated as an AFL senior coach (a real appointment like Mark McVeigh at Essendon in a
+  // 2027 start, or an assistant an AI board has promoted) isn't available as an assistant.
+  const seniorNames = new Set(Object.values(seniorCoaches?.clubs ?? {}).flatMap((c) => (c ? [c.name] : [])));
+  const seniorPoolIds = new Set(Object.values(seniorCoaches?.clubs ?? {}).flatMap((c) => (c?.poolCoachId !== undefined ? [c.poolCoachId] : [])));
+  const sortedCoaches = ASSISTANT_COACH_POOL.filter((c) => !seniorPoolIds.has(c.id) && !seniorNames.has(c.name)).sort((a, b) => b.ratings[role].ovr - a.ratings[role].ovr);
   const selectedCoach: Coach | null = selectedCoachId != null ? (ASSISTANT_COACH_POOL.find((c) => c.id === selectedCoachId) ?? null) : null;
   const ask = selectedCoach ? coachSalaryAsk(selectedCoach.ratings[role].ovr) : 0;
   const spendWithoutThisRole = committedStaffSpend(coachContracts, role);

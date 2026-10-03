@@ -22,6 +22,8 @@ import { money } from "./PlayerDetailModal";
 import { PlayerLink } from "./PlayerLink";
 import { STATUS } from "../theme/clubTokens";
 import { Card, DetailPanel, SectionLabel, StatusChip, KpiTile, BarSolidGhost, Segmented, type StatusTone } from "./theme/primitives";
+import { useSeasonStore } from "../store/useSeasonStore";
+import { injuryShortText, isConcussionProne, isSoftTissueProne, type ActiveInjury } from "../engine/injury";
 
 /**
  * Round 117 — [[Club Theme System]] List rebuild (brief section 4.3, `isList`).
@@ -96,6 +98,8 @@ export function List() {
   const reSignPlayer = useSaveStore((s) => s.reSignPlayer);
   const delistPlayer = useSaveStore((s) => s.delistPlayer);
   const applyPositionSwitch = useSaveStore((s) => s.applyPositionSwitch);
+  // [[Injuries]] — the season's current injury list.
+  const injuries = useSeasonStore((s) => s.season?.injuries);
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [lineFilter, setLineFilter] = useState<LineFilter>("All");
@@ -157,6 +161,7 @@ export function List() {
   const avgAge = squad.length > 0 ? Math.round((squad.reduce((s, p) => s + p.Age, 0) / squad.length) * 10) / 10 : 0;
   const finalYrCount = squad.filter((p) => p.expired_year === currentYear).length;
   const nextYrCount = squad.filter((p) => p.expired_year === currentYear + 1).length;
+  const injuredCount = squad.filter((p) => injuries?.has(p.PlayerID)).length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -179,6 +184,7 @@ export function List() {
           {/* Round 126 — fix pass 1, item 2: contract status is semantic (coral / amber), never the club accent. */}
           <KpiTile value={finalYrCount} label={`Out of contract · end of ${currentYear}`} color={STATUS.ooc} />
           <KpiTile value={nextYrCount} label={`Expires ${currentYear + 1} · final year`} color={STATUS.final} />
+          <KpiTile value={injuredCount} label="Injured · unavailable" color={injuredCount ? STATUS.ooc : undefined} />
           <KpiTile value={avgAge} label="Avg age · whole list" />
         </div>
       </Card>
@@ -288,6 +294,11 @@ export function List() {
                       <span style={{ flex: "none", font: "500 11px Barlow,sans-serif", color: "#8f9ab0", whiteSpace: "nowrap" }}>{LINE_SHORT[line]}</span>
                       {switched && <span style={{ font: "600 11px Barlow,sans-serif", color: "var(--accT)" }} title="Position-switched">⇄</span>}
                       {rookie && <span style={{ font: "600 9px 'IBM Plex Mono',monospace", letterSpacing: ".7px", color: "#8f9ab0" }}>RK</span>}
+                      {injuries?.get(p.PlayerID) && (
+                        <span title={injuryShortText(injuries.get(p.PlayerID)!)} style={{ flex: "none", font: "600 9px 'IBM Plex Mono',monospace", letterSpacing: ".7px", color: STATUS.ooc }}>
+                          INJ {injuries.get(p.PlayerID)!.weeksRemaining}W
+                        </span>
+                      )}
                     </span>
                     <span className="col-age" style={{ textAlign: "center", font: "500 12px 'IBM Plex Mono',monospace", color: "#aab3c3" }}>{p.Age}</span>
                     <span style={{ textAlign: "center", font: "600 13px 'IBM Plex Mono',monospace", color: "#fff" }}>{p.OVR}</span>
@@ -311,6 +322,7 @@ export function List() {
             <DetailPanel>
               <PlayerDetail
                 player={selected}
+                injury={injuries?.get(selected.PlayerID)}
                 currentYear={currentYear}
                 tab={panelTab}
                 onTab={setPanelTab}
@@ -408,6 +420,7 @@ function HeadCell({
 
 function PlayerDetail({
   player,
+  injury,
   currentYear,
   tab,
   onTab,
@@ -416,6 +429,7 @@ function PlayerDetail({
   onSwitch,
 }: {
   player: Player;
+  injury?: ActiveInjury;
   currentYear: number;
   tab: "contract" | "position";
   onTab: (t: "contract" | "position") => void;
@@ -437,6 +451,13 @@ function PlayerDetail({
         <div style={{ font: "500 13px Barlow,sans-serif", color: "#aab3c3", marginTop: 3 }}>
           {player.archetype} · Age {player.Age}
         </div>
+        {(injury || isSoftTissueProne(player) || isConcussionProne(player)) && (
+          <div className="flex flex-wrap gap-1.5" style={{ marginTop: 8 }}>
+            {injury && <StatusChip color={STATUS.ooc}>Injured · {injuryShortText(injury)}</StatusChip>}
+            {isSoftTissueProne(player) && <StatusChip tone="warn">Soft-tissue prone</StatusChip>}
+            {isConcussionProne(player) && <StatusChip tone="warn">Concussion prone</StatusChip>}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-2">

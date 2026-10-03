@@ -17,11 +17,13 @@ import {
   statedAsk,
   compensationPickBand,
   SALARY_CAP,
-  FOOTBALL_DEPT_CEILING,
+  capRoomForSigning,
   type FreeAgencyStatus,
   type OfferOutcome,
   type ClubCapRow,
 } from "../engine/contracts";
+import { aspAgreementFor, aspSigningCost, canSignAsp, maxAspFor, ASP_CLUB_LIMIT_PER_SEASON, aspCommittedForSeason } from "../engine/clubFinance";
+import { defaultClubFinanceState } from "../types/clubFinance";
 import type { Player } from "../types/player";
 import { playerFullName } from "../types/player";
 import { PlayerDetailModal, money } from "./PlayerDetailModal";
@@ -45,9 +47,14 @@ import { PlayerLink } from "./PlayerLink";
  * that even the richest real club (West Coast, $26.333m committed) has a
  * small amount of genuine headroom, not just the least-over-cap club. Cap
  * status still shows prominently (an OVER CAP pill if any club ever does
- * exceed it) and still doesn't block actions even if one does — matching
- * how real leagues actually handle a breach (penalties/scrutiny after the
- * fact, not a hard transactional block).
+ * exceed it).
+ *
+ * ROADMAP #14 (Oct 2026): the coach's OWN new contracts can no longer take
+ * the club over the cap — the negotiation modal blocks a cap-counted salary
+ * bigger than the room left (`capRoomForSigning`). The off-cap Additional
+ * Service Payments field beside it is the designed way to keep a star the
+ * cap won't otherwise fit (see [[Club Finance, Facilities, and Marketing]]
+ * section 4). Existing contracts are never retro-checked.
  */
 
 const STATUS_TONE: Record<FreeAgencyStatus, PillTone> = {
@@ -67,6 +74,8 @@ export function Contracts() {
   const letAssistantManage = useSaveStore((s) => s.letAssistantManage);
   const window_ = useContractStore((s) => s.window);
   const ladder = useSeasonStore((s) => s.season?.ladder);
+  const clubFinance = useSaveStore((s) => s.clubFinance);
+  const aspCommitted = aspCommittedForSeason(clubFinance[myClub] ?? defaultClubFinanceState(), currentYear);
 
   const [viewingPlayer, setViewingPlayer] = useState<Player | null>(null);
   const [negotiating, setNegotiating] = useState<{ player: Player; isOwnPlayer: boolean } | null>(null);
@@ -110,7 +119,7 @@ export function Contracts() {
             <StatusPill label={`${(myCapRow.capPct * 100).toFixed(1)}%`} tone={myCapRow.capPct > 1 ? "bad" : myCapRow.capPct > 0.9 ? "warn" : "good"} />
             {myCapRow.capPct > 1 && <StatusPill label="OVER CAP" tone="bad" />}
             {!myCapRow.floorMet && <StatusPill label="BELOW FLOOR" tone="warn" />}
-            <span className="text-xs text-slate-500">Football Dept ceiling: {money(FOOTBALL_DEPT_CEILING)} (informational — no staff spend tracked yet)</span>
+            <span className="text-xs text-slate-500">Off-cap ASP: {money(aspCommitted)} / {money(ASP_CLUB_LIMIT_PER_SEASON)} committed this season</span>
           </div>
         )}
         <button
@@ -343,11 +352,16 @@ function NegotiationModal({
   player: Player;
   isOwnPlayer: boolean;
   onClose: () => void;
-  onFinalize: (terms: { years: number; salaryPerYear: number }) => void;
+  onFinalize: (terms: { years: number; salaryPerYear: number; aspPerYear: number }) => void;
 }) {
   const ask = statedAsk(player);
+  const myClub = useGameStore((s) => s.myClub);
+  const year = useSaveStore((s) => s.year);
+  const finance = useSaveStore((s) => s.clubFinance[myClub]) ?? defaultClubFinanceState();
+  const existingAsp = aspAgreementFor(finance, player.PlayerID);
   const [years, setYears] = useState(3);
   const [salary, setSalary] = useState(ask);
+  const [asp, setAsp] = useState(existingAsp?.amountPerYear ?? 0);
   const [playerOption, setPlayerOption] = useState(false);
   const [offersUsed, setOffersUsed] = useState(0);
   const [outcome, setOutcome] = useState<OfferOutcome | null>(null);
@@ -355,17 +369,27 @@ function NegotiationModal({
   const maxOffers = 3;
   const offersLeft = maxOffers - offersUsed;
 
+  // ROADMAP #14 — the cap is binding for the coach's own signings, and an off-cap Additional Service
+  // Payment is the way to bridge a gap the cap won't allow. See engine/clubFinance.ts's ASP section.
+  const capRoom = capRoomForSigning(ALL_PLAYERS, myClub, year, player.PlayerID);
+  const aspMax = maxAspFor(finance, ask, year, player.PlayerID);
+  const aspCheck = canSignAsp(finance, player.PlayerID, ask, asp, year);
+  const overCap = (s: number) => s > capRoom;
+  const blocked = overCap(salary) ? `${money(salary)} is over your cap room of ${money(Math.max(0, capRoom))}. Lower the salary, move some of it into an off-cap ASP, or clear space.` : !aspCheck.ok ? aspCheck.reason : null;
+
   function submitOffer() {
-    const result = evaluateOffer(player, salary, offersUsed, maxOffers);
+    if (blocked) return;
+    const result = evaluateOffer(player, salary, offersUsed, maxOffers, asp);
     setOffersUsed((n) => n + 1);
     setOutcome(result);
     if (result.result === "accepted") {
-      onFinalize({ years, salaryPerYear: salary });
+      onFinalize({ years, salaryPerYear: salary, aspPerYear: asp });
     }
   }
 
   function acceptCounter(counter: number) {
-    onFinalize({ years, salaryPerYear: counter });
+    if (overCap(counter)) return;
+    onFinalize({ years, salaryPerYear: counter, aspPerYear: asp });
   }
 
   return (
@@ -377,6 +401,8 @@ function NegotiationModal({
         </div>
         <div className="mb-4 text-xs text-slate-400">
           Stated ask: <span className="tabular-nums font-semibold text-slate-200">{money(ask)}/yr</span> &middot; Offers used: {offersUsed}/{maxOffers}
+          <br />
+          Cap room for this contract: <span className={`tabular-nums font-semibold ${capRoom < ask ? "text-warn" : "text-slate-200"}`}>{money(Math.max(0, capRoom))}</span>
         </div>
 
         <div className="space-y-3">
@@ -392,29 +418,59 @@ function NegotiationModal({
             />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-400">Salary / yr</span>
+            <span className="mb-1 block text-slate-400">Salary / yr (counts against the cap)</span>
             <input
               type="number"
               min={140_000}
               step={5000}
               value={salary}
               onChange={(e) => setSalary(Number(e.target.value) || 0)}
-              className="w-full rounded-lg bg-base-700 px-3 py-2 tabular-nums"
+              className={`w-full rounded-lg bg-base-700 px-3 py-2 tabular-nums ${overCap(salary) ? "ring-1 ring-bad" : ""}`}
             />
           </label>
+          <label className="block text-sm">
+            <span className="mb-1 flex justify-between text-slate-400">
+              <span>Additional Service Payments / yr (off-cap)</span>
+              <span className="tabular-nums text-xs">up to {money(aspMax)}</span>
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={aspMax}
+              step={5000}
+              value={asp}
+              onChange={(e) => setAsp(Math.max(0, Number(e.target.value) || 0))}
+              className={`w-full rounded-lg bg-base-700 px-3 py-2 tabular-nums ${!aspCheck.ok ? "ring-1 ring-bad" : ""}`}
+            />
+            <span className="mt-1 block text-xs text-slate-500">
+              Paid from the Football Dept budget for genuine off-field work (content, member events, sponsor days). It counts toward the player&apos;s ask but not the cap.
+              {asp > 0 && ` First year (${money(aspSigningCost(finance, player.PlayerID, asp, year))}) is paid now; ${money(finance.budget)} in the budget.`}
+            </span>
+          </label>
+          <div className="rounded-lg bg-base-700/40 px-3 py-2 text-xs text-slate-400">
+            Total package: <span className="tabular-nums font-semibold text-slate-200">{money(salary + asp)}/yr</span> ({Math.round(((salary + asp) / ask) * 100)}% of ask)
+          </div>
           <label className="flex items-center gap-2 text-xs text-slate-400">
             <input type="checkbox" checked={playerOption} onChange={(e) => setPlayerOption(e.target.checked)} />
             Player option on final year (flavour only this slice — doesn't yet change anything mechanically)
           </label>
         </div>
 
+        {blocked && <div className="mt-3 rounded-lg bg-bad/10 p-3 text-sm text-bad">{blocked}</div>}
+
         {outcome?.result === "countered" && (
           <div className="mt-3 rounded-lg bg-base-700/60 p-3 text-sm">
             <div className="mb-2">
-              <PlayerLink player={player}>{playerFullName(player)}</PlayerLink> counters at <span className="tabular-nums font-semibold">{money(outcome.counterSalaryPerYear)}/yr</span>.
+              <PlayerLink player={player}>{playerFullName(player)}</PlayerLink> counters at <span className="tabular-nums font-semibold">{money(outcome.counterSalaryPerYear)}/yr</span> salary
+              {asp > 0 ? ` (plus the ${money(asp)} ASP)` : ""}.
+              {overCap(outcome.counterSalaryPerYear) && <span className="text-bad"> That salary won&apos;t fit under the cap; add more off-cap ASP and resubmit.</span>}
             </div>
             <div className="flex gap-2">
-              <button onClick={() => acceptCounter(outcome.counterSalaryPerYear)} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark">
+              <button
+                onClick={() => acceptCounter(outcome.counterSalaryPerYear)}
+                disabled={overCap(outcome.counterSalaryPerYear)}
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark disabled:opacity-40"
+              >
                 Accept Counter
               </button>
               <button
@@ -441,7 +497,7 @@ function NegotiationModal({
             {outcome?.result === "rejected" || outcome === null ? "Cancel" : "Close"}
           </button>
           {outcome?.result !== "countered" && offersLeft > 0 && (
-            <button onClick={submitOffer} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
+            <button onClick={submitOffer} disabled={!!blocked} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
               Submit Offer
             </button>
           )}

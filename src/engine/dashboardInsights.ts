@@ -4,6 +4,7 @@ import type { Season } from "./season";
 import type { SeasonArchiveEntry } from "./seasonSummary";
 import { seasonPlayerTotals, seasonPlayerLast5Totals, toAverageMap, ALL_LEAGUE_STATS } from "./seasonSummary";
 import { combinedRecordFor, writeupFor, ALL_RECORD_CATEGORIES, type RecordCategory, type RecordRow } from "./records";
+import { hasRealWorldData } from "../data/realWorldRecords";
 
 /**
  * Round 115 — [[Club Theme System]] Dashboard rebuild. The brief's reference (`Club Theme System.dc.html`)
@@ -56,6 +57,11 @@ export function recordWatchFeedFor(
 ): RecordWatchEntry[] {
   const entries: RecordWatchEntry[] = [];
   for (const category of ALL_RECORD_CATEGORIES) {
+    // Only categories with a real AFL/VFL all-time list. For the rest (spoils, turnovers, round 135's
+    // inside50s/rebound50s/bounces/smothers/onePercenters/clangers, ...) the "all-time" list is just
+    // this save's own tally, so a player with a single sim season sits "1st all-time" and would
+    // outrank genuine real-history standings — rank isn't significance there.
+    if (!hasRealWorldData(category)) continue;
     const rows = combinedRecordFor(category, seasonArchives, liveSeason, 25);
     for (const row of rows) {
       if (!row.player || row.player.Team !== myClub) continue;

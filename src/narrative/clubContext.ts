@@ -6,7 +6,7 @@ import { CLUB_PRIMARY_GROUND } from "../data/clubGrounds";
 import { getStadium } from "../data/stadiums";
 import { generateFixture, matchesInRound, type FixtureMatch } from "../engine/fixture";
 import type { SeasonArchiveEntry } from "../engine/seasonSummary";
-import { BIG_MARKET, LAST_FLAG_YEAR, REAL_FINAL_WINNERS, REAL_LADDER, areRivals, rivalOf } from "./clubFacts";
+import { BIG_MARKET, LAST_FLAG_YEAR, REAL_FINAL_WINNERS, REAL_LADDER, REAL_PREMIERS, areRivals, rivalOf } from "./clubFacts";
 
 /**
  * New Game Onboarding — everything the narrative layer knows about a club, derived from the save's
@@ -269,7 +269,7 @@ export function getAllClubContexts(src: ContextSource): Map<number, ClubContext>
   const prevFinishes = finishesFor(lastYear - 1, src.seasonArchives);
   const finalWinners = finalWinnersFor(lastYear, src.seasonArchives);
   const lastArchive = src.seasonArchives.find((a) => a.year === lastYear);
-  const lastPremier = lastArchive?.finals?.premierClubId ?? (lastYear === 2025 ? clubByAbbr("BL")?.ClubID : undefined);
+  const lastPremier = lastArchive?.finals?.premierClubId ?? (REAL_PREMIERS[lastYear] ? clubByAbbr(REAL_PREMIERS[lastYear])?.ClubID : undefined);
 
   const stats = new Map(CLUBS.map((c) => [c.ClubID, listStats(players.filter((p) => p.Team === c.name))]));
   const rankBy = (key: (s: ListStats) => number, asc = false) => {

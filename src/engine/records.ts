@@ -539,7 +539,8 @@ function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEn
   const consumedPlayerIds = new Set<number>();
   for (const entry of realEntries) {
     const linkedPlayer = getPlayerByRealFullName(entry.name);
-    const simContribution = linkedPlayer ? simValueFor(linkedPlayer.PlayerID) : 0;
+    const rawSim = linkedPlayer ? simValueFor(linkedPlayer.PlayerID) : 0;
+    const simContribution = Number.isFinite(rawSim) ? rawSim : 0;
     if (linkedPlayer) {
       // Round 96, Tyler-reported: `player` used to only get attached when `simContribution > 0`,
       // conflating two different questions — "has this real legend posted a nonzero SIM total in
@@ -578,7 +579,7 @@ function combinedRecord(category: RecordCategory, realEntries: RealWorldRecordEn
     for (const t of simTotals!.values()) {
       if (consumedPlayerIds.has(t.playerId)) continue;
       const value = simStatValue(t, category);
-      if (value <= 0) continue;
+      if (!Number.isFinite(value) || value <= 0) continue; // NaN would pass `<= 0` and sort unpredictably
       const player = getPlayerById(t.playerId);
       if (!player) continue; // defensive only — every totals entry comes from a real generated player
       candidates.push({ name: playerFullName(player), value, source: "sim", player });

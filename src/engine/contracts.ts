@@ -5,7 +5,7 @@ import type { Player } from "../types/player.ts";
 import { playerFullName } from "../types/player.ts";
 import { CLUBS, clubByName } from "../types/club.ts";
 import { clubHistoryEntryForDelisting, clubHistoryEntryForFreeAgency, type ClubHistoryUpdate } from "./clubHistory.ts";
-import { wellbeingReSignBonus } from "./clubFinance.ts";
+import { maxAspFor, signAsp, wellbeingReSignBonus } from "./clubFinance.ts";
 import type { ClubFinanceState } from "../types/clubFinance.ts";
 
 /**
@@ -314,6 +314,8 @@ export function allFreeAgents(players: readonly Player[], excludeClubName: strin
 export interface ReSignTerms {
   years: number;
   salaryPerYear: number;
+  /** ROADMAP #14 — an off-cap Additional Service Payment agreed alongside the contract. Never written onto the player (it isn't cap salary); the store records it in the club's `ClubFinanceState.aspAgreements`. */
+  aspPerYear?: number;
 }
 
 /** A free agent's "stated ask" for negotiation purposes — their current `totalValue`, per Configuration.md's own framing that market value is "the number contract offers should negotiate around". */
@@ -334,12 +336,27 @@ export type OfferOutcome = { result: "accepted" } | { result: "countered"; count
  * enforced by refusing to counter on the final allowed offer — accept or
  * reject only.
  */
-export function evaluateOffer(player: Pick<Player, "totalValue">, offerSalaryPerYear: number, offersUsed: number, maxOffers = 3): OfferOutcome {
+export function evaluateOffer(player: Pick<Player, "totalValue">, offerSalaryPerYear: number, offersUsed: number, maxOffers = 3, aspPerYear = 0): OfferOutcome {
   const ask = statedAsk(player);
-  if (offerSalaryPerYear >= ask * 0.95) return { result: "accepted" };
-  if (offerSalaryPerYear < ask * 0.7 || offersUsed >= maxOffers - 1) return { result: "rejected" };
-  const counter = Math.round((offerSalaryPerYear + ask) / 2 / 1000) * 1000;
-  return { result: "countered", counterSalaryPerYear: counter };
+  // ROADMAP #14: an off-cap Additional Service Payment counts dollar for dollar toward the ask — the
+  // player is paid it either way — but only the salary counts against the cap. A counter still asks
+  // for more SALARY (the ASP on the table stays as offered).
+  const total = offerSalaryPerYear + aspPerYear;
+  if (total >= ask * 0.95) return { result: "accepted" };
+  if (total < ask * 0.7 || offersUsed >= maxOffers - 1) return { result: "rejected" };
+  const counter = Math.round((total + ask) / 2 / 1000) * 1000 - aspPerYear;
+  return { result: "countered", counterSalaryPerYear: Math.max(offerSalaryPerYear, counter) };
+}
+
+/**
+ * ROADMAP #14 — cap room for one of the coach's own signings: `SALARY_CAP` minus every OTHER contract
+ * already committed for `year`. The coach's own re-signings and free-agency signings can't take the
+ * club over the cap (`Contracts.tsx` blocks them); an ASP top-up is the off-cap way to bridge a gap.
+ * AI clubs' simulated re-signings aren't checked — they re-sign at the player's existing value, so they
+ * can't grow a club's wage bill.
+ */
+export function capRoomForSigning(players: readonly Player[], clubName: string, year: number, playerId: number): number {
+  return SALARY_CAP - committedWages(players.filter((p) => p.PlayerID !== playerId), clubName, year);
 }
 
 // ---------------------------------------------------------------------------
@@ -432,7 +449,20 @@ export interface LeagueActivityEntry {
  * Round 94: also returns every `ClubHistoryUpdate` this sweep's delistings produce (see `delist`'s
  * own doc comment) — the re-sign branch deliberately produces none, matching `clubHistory.ts`'s own
  * "same-club re-signing isn't a movement worth logging" convention.
+ *
+ * ROADMAP #14 follow-up — AI clubs use Additional Service Payments too. A rival club offers an off-cap
+ * top-up to a player worth keeping (`totalValue` at least `AI_ASP_MIN_VALUE`, about the top 30% of
+ * contracts) when its Football Dept budget and ASP limits allow: ~15% of the ask, within `maxAspFor`.
+ * The top-up lifts that player's chance of staying by `AI_ASP_RESIGN_SENSITIVITY` x its share of the
+ * ask (15% of ask → +22.5 points), capped like every re-sign chance at 97%. If he stays, the agreement
+ * is recorded and its first year paid exactly like the coach's own (`signAsp`); if he leaves anyway,
+ * nothing is spent. Every player consumes exactly two random draws, so an ASP changing one player's
+ * outcome never changes anyone else's. The updated `clubFinance` is returned for the caller to commit.
  */
+export const AI_ASP_MIN_VALUE = 650_000;
+export const AI_ASP_SHARE_OF_ASK = 0.15;
+export const AI_ASP_RESIGN_SENSITIVITY = 1.5;
+
 export function simulateLeagueContracts(
   players: readonly Player[],
   myClub: string,
@@ -440,8 +470,9 @@ export function simulateLeagueContracts(
   day: number,
   seed: number,
   clubFinance?: Readonly<Record<string, ClubFinanceState>>,
-): { players: Player[]; activity: LeagueActivityEntry[]; historyEntries: ClubHistoryUpdate[] } {
+): { players: Player[]; activity: LeagueActivityEntry[]; historyEntries: ClubHistoryUpdate[]; clubFinance: Record<string, ClubFinanceState> } {
   const rng = mulberry32(seed);
+  const finance: Record<string, ClubFinanceState> = { ...(clubFinance ?? {}) };
   const activity: LeagueActivityEntry[] = [];
   const historyEntries: ClubHistoryUpdate[] = [];
 
@@ -451,12 +482,19 @@ export function simulateLeagueContracts(
     if (status === "Signed") return p;
 
     const name = playerFullName(p);
-    const wellbeingBonus = clubFinance?.[p.Team] ? wellbeingReSignBonus(clubFinance[p.Team]) : 0;
-    const stays = rng() < effectiveReSignProbability(status, wellbeingBonus);
+    const club = finance[p.Team];
+    const wellbeingBonus = club ? wellbeingReSignBonus(club) : 0;
+    const asp = club && p.totalValue >= AI_ASP_MIN_VALUE ? aiAspOffer(club, p, currentYear) : 0;
+    // Two draws per player, always, so one player's outcome (or an ASP changing it) never shifts the
+    // random sequence for the players after him.
+    const stayRoll = rng();
+    const yearsRoll = rng();
+    const stays = stayRoll < Math.min(0.97, effectiveReSignProbability(status, wellbeingBonus) + (asp / statedAsk(p)) * AI_ASP_RESIGN_SENSITIVITY);
 
     if (stays) {
-      const years = 2 + Math.floor(rng() * 3); // 2-4 years, a reasonable AI re-sign length
+      const years = 2 + Math.floor(yearsRoll * 3); // 2-4 years, a reasonable AI re-sign length
       const resigned = reSign(p, { years, salaryPerYear: p.totalValue }, currentYear);
+      if (asp > 0) finance[p.Team] = signAsp(club!, p.PlayerID, asp, currentYear, currentYear + years - 1);
       activity.push({
         id: `${p.PlayerID}-d${day}`,
         day,
@@ -464,7 +502,7 @@ export function simulateLeagueContracts(
         playerId: p.PlayerID,
         playerName: name,
         clubName: p.Team,
-        detail: `${name} (${status}) re-signs with ${p.Team} for ${years} year${years === 1 ? "" : "s"}.`,
+        detail: `${name} (${status}) re-signs with ${p.Team} for ${years} year${years === 1 ? "" : "s"}${asp > 0 ? `, with $${Math.round(asp / 1000)}k a year in off-cap Additional Service Payments` : ""}.`,
       });
       return resigned;
     }
@@ -483,5 +521,12 @@ export function simulateLeagueContracts(
     return delisted.player;
   });
 
-  return { players: next, activity, historyEntries };
+  return { players: next, activity, historyEntries, clubFinance: finance };
+}
+
+/** What a rival club would put on the table off-cap for this player: ~15% of the ask, within its ASP limits and what's in the budget right now. 0 = no offer. */
+function aiAspOffer(club: ClubFinanceState, player: Player, year: number): number {
+  const want = Math.round((statedAsk(player) * AI_ASP_SHARE_OF_ASK) / 5000) * 5000;
+  const amount = Math.min(want, maxAspFor(club, statedAsk(player), year, player.PlayerID));
+  return amount > 0 && amount <= club.budget ? amount : 0;
 }

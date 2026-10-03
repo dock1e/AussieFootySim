@@ -67,7 +67,7 @@ describe("computeListNeeds", () => {
         ...makeClub("Inside Mid", 2, 20), // thin + weak + no elite
         ...makeClub("Key Forward", 3, 55),
         ...makeClub("Key Defender", 3, 55),
-        ...makeClub("Ruck", 4, 90), // deep + quality + elite (84+)
+        ...makeClub("Ruck", 4, 110), // deep + quality + elite (104+ since Round C147's +20 OVR recentre)
       ],
     ],
   ]);
@@ -82,7 +82,7 @@ describe("computeListNeeds", () => {
     const midfield = report.lines.find((l) => l.line === "Midfield")!;
     expect(midfield.verdict).toContain("starter");
     expect(midfield.verdict).toContain("bodies short of shape");
-    expect(midfield.verdict).toContain("no elite (84+)");
+    expect(midfield.verdict).toContain("no elite (104+)");
     expect(midfield.qualityCount).toBe(0); // both Midfield players are OVR 20, well under any reasonable league average
     expect(midfield.elite).toHaveLength(0);
   });

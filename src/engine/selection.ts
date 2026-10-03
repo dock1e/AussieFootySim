@@ -3,6 +3,9 @@ import type { Archetype } from "../types/archetype.ts";
 import { POSITIONS, suitabilityFor, defaultEligiblePositions, type Position, type Suitability } from "../types/archetype.ts";
 import type { Cover, MatchTeam } from "./team.ts";
 import { pickBest22 } from "./team.ts";
+import { specialistGroups, type RestPolicy, type RotationGroup } from "./rotation.ts";
+
+const BENCH_COVERAGE_BONUS = 5;
 
 /**
  * Selection Committee — Engine.md/User Interface.md's ground-diagram team
@@ -49,13 +52,17 @@ export const SUITABILITY_RANK: Record<Suitability, number> = {
 export function autoFillLineup(players: readonly Player[]): Lineup {
   const used = new Set<number>();
   const lineup: Lineup = [];
+  // ROADMAP #16 — the bench is picked to cover different rotation groups, not just the next five by
+  // OVR: each group a candidate would add to the bench's coverage is worth a few OVR points.
+  const benchCovers = new Set<RotationGroup>();
   for (const position of POSITIONS) {
     let best: Player | null = null;
     let bestScore = -1;
     for (const p of players) {
       if (used.has(p.PlayerID)) continue;
       const tier = SUITABILITY_RANK[suitabilityFor(p.archetype as Archetype, position)];
-      const score = tier * 1000 + p.OVR;
+      const coverage = position === "INT" ? Math.min(2, specialistGroups(p).filter((g) => !benchCovers.has(g)).length) * BENCH_COVERAGE_BONUS : 0;
+      const score = tier * 1000 + p.OVR + coverage;
       if (score > bestScore) {
         best = p;
         bestScore = score;
@@ -64,6 +71,7 @@ export function autoFillLineup(players: readonly Player[]): Lineup {
     if (best) {
       lineup.push(best.PlayerID);
       used.add(best.PlayerID);
+      if (position === "INT") for (const g of specialistGroups(best)) benchCovers.add(g);
     } else {
       lineup.push(null);
     }
@@ -117,8 +125,10 @@ export function lineupToMatchTeam(
   lineup: Lineup,
   allClubPlayers: readonly Player[],
   eligibilityOverrides?: Record<number, Position[]>,
-  /** Round 130 — the coach's per-player covers (see `MatchTeam.covers`). Only entries whose players are all in this 23 are kept. */
+  /** Round 130 — the coach's pinned relievers (see `MatchTeam.covers`). Only entries whose players are all in this 23 are kept. */
   covers?: Record<number, Cover | null>,
+  /** ROADMAP #16 — the coach's per-player rest policies (see `MatchTeam.restPolicy`). */
+  restPolicy?: Record<number, RestPolicy>,
 ): MatchTeam {
   const byId = new Map(allClubPlayers.map((p) => [p.PlayerID, p]));
   const picked: Player[] = [];
@@ -169,7 +179,64 @@ export function lineupToMatchTeam(
       coverMap.set(Number(id), c);
     }
   }
-  return { name: clubName, players: squad, positions, onGround, interchangeEligibility, covers: coverMap };
+  const policyMap = restPolicy ? new Map(Object.entries(restPolicy).map(([id, p]) => [Number(id), p])) : undefined;
+  return { name: clubName, players: squad, positions, onGround, interchangeEligibility, covers: coverMap, restPolicy: policyMap };
+}
+
+/**
+ * Oct 2026 — [[Injuries]]. `team` with any `unavailable` (injured) players taken out and their slots
+ * filled from the rest of the club's list, best suitability then OVR — the same rule `autoFillLineup`
+ * uses. Everyone else keeps his selected slot, and the coach's pins and rest policies carry over.
+ * Returns `team` itself when nobody in it is unavailable.
+ */
+export function withAvailablePlayers(team: MatchTeam, clubPlayers: readonly Player[], unavailable: ReadonlySet<number>): MatchTeam {
+  if (!team.players.some((p) => unavailable.has(p.PlayerID))) return team;
+  const inTeam = new Set(team.players.map((p) => p.PlayerID));
+  if (!team.positions) {
+    // No slot data (a `pickBest22` team): swap each injured man for the best available by OVR, nobody else changes.
+    const spares = clubPlayers.filter((p) => !inTeam.has(p.PlayerID) && !unavailable.has(p.PlayerID) && !p.delisted).sort((a, b) => b.OVR - a.OVR);
+    return { ...team, players: team.players.map((p) => (unavailable.has(p.PlayerID) ? (spares.shift() ?? p) : p)).filter((p) => !unavailable.has(p.PlayerID)) };
+  }
+  const lineup: Lineup = emptyLineup();
+  const unplaced: number[] = [];
+  for (const p of team.players) {
+    if (unavailable.has(p.PlayerID)) continue;
+    const pos: Position | undefined = team.positions.get(p.PlayerID);
+    const i = pos ? POSITIONS.findIndex((x, idx) => x === pos && lineup[idx] === null) : -1;
+    if (i >= 0) lineup[i] = p.PlayerID;
+    else unplaced.push(p.PlayerID);
+  }
+  // A selected player with no slot of his own (a top-up) stays in the 23 rather than being dropped.
+  for (const id of unplaced) {
+    const i = lineup.findIndex((x, idx) => x === null && POSITIONS[idx] === "INT");
+    const j = i >= 0 ? i : lineup.findIndex((x) => x === null);
+    if (j >= 0) lineup[j] = id;
+  }
+  const used = new Set(lineupPlayerIds(lineup));
+  lineup.forEach((id, i) => {
+    if (id !== null) return;
+    let best: Player | null = null;
+    let bestScore = -1;
+    for (const p of clubPlayers) {
+      if (used.has(p.PlayerID) || unavailable.has(p.PlayerID) || p.delisted) continue;
+      const score = SUITABILITY_RANK[suitabilityFor(p.archetype as Archetype, POSITIONS[i])] * 1000 + p.OVR;
+      if (score > bestScore) {
+        best = p;
+        bestScore = score;
+      }
+    }
+    if (best) {
+      lineup[i] = best.PlayerID;
+      used.add(best.PlayerID);
+    }
+  });
+  const eligibility: Record<number, Position[]> = {};
+  for (const [id, set] of team.interchangeEligibility ?? []) if (used.has(id)) eligibility[id] = [...set];
+  const covers: Record<number, Cover> = {};
+  for (const [id, c] of team.covers ?? []) covers[id] = c;
+  const restPolicy: Record<number, RestPolicy> = {};
+  for (const [id, r] of team.restPolicy ?? []) restPolicy[id] = r;
+  return lineupToMatchTeam(team.name, lineup, clubPlayers, eligibility, covers, restPolicy);
 }
 
 /** Convenience: the existing pickBest22 stand-in, exposed here too so callers can offer "reset to auto-pick" without importing team.ts directly. */
@@ -179,14 +246,13 @@ export function bestAvailableTeam(clubName: string, allClubPlayers: readonly Pla
 
 export type { Position };
 
-// --- Round 130: per-player covers (Match Day flow v2) --------------------------------------------
+// --- Pinned relievers (round 130's covers, ROADMAP #16) --------------------------------------------
 
-/** Positions where a player with no relief is flagged as a fatigue risk (and which default covers go to first). */
-export const RELIEF_POSITIONS: readonly Position[] = ["R", "RR", "ROV", "C", "W", "HFF", "HBF"];
-const DEFAULT_COVER_ORDER: readonly Position[] = ["R", "RR", "ROV", "C", "W", "HFF", "HBF", "FP"];
-const MAX_DEFAULT_COVERS_PER_BENCH = 3;
-
-/** Keeps only covers that still make sense for `lineup`: the rester is on the ground; `by` is on the bench (swap), or on the ground with `fill` on the bench (chain). */
+/**
+ * Keeps only pins that still make sense for `lineup` — the rester is on the ground and his reliever on
+ * the bench — normalised to `{ by: benchId }` (a round-130 chain becomes a pin on its `fill`; the
+ * goal-reset re-sort now moves a teammate across by itself).
+ */
 export function validCovers(lineup: Lineup, covers: Record<number, Cover | null>): Record<number, Cover> {
   const slotOf = new Map<number, number>();
   lineup.forEach((id, i) => {
@@ -198,59 +264,8 @@ export function validCovers(lineup: Lineup, covers: Record<number, Cover | null>
   for (const [r, c] of Object.entries(covers)) {
     const rester = Number(r);
     if (!c || !onField(rester)) continue;
-    if (onBench(c.by)) out[rester] = { by: c.by };
-    else if (onField(c.by) && c.by !== rester && c.fill !== undefined && onBench(c.fill)) out[rester] = { by: c.by, fill: c.fill };
-  }
-  return out;
-}
-
-/**
- * Covers for a club that hasn't set any yet — and the migration from the old per-position rotations:
- * each bench player covers starters in the positions he was cleared for (`eligibility`, else his
- * archetype default), best fit first, at most three each, ruck and midfield first. A ruck with no
- * bench cover gets a chain instead: an on-field teammate suited to the ruck moves across (van Rooyen
- * from the forward pocket) and a bench player fills his spot.
- */
-export function defaultCovers(lineup: Lineup, players: readonly Player[], eligibility?: Record<number, Position[]>): Record<number, Cover | null> {
-  const byId = new Map(players.map((p) => [p.PlayerID, p]));
-  const bench: Player[] = [];
-  const starters: { p: Player; pos: Position }[] = [];
-  lineup.forEach((id, i) => {
-    const p = id !== null ? byId.get(id) : undefined;
-    if (!p) return;
-    if (POSITIONS[i] === "INT") bench.push(p);
-    else starters.push({ p, pos: POSITIONS[i] });
-  });
-  const eligibleFor = (b: Player) => eligibility?.[b.PlayerID] ?? defaultEligiblePositions(b.archetype as Archetype);
-  const load = new Map<number, number>();
-  const rank = (p: Player, pos: Position) => SUITABILITY_RANK[suitabilityFor(p.archetype as Archetype, pos)];
-  const bestBench = (pos: Position) =>
-    bench
-      .filter((b) => eligibleFor(b).includes(pos) && (load.get(b.PlayerID) ?? 0) < MAX_DEFAULT_COVERS_PER_BENCH)
-      .sort((a, b) => rank(b, pos) - rank(a, pos) || (load.get(a.PlayerID) ?? 0) - (load.get(b.PlayerID) ?? 0) || b.OVR - a.OVR)[0];
-  const out: Record<number, Cover | null> = {};
-  const movers = new Set<number>();
-  const ordered = [...starters]
-    .filter((s) => DEFAULT_COVER_ORDER.includes(s.pos))
-    .sort((a, b) => DEFAULT_COVER_ORDER.indexOf(a.pos) - DEFAULT_COVER_ORDER.indexOf(b.pos));
-  for (const { p, pos } of ordered) {
-    if (movers.has(p.PlayerID)) continue; // already moving across to cover the ruck — he isn't also rested
-    const b = bestBench(pos);
-    if (b) {
-      out[p.PlayerID] = { by: b.PlayerID };
-      load.set(b.PlayerID, (load.get(b.PlayerID) ?? 0) + 1);
-      continue;
-    }
-    if (pos !== "R") continue;
-    const mover = starters
-      .filter((s) => s.p.PlayerID !== p.PlayerID && s.pos !== "R" && !movers.has(s.p.PlayerID) && rank(s.p, "R") >= 2)
-      .sort((a, b) => rank(b.p, "R") - rank(a.p, "R") || b.p.OVR - a.p.OVR)[0];
-    const fill = mover ? bestBench(mover.pos) : undefined;
-    if (mover && fill) {
-      out[p.PlayerID] = { by: mover.p.PlayerID, fill: fill.PlayerID };
-      movers.add(mover.p.PlayerID);
-      load.set(fill.PlayerID, (load.get(fill.PlayerID) ?? 0) + 1);
-    }
+    const by = c.fill ?? c.by;
+    if (onBench(by)) out[rester] = { by };
   }
   return out;
 }

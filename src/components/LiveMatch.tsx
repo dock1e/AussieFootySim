@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { CLUBS, clubByName } from "../types/club";
 import type { Player } from "../types/player";
-import type { Position } from "../types/archetype";
+import { POSITIONS, type Position } from "../types/archetype";
 import { getPlayersByClub, leagueAverageOvr } from "../data/loadPlayers";
 import { cloneMatchTeam, interchangesUpTo, teamAtEvent, type Cover, type MatchTeam } from "../engine/team";
-import { friendlyTimeslot, type Timeslot } from "../engine/fixture";
-import { autoFillLineup, defaultCovers, emptyLineup, lineupToMatchTeam, validCovers, type Lineup } from "../engine/selection";
+import { SEASON_ROUNDS, friendlyTimeslot, type Timeslot } from "../engine/fixture";
+import { autoFillLineup, emptyLineup, lineupToMatchTeam, validCovers, withAvailablePlayers, type Lineup } from "../engine/selection";
+import { groupLabel, positionsOfGroups, uncoveredGroups } from "../engine/rotation";
 import {
   startMatch,
   simulateQuarter,
@@ -33,13 +34,13 @@ import { groundForMatch } from "../data/clubGrounds";
 import { getStadium, STADIUM_CONFIGS, type AFLStadium } from "../data/stadiums";
 import { buildGrandFinalTeam, GRAND_FINAL_2026_CLUBS, type GrandFinal2026Club } from "../data/grandFinal2026";
 import { aiTeamPlan, defaultTeamPlan, gameStyleModelledImpact, DEFAULT_GAME_STYLE, type GameStyle } from "../engine/tactics";
-import { nextUnplayedRound } from "../engine/season";
+import { matchInjuryOptions, nextUnplayedRound, unavailablePlayerIds } from "../engine/season";
 import { useMatchPlayback, type PlaybackSpeed } from "../hooks/useMatchPlayback";
 import { useGameStore } from "../store/useGameStore";
 import { useSelectionStore } from "../store/useSelectionStore";
 import { useTeamPlanStore } from "../store/useTeamPlanStore";
 import { useSaveStore } from "../store/useSaveStore";
-import { useSeasonStore } from "../store/useSeasonStore";
+import { roundOptions, useSeasonStore } from "../store/useSeasonStore";
 import { GroundView } from "./GroundView";
 import { Scoreboard, StatStrip, TransportBar, breakLabel, clubAbbr, gameClock, nextBreakName, quarterGoalsBehinds, plural } from "./matchday/shared";
 import { LiveBoard, MoversWidget, PlayByPlayWidget, DangerMenWidget, baselineFpAverage } from "./matchday/LiveWidgets";
@@ -130,6 +131,10 @@ export function LiveMatch({
   const myEligibility = allEligibility[myClub];
   const storedCovers = useSelectionStore((s) => s.covers[myClub]);
   const setCovers = useSelectionStore((s) => s.setCovers);
+  const myRestPolicy = useSelectionStore((s) => s.restPolicy[myClub]);
+  const setRestPolicy = useSelectionStore((s) => s.setRestPolicy);
+  const setEligibility = useSelectionStore((s) => s.setEligibility);
+  const resetEligibility = useSelectionStore((s) => s.resetEligibility);
   const lastWeek = useSelectionStore((s) => s.lastWeek[myClub]);
   const setLastWeek = useSelectionStore((s) => s.setLastWeek);
 
@@ -199,15 +204,12 @@ export function LiveMatch({
     setTags(new Map());
   }
 
-  // --- The plan: covers (who relieves whom) -----------------------------------------------------------
-  // A club with no saved covers uses the ones derived from its line-up and old per-position rotations.
-  const effectiveCovers = useMemo(
-    () => storedCovers ?? defaultCovers(lineup, myPlayers, myEligibility),
-    [storedCovers, lineup, myPlayers, myEligibility],
-  );
-  const liveCovers = useMemo(() => validCovers(lineup, effectiveCovers), [lineup, effectiveCovers]);
+  // --- The plan: rotation (ROADMAP #16) --------------------------------------------------------------
+  // The AI rotates by group at goal resets; the coach can pin a reliever, set rest policies and change
+  // which groups a bench player covers. Nothing here is required.
+  const liveCovers = useMemo(() => validCovers(lineup, storedCovers ?? {}), [lineup, storedCovers]);
   function setCover(resterId: number, cover: Cover | null) {
-    setCovers(myClub, { ...effectiveCovers, [resterId]: cover });
+    setCovers(myClub, { ...liveCovers, [resterId]: cover });
   }
   /** Every line-up change also drops covers the new line-up no longer supports. */
   function changeLineup(next: Lineup) {
@@ -220,16 +222,20 @@ export function LiveMatch({
    * the opponent is its season team when there is one, else the same suitability-aware auto-fill an AI
    * club gets in season simulation.
    */
-  const flowMine = useMemo(
-    () => lineupToMatchTeam(myClub, savedLineup ?? autoFillLineup(myPlayers), myPlayers, myEligibility, liveCovers),
-    [myClub, savedLineup, myPlayers, myEligibility, liveCovers],
+  // [[Injuries]] — who can't play this week. Your sheet keeps them (so they return when fit) but the
+  // team that takes the field covers them, exactly as a headless round does.
+  const unavailable = useMemo(() => (season ? unavailablePlayerIds(season) : new Set<number>()), [season]);
+  const flowMineSelected = useMemo(
+    () => lineupToMatchTeam(myClub, savedLineup ?? autoFillLineup(myPlayers), myPlayers, myEligibility, liveCovers, myRestPolicy),
+    [myClub, savedLineup, myPlayers, myEligibility, liveCovers, myRestPolicy],
   );
+  const flowMine = useMemo(() => withAvailablePlayers(flowMineSelected, myPlayers, unavailable), [flowMineSelected, myPlayers, unavailable]);
   const flowOpp = useMemo(() => {
     const fromSeason = nextRow ? seasonTeams?.get(oppClubId) : undefined;
-    if (fromSeason) return fromSeason;
     const players = getPlayersByClub(oppName);
-    return lineupToMatchTeam(oppName, autoFillLineup(players), players, allEligibility[oppName]);
-  }, [nextRow, seasonTeams, oppClubId, oppName, allEligibility]);
+    if (fromSeason) return withAvailablePlayers(fromSeason, players, unavailable);
+    return lineupToMatchTeam(oppName, autoFillLineup(players.filter((p) => !unavailable.has(p.PlayerID))), players, allEligibility[oppName]);
+  }, [nextRow, seasonTeams, oppClubId, oppName, allEligibility, unavailable]);
   const oppPlan = useMemo(() => aiTeamPlan(getPlayersByClub(oppName), leagueAverageOvr()), [oppName]);
   /** Only valid tags reach the match: a taggable target, tagged by an on-field non-ruck starter. */
   const validTags = useMemo(() => {
@@ -330,11 +336,15 @@ export function LiveMatch({
       homeCondition: condition,
       awayCondition: condition,
       stadium: flowVenue,
+      ...(nextRow && season
+        ? matchInjuryOptions(season, nextRow.finalKey ? SEASON_ROUNDS + 1 : nextRow.round, home, away, iAmHome ? myClubId : oppClubId, iAmHome ? oppClubId : myClubId, seed, flowVenue, roundOptions())
+        : {}),
     });
     simulateQuarter(match, 1);
     setActive({
-      home,
-      away,
+      // The match plays on its own copies (startMatch); these are the live ones.
+      home: match.ctx.home,
+      away: match.ctx.away,
       venue: flowVenue,
       round: nextRow && !nextRow.finalKey ? nextRow.round : null,
       finalKey: nextRow?.finalKey ?? null,
@@ -343,7 +353,8 @@ export function LiveMatch({
       special:
         nextRow?.finalKey === "GF" ||
         (!!nextRow && !nextRow.finalKey && !!season?.fixture.find((m) => m.round === nextRow.round && m.homeClubId === nextRow.homeClubId && m.awayClubId === nextRow.awayClubId)?.special),
-      myTeamAtBounce: cloneMatchTeam(flowMine),
+      // The selected team, not the injury-patched one: the season re-patches it every round, so a player back from injury returns.
+      myTeamAtBounce: cloneMatchTeam(flowMineSelected),
       homeAtBounce: cloneMatchTeam(iAmHome ? flowMine : flowOpp),
       awayAtBounce: cloneMatchTeam(iAmHome ? flowOpp : flowMine),
     });
@@ -404,8 +415,9 @@ export function LiveMatch({
     });
     simulateQuarter(match, 1);
     setActive({
-      home,
-      away,
+      // The match plays on its own copies (startMatch); these are the live ones.
+      home: match.ctx.home,
+      away: match.ctx.away,
       venue,
       round: null,
       // Round 132's Big Game Splash "special" fixture handling is deliberately not engaged here: this
@@ -608,6 +620,8 @@ export function LiveMatch({
   const planKey = JSON.stringify([
     lineup,
     liveCovers,
+    myRestPolicy ?? {},
+    myEligibility ?? {},
     [...standingPlan.tactics].map(([id, t]) => [id, t.tactic]),
     [...(standingPlan.positionTactics ?? [])].map(([k, t]) => [k, t.tactic]),
     oppName,
@@ -733,12 +747,13 @@ export function LiveMatch({
 
   if (!active || !result) {
     const NEXT = ["Pick the team", `Scout ${oppName}`, "Game plan", "First bounce"];
-    const coveredCount = Object.keys(liveCovers).length;
+    const bench = lineup.flatMap((id, i) => (id !== null && POSITIONS[i] === "INT" && myById.has(id) ? [myById.get(id)!] : []));
+    const uncovered = uncoveredGroups(bench, myEligibility);
     const HINT = [
       `${roundLabel} · ${flowVenue.commonName} · ${when.label} · ${homeAway}`,
       lineupStat(lineup, myById),
       changes.length ? `${plural(changes.length, "change")} vs last week` : "Playing last week's plan",
-      `${coveredCount}/18 have relief · ${styleLabel(style)}`,
+      `${uncovered.length ? `Bench doesn't cover ${uncovered.map(groupLabel).join(", ").toLowerCase()}` : "Bench covers every group"} · ${styleLabel(style)}`,
     ];
     return (
       <div className="flex flex-col gap-3">
@@ -802,10 +817,11 @@ export function LiveMatch({
         {step === 1 && (
           <SelectionStep
             players={myPlayers}
+            injuries={season?.injuries}
             lineup={lineup}
             onChange={changeLineup}
             onAutoPick={() => {
-              autoFill(myClub, myPlayers);
+              autoFill(myClub, myPlayers.filter((p) => !unavailable.has(p.PlayerID)));
               if (storedCovers) setCovers(myClub, validCovers(useSelectionStore.getState().lineupFor(myClub) ?? lineup, storedCovers));
             }}
             onLastWeek={lastWeek ? () => changeLineup(lastWeek.lineup) : null}
@@ -836,8 +852,12 @@ export function LiveMatch({
             byId={myById}
             plan={standingPlan}
             covers={liveCovers}
+            restPolicy={myRestPolicy ?? {}}
+            eligibility={myEligibility}
             onStyle={(st) => setStandingStyle(myClub, st)}
             onCover={setCover}
+            onRestPolicy={(id, policy) => setRestPolicy(myClub, id, policy)}
+            onBenchGroups={(id, groups) => (groups ? setEligibility(myClub, id, positionsOfGroups(groups)) : resetEligibility(myClub, id))}
             onRole={(id, pos: Position, tactic) => setPositionTactic(myClub, id, pos, { tactic })}
             tog={projection.tog}
             projecting={projection.pending}

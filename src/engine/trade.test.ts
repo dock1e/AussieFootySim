@@ -142,7 +142,8 @@ describe("evaluateTradeSide / evaluateTrade", () => {
     const players = [makePlayer({ PlayerID: 1, Team: "Givers", loyaltyTend: 0 })];
     const ctx = buildTradeContext(players, 2026, strategies);
 
-    const star = makePlayer({ PlayerID: 10, Team: "Givers", Age: 22, OVR: 85, totalValue: 1_000_000, loyaltyTend: 0 });
+    // Round C147's +20 OVR recentre moved CORE_LOSS_OVR_FLOOR 80 -> 100; this star was still on the old scale (85).
+    const star = makePlayer({ PlayerID: 10, Team: "Givers", Age: 22, OVR: 105, totalValue: 1_000_000, loyaltyTend: 0 });
     const withLoss = evaluateTradeSide("Givers", "Receivers", [star], [], ctx);
     const lossFactor = withLoss.factors.find((f) => f.label.includes("franchise asset"));
     expect(lossFactor).toBeTruthy();

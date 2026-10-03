@@ -10,7 +10,7 @@ import { playerFullName } from "../types/player.ts";
 // — see scripts/buildData.ts. Run that script again any time the vault's CSV changes.
 // Kept as an untouched, immutable snapshot — the "New Game" baseline every
 // save starts from and can be reset back to (see resetPoolToGenerated below).
-const GENERATED_PLAYERS: readonly Player[] = playersJson as unknown as Player[];
+let GENERATED_PLAYERS: readonly Player[] = playersJson as unknown as Player[];
 
 /**
  * The live, mutable player pool every screen and engine call reads from —
@@ -39,6 +39,16 @@ export const ALL_PLAYERS: Player[] = [...GENERATED_PLAYERS];
 export function loadPool(players: readonly Player[]): void {
   ALL_PLAYERS.length = 0;
   ALL_PLAYERS.push(...players);
+}
+
+/**
+ * 2027 season start — replaces the New Game baseline (and the live pool) with the start-season world
+ * `engine/seasonStart.ts`'s `prepareStartingWorld` builds at boot. Called once, before anything renders;
+ * a save loaded afterwards replaces the live pool with its own players as usual.
+ */
+export function setGeneratedBaseline(players: readonly Player[]): void {
+  GENERATED_PLAYERS = players;
+  loadPool(players);
 }
 
 /** The untouched New Game baseline (read-only) — what a new save's clubs look like before anything happens to them. */

@@ -6,6 +6,8 @@ import { makePlayer } from "../testUtils/makePlayer";
 import { CURRENT_SEASON_YEAR } from "../config";
 import type { Season } from "./season";
 import { seedDraftPickInventory } from "./draftPicks";
+import { ensureAllFinanceBaselines } from "./clubFinance";
+import { seedSeniorCoaches } from "./seniorCoaches";
 
 /**
  * Deliberately synthetic throughout, same isolation match.test.ts/
@@ -126,12 +128,13 @@ describe("serializeSave / deserializeSave", () => {
   function richSave(): SaveGameData {
     const plan1 = { gameStyle: "Forward Press" as const, tactics: new Map([[1, { tactic: "Tagging" as const, taggingTargetId: 55 }], [2, { tactic: "Run Two Ways" as const }]]) };
     const plan2 = defaultTeamPlan();
+    const players = makePool(4);
     return {
       schemaVersion: SAVE_SCHEMA_VERSION,
       myClub: "Adelaide",
       year: 2027,
       savedAt: "2027-03-01T00:00:00.000Z",
-      players: makePool(4),
+      players,
       season: minimalSeason([[1, 76], [2, 100], [3, 40]]),
       lineups: { Adelaide: [1, 2, 3, null] },
       eligibility: { Adelaide: { 1: ["FB", "CHB", "BP"], 3: ["FP", "HFF", "W"] } },
@@ -213,10 +216,14 @@ describe("serializeSave / deserializeSave", () => {
       // Round 121, [[Club Finance, Facilities, and Marketing]]. A real, partially-populated record
       // (not every club present), same "prove JSON round-tripping" ethos as `watchlist`/`clubHistory`
       // above — plain number/Partial-record data, no Map/Set involved.
-      clubFinance: { Adelaide: { facilityLevels: { gym: 2, vfl: 1 }, budget: 185_000 }, Carlton: { facilityLevels: {}, budget: 250_000 } },
+      // ROADMAP #14: run through ensureAllFinanceBaselines so the fixture is already in the shape every
+      // loaded save ends up in (all 18 clubs, real-scale fields filled) — the round trip stays lossless.
+      clubFinance: ensureAllFinanceBaselines({ Adelaide: { facilityLevels: { gym: 2, vfl: 1 }, budget: 185_000 }, Carlton: { facilityLevels: {}, budget: 250_000 } }, players, 2027),
       // Round 123 — [[Football Department Coach Market]]. Same "plain data, no Map/Set" round-trip
       // fixture treatment as clubFinance above.
       coachContracts: { "Talent Scout": { coachId: 1, salaryPerYear: 68_000 } },
+      // ROADMAP #14 follow-up: seeded, so the round trip is lossless (deserialize seeds a missing field).
+      seniorCoaches: seedSeniorCoaches("Adelaide", 2027),
     };
   }
 

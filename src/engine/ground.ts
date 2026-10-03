@@ -1602,6 +1602,11 @@ export function computeDotPositions(
  * a trigger isn't literally implementable yet; a lost-possession tackle is
  * the closest real analogue and is what this responds to instead. Worth
  * revisiting if/when free kicks become their own modelled event.
+ *
+ * Update, Oct 2026 (ROADMAP #11 / gap #76): free kicks are now tagged on
+ * their event (`MatchEvent.freeKick`), so the proxy is no longer needed for
+ * them: `ballTargetFor` puts the ball in the taker's hands. A tackle that
+ * isn't paid as a free kick still drops the ball at the tackled player's feet.
  */
 export type BallState = "flight" | "marked" | "dropped" | "neutral";
 
@@ -1837,6 +1842,19 @@ export function ballTargetFor(
   // `nextEvent?.phase === "MARKING_CONTEST"` catches the launch tick that
   // precedes it, same look-ahead signal `isKick` below already uses.
   const kickTrajectory = event.phase === "MARKING_CONTEST" || nextEvent?.phase === "MARKING_CONTEST";
+
+  // ROADMAP #11 / gap #76 — a free kick puts the ball in the taker's hands, whoever is named first.
+  // Checked before the tackle branch: a Holding the Ball free carries the tackle stats too, but the
+  // ball belongs to the tackler now, not on the ground at the tackled player's feet.
+  if (event.freeKick) {
+    const taker = dots.find((d) => d.playerId === event.freeKick!.forId);
+    return {
+      x: taker?.x ?? anchorX,
+      y: (taker?.y ?? anchorY) + BALL_NEUTRAL_OFFSET_Y,
+      state: "marked",
+      speedMultiplier: kickTrajectory ? KICK_SPEED_MULTIPLIER : 1,
+    };
+  }
 
   if (hasStat(event, "marks")) {
     return { x: anchorX, y: anchorY + BALL_MARK_OFFSET_Y, state: "marked", speedMultiplier: kickTrajectory ? KICK_SPEED_MULTIPLIER : 1 };

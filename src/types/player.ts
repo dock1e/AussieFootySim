@@ -160,6 +160,15 @@ export interface Player extends ImprovementRates, DeclineRates, RawAttributes, C
   umpireNotice: number;
   goHomeTend: number;
   injuryTend: number;
+  /** Oct 2026 — [[Injuries]]: prone to soft tissue injuries. Absent = use `data/injuryProneness.ts`'s named list. */
+  softTissueProne?: boolean;
+  /** Oct 2026 — [[Injuries]]: prone to concussion. Absent = use `data/injuryProneness.ts`'s named list. */
+  concussionProne?: boolean;
+  /**
+   * Oct 2026 — [[Injuries]]: a long-term (ACL) injury carried into the coming season, set each
+   * off-season and read when the new season starts. Absent = starts the season fit (everyone else).
+   */
+  longTermInjury?: { typeId: string; weeksRemaining: number };
   loyaltyTend: number;
   clangerTend: number;
   leadership: number;

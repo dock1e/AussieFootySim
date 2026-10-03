@@ -66,7 +66,12 @@ export function fillDayOne(existing: DayOneSave | null, year: number, ctx: ClubC
 /** A save from before onboarding existed gets a default coach (Graeme Labrooy) at its current club, on the board terms that club would offer. */
 export function ensureCareer(myClub: string, year: number, seasonArchives: readonly SeasonArchiveEntry[]): void {
   const store = useCareerStore.getState();
-  if (store.coach) return;
+  if (store.coach) {
+    // ROADMAP #14 job security: contract terms count from `startYear`. A coach saved before that field
+    // existed is pinned to the year this save is first opened, so the contract can actually run out.
+    if (store.coach.startYear === undefined) store.setCoach({ ...store.coach, startYear: year });
+    return;
+  }
   const club = clubByName(myClub) ?? CLUBS[0];
   const saveId = store.saveId ?? newSaveId();
   const ctx = getClubContext(club.ClubID, { year, seasonArchives, coachName: DEFAULT_COACH_NAME, seed: hashString(saveId) });

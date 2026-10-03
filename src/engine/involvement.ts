@@ -229,6 +229,16 @@ export interface NearbyPick {
  */
 export interface KickPick extends NearbyPick {
   kickDistance: number;
+  /**
+   * Oct 2026 — ROADMAP #18: the literal aim point, the receiver's real position (tracked when known)
+   * at the moment of the kick. The ball's new zone is read off this, so a kick can go sideways,
+   * backwards, or two zones forward instead of always exactly one step.
+   */
+  aim: AbstractPosition;
+  /** Zone-units gained toward goal (negative = backward). */
+  progress: number;
+  /** Oct 2026 — ROADMAP #18: the kicker's own real position, so the play-by-play can say why this target (a switch, a backward kick...). */
+  from: AbstractPosition;
 }
 
 /**
@@ -346,8 +356,8 @@ export function nearbyDefenders(
   };
   const pool = onGroundPlayers(team);
   const withDistance = pool.map((player) => {
-    const estimated = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
-    const pos = trackedPositions.get(player.PlayerID) ?? estimated;
+    // Lazy: the stateless estimate is only computed when there's no tracked position (perf, Oct 2026).
+    const pos = trackedPositions.get(player.PlayerID) ?? proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     return { player, distance: realDistanceBetween(target, pos, stadium) };
   });
   const eligible = withDistance.filter((d) => weightFor(d.distance) > 0 && (groundedUntilTick.get(d.player.PlayerID) ?? -Infinity) < tick);
@@ -410,8 +420,8 @@ export function closestDefender(
   const pool = onGroundPlayers(team);
   let best: NearbyPick | null = null;
   for (const player of pool) {
-    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
-    const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+    // Lazy: the stateless estimate is only computed when there's no tracked position (perf, Oct 2026).
+    const rangePos = trackedPositions.get(player.PlayerID) ?? proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     const distance = realDistanceBetween(target, rangePos, stadium);
     if (!best || distance < best.distance) best = { player, distance };
   }
@@ -490,9 +500,9 @@ export function weightedKickTarget(
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
   const realDisposerPos = trackedPositions.get(disposer.PlayerID) ?? disposerPos;
-  const candidates: (NearbyPick & { kickDistance: number; progress: number })[] = pool.map((player) => {
-    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
-    const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+  const candidates: KickPick[] = pool.map((player) => {
+    // Lazy: the stateless estimate is only computed when there's no tracked position (perf, Oct 2026).
+    const rangePos = trackedPositions.get(player.PlayerID) ?? proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     // Round 36 — `rangePos` (real-preferred) rather than the stateless `pos`
     // is now what "how open is this candidate" gets measured from too, same
     // as it already was for `kickDistance`/`progress` — see
@@ -509,6 +519,8 @@ export function weightedKickTarget(
       // abstract-unit proxy.
       kickDistance: realDistanceBetween(realDisposerPos, rangePos, stadium),
       progress: (rangePos.zoneFrac - realDisposerPos.zoneFrac) * (side === "home" ? 1 : -1),
+      aim: rangePos,
+      from: realDisposerPos,
     };
   });
   return weightedChoice(
@@ -585,8 +597,8 @@ export function weightedHandballTarget(
   const withoutDisposer = onGroundPlayers(team).filter((p) => p.PlayerID !== disposer.PlayerID);
   const pool = withoutDisposer.length > 0 ? withoutDisposer : onGroundPlayers(team); // defensive only — a real on-ground side always has teammates besides the disposer
   const candidates: (NearbyPick & { handballDistance: number })[] = pool.map((player) => {
-    const pos = proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
-    const rangePos = trackedPositions.get(player.PlayerID) ?? pos;
+    // Lazy: the stateless estimate is only computed when there's no tracked position (perf, Oct 2026).
+    const rangePos = trackedPositions.get(player.PlayerID) ?? proximityFor(player, side, team.positions?.get(player.PlayerID), zone, possession, undefined, team.positions);
     // Round 36 — same real-preferred `rangePos` now used for "how open is
     // this candidate" too, not just handballDistance. See closestDefender's
     // own doc comment (above, this file).

@@ -806,6 +806,46 @@ export function generateProspectPool(existingPlayers: readonly Player[], year: n
   });
 }
 
+/**
+ * 2027 season start (Oct 2026) — real draftees from the real 2026 drafts, built as Players the same way
+ * `generateProspectPool` builds real prospects (archetype from the record's position, attributes from
+ * archetype means with seeded variation, OVR against the full population, POT with the real write-up
+ * floor, rookie value), so a real draftee looks exactly as he would have if the coach had drafted him
+ * in-game.
+ *
+ * A name with no `REAL_PROSPECTS` record (a mature-age or state-league recruit, say) is still built,
+ * as a generic prospect of a guessed archetype carrying the real name, and listed in `generic` so the
+ * readiness report can show which draftees have no real scouting data behind their ratings.
+ */
+export function buildRealDraftees(names: readonly string[], existingPlayers: readonly Player[], year: number, seed: number): { players: Player[]; generic: string[] } {
+  const rng = mulberry32(seed);
+  const weights = archetypeWeights(existingPlayers);
+  const meansByArchetype = new Map<Archetype, Record<RatedAttribute, number>>();
+  for (const a of ARCHETYPES) meansByArchetype.set(a, archetypeAttributeMeans(existingPlayers, a));
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  const byNorm = new Map(REAL_PROSPECTS.map((r) => [norm(r.name), r]));
+  let nextId = Math.max(8999, ...existingPlayers.map((p) => p.PlayerID)) + 1;
+  const generic: string[] = [];
+  const built: Player[] = names.map((name) => {
+    const record = byNorm.get(norm(name));
+    if (record) {
+      const archetype = normalizePosition(record.positionRaw) ?? archetypeGuessFromUnderageStats(record, weights, rng);
+      return buildRealProspect(nextId++, record, year, archetype, meansByArchetype.get(archetype)!, rng);
+    }
+    generic.push(name);
+    const archetype = weightedPick(weights, rng);
+    const prospect = buildProspect(nextId++, archetype, weightedPick(AGE_WEIGHTS, rng), year, meansByArchetype.get(archetype)!, rng);
+    const [fname, ...rest] = name.split(" ");
+    return { ...prospect, fname, lname: rest.join(" "), realFullName: name };
+  });
+  const merged = recomputeOVR([...existingPlayers, ...built]);
+  const withOvr = built.map((p, i) => ({ ...p, OVR: merged[existingPlayers.length + i].OVR }));
+  return {
+    players: withOvr.map((p) => ({ ...p, POT: Math.max(potentialForProspect(p), realProspectPotentialFloor(p)), totalValue: estimatedValue(p.OVR) })),
+    generic,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Fogged scouting display
 // ---------------------------------------------------------------------------

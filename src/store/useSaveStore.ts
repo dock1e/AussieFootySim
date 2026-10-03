@@ -6,7 +6,7 @@ import type { ScoutFocusArea, MatchDayCoachRole, CoachRole } from "../types/coac
 import { committedStaffSpend, type CoachContract } from "../engine/coachContracts";
 import { FOOTBALL_DEPT_CEILING } from "../engine/contracts";
 import type { SeasonArchiveEntry } from "../engine/seasonSummary";
-import { reSign, delist, signFreeAgent, simulateLeagueContracts, type ReSignTerms } from "../engine/contracts";
+import { reSign, delist, signFreeAgent, simulateLeagueContracts, capRoomForSigning, statedAsk, type ReSignTerms } from "../engine/contracts";
 import { buildTradeContext, evaluateTrade, resolveTradeOutcome, executeTrade, tradeVolumePenalty, applyMoraleImpact, simulateLeagueTrades, generateInboundOffers, type TradeOutcome } from "../engine/trade";
 import { generateProspectPool, draftPlayer, autoResolvePick, primaryTieFor, redirectDraftedPlayerToClub, scoutingTiersForPool, SCOUT_BUDGET_PER_DRAFT, DRAFT_ROUNDS, type DraftPickRecord } from "../engine/draft";
 import { resolveDraftOrder, seedDraftPickInventory, canClubMatchBid, forfeitPicksForBid, ladderPositionOf, type DraftPick } from "../engine/draftPicks";
@@ -16,7 +16,9 @@ import { applySwitch } from "../engine/positionSwitch";
 import { computeLeagueStrategies, buildLeaguePlayersByClub, type ClubStrategy } from "../engine/listNeeds";
 import { playerFullName, type Player, type RatedAttribute } from "../types/player";
 import type { Archetype } from "../types/archetype";
-import { CLUBS } from "../types/club";
+import { CLUBS, clubById, clubByName } from "../types/club";
+import { tenureStartOf } from "../engine/boardReview";
+import { coachJoinsClub, ensureSeniorCoaches, type SeniorCoachesState } from "../engine/seniorCoaches";
 import { CURRENT_SEASON_YEAR } from "../config";
 import { useGameStore } from "./useGameStore";
 import { useSeasonStore } from "./useSeasonStore";
@@ -28,7 +30,7 @@ import { useDraftStore } from "./useDraftStore";
 import { useCombineStore } from "./useCombineStore";
 import { readSaveFromDB, writeSaveToDB, clearSaveInDB } from "./db";
 import { clubHistoryEntryForDraft, clubHistoryEntryForFatherSon, appendClubHistory, appendManyClubHistory, type ClubHistoryEntry } from "../engine/clubHistory";
-import { upgradeFacility as upgradeFacilityPure, launchCampaign as launchCampaignPure } from "../engine/clubFinance";
+import { upgradeFacility as upgradeFacilityPure, launchCampaign as launchCampaignPure, ensureAllFinanceBaselines, canSignAsp, signAsp, aspAgreementFor } from "../engine/clubFinance";
 import { defaultClubFinanceState, type ClubFinanceState, type FacilityId } from "../types/clubFinance";
 import type { MarketingCampaignId } from "../types/marketing";
 
@@ -95,6 +97,8 @@ interface SaveStoreState {
   clubFinance: Record<string, ClubFinanceState>;
   /** Round 123 — [[Football Department Coach Market]]. Same "doesn't belong to any single sub-store, persists across seasons" reasoning as the fields above — see `SaveGameData.coachContracts`'s own doc comment. One negotiated salary per currently-filled `CoachRole`. */
   coachContracts: Partial<Record<CoachRole, CoachContract>>;
+  /** ROADMAP #14 follow-up — AI clubs' senior coaches and the coaching market. See `SaveGameData.seniorCoaches`. */
+  seniorCoaches: SeniorCoachesState | undefined;
 
   /** Loads the current save from IndexedDB if one exists and hydrates every other store from it; otherwise leaves everything at its already-correct fresh-game defaults. Call once, on app boot, before rendering the main UI. */
   initialize: () => Promise<void>;
@@ -215,6 +219,14 @@ interface SaveStoreState {
   upgradeFacility: (facilityId: FacilityId) => void;
   /** Round 122 — [[Club Finance, Facilities, and Marketing]]'s Marketing half. Launches one Marketing campaign for `myClub`, deducting its cost immediately. No-op if `engine/clubFinance.ts`'s own `canLaunchCampaign` would say no (unaffordable, no free concurrent slot, or already running). */
   launchMarketingCampaign: (campaignId: MarketingCampaignId) => void;
+  /** ROADMAP #14 — records that the coach has seen `year`'s Annual Report ceremony, so it shows once per off-season. */
+  markAnnualReportSeen: (year: number) => void;
+  /**
+   * ROADMAP #14 job security — an out-of-work coach (sacked, or contract not renewed) takes the job at
+   * `clubId` on the terms that club's board offered. The save carries on: the coach's record moves with
+   * them, the old club's assistant coaches stay behind, and the new club's board brief applies.
+   */
+  acceptJobOffer: (clubId: number, terms: { expectation: string; patience: number; contractYears: number }) => void;
 
   // --- Football Department Coach Market (round 123) ------------------------
   // See `engine/coachContracts.ts`'s own doc comment for the salary-cap
@@ -368,6 +380,7 @@ function snapshotSave(
   watchlist: number[],
   clubFinance: Record<string, ClubFinanceState>,
   coachContracts: Partial<Record<CoachRole, CoachContract>>,
+  seniorCoaches: SeniorCoachesState | undefined,
 ): SaveGameData {
   return {
     schemaVersion: SAVE_SCHEMA_VERSION,
@@ -379,6 +392,7 @@ function snapshotSave(
     lineups: useSelectionStore.getState().lineups,
     eligibility: useSelectionStore.getState().eligibility,
     covers: useSelectionStore.getState().covers,
+    restPolicy: useSelectionStore.getState().restPolicy,
     lastWeek: useSelectionStore.getState().lastWeek,
     saveId: useCareerStore.getState().saveId ?? undefined,
     coach: useCareerStore.getState().coach ?? undefined,
@@ -399,6 +413,7 @@ function snapshotSave(
     watchlist,
     clubFinance,
     coachContracts,
+    seniorCoaches,
   };
 }
 
@@ -408,6 +423,7 @@ function hydrateStoresFrom(save: SaveGameData): void {
   useSelectionStore.getState().restoreLineups(save.lineups);
   useSelectionStore.getState().restoreEligibility(save.eligibility);
   useSelectionStore.getState().restoreCovers(save.covers ?? {});
+  useSelectionStore.getState().restoreRestPolicy(save.restPolicy ?? {});
   useSelectionStore.getState().restoreLastWeek(save.lastWeek ?? {});
   useTeamPlanStore.getState().restorePlans(save.teamPlans);
   useCareerStore.getState().restore(save);
@@ -420,6 +436,26 @@ function hydrateStoresFrom(save: SaveGameData): void {
   } else {
     useSeasonStore.getState().clearSeason();
   }
+}
+
+/**
+ * ROADMAP #14 — the checks and bookkeeping shared by the coach's two signing actions: the cap-counted
+ * salary must fit under `SALARY_CAP`, and any ASP top-up must pass `canSignAsp` (limits + the first
+ * year paid from the budget now). Returns the updated `clubFinance` to commit alongside the signing, or
+ * null if the signing isn't allowed.
+ */
+function withAsp(clubFinance: Record<string, ClubFinanceState>, player: Player, terms: ReSignTerms, year: number): Record<string, ClubFinanceState> | null {
+  const myClub = useGameStore.getState().myClub;
+  if (terms.salaryPerYear > capRoomForSigning(ALL_PLAYERS, myClub, year, player.PlayerID)) return null;
+  const state = clubFinance[myClub] ?? defaultClubFinanceState();
+  const asp = terms.aspPerYear ?? 0;
+  if (asp <= 0 && !aspAgreementFor(state, player.PlayerID)) return clubFinance;
+  if (!canSignAsp(state, player.PlayerID, statedAsk(player), asp, year).ok) return null;
+  return { ...clubFinance, [myClub]: signAsp(state, player.PlayerID, asp, year, year + terms.years - 1) };
+}
+
+function aspNote(terms: ReSignTerms): string {
+  return terms.aspPerYear ? `, plus $${Math.round(terms.aspPerYear / 1000)}k a year in off-cap Additional Service Payments` : "";
 }
 
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -447,8 +483,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   developmentCoach: null,
   clubHistory: {},
   watchlist: [],
-  clubFinance: Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])),
+  clubFinance: ensureAllFinanceBaselines(Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])), ALL_PLAYERS, CURRENT_SEASON_YEAR),
   coachContracts: {},
+  seniorCoaches: undefined,
 
   initialize: async () => {
     let loaded: SaveGameData | null = null;
@@ -470,9 +507,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       // enough (nothing has changed since the load, so what's on disk still
       // matches this state) and avoids needing to persist a real timestamp
       // inside SaveGameData just for a UI label.
-      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches, developmentCoach: loaded.developmentCoach, clubHistory: loaded.clubHistory, watchlist: loaded.watchlist, clubFinance: loaded.clubFinance, coachContracts: loaded.coachContracts });
+      set({ status: "ready", hasSave: true, lastSavedAt: Date.now(), year: loaded.year, poolVersion: get().poolVersion + 1, seasonArchives: loaded.seasonArchives, draftPickInventory: loaded.draftPickInventory, talentScout: loaded.talentScout, lineCoaches: loaded.lineCoaches, developmentCoach: loaded.developmentCoach, clubHistory: loaded.clubHistory, watchlist: loaded.watchlist, clubFinance: loaded.clubFinance, coachContracts: loaded.coachContracts, seniorCoaches: loaded.seniorCoaches });
     } else {
-      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {}, developmentCoach: null, clubHistory: {}, watchlist: [], clubFinance: Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])), coachContracts: {} });
+      set({ status: "ready", hasSave: false, year: CURRENT_SEASON_YEAR, seasonArchives: [], draftPickInventory: seedDraftPickInventory(), talentScout: null, lineCoaches: {}, developmentCoach: null, clubHistory: {}, watchlist: [], clubFinance: ensureAllFinanceBaselines(Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])), ALL_PLAYERS, CURRENT_SEASON_YEAR), coachContracts: {}, seniorCoaches: undefined });
     }
 
     if (!subscribed) {
@@ -490,7 +527,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   saveNow: async () => {
-    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist, get().clubFinance, get().coachContracts);
+    const save = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist, get().clubFinance, get().coachContracts, get().seniorCoaches);
 await writeSaveToDB(serializeSave(save));
     set({ hasSave: true, lastSavedAt: Date.now() });
   },
@@ -503,30 +540,32 @@ await writeSaveToDB(serializeSave(save));
     hydrateStoresFrom(save);
     // New Game Onboarding: the season (and so the Round 1 fixture) exists from Day one.
     if (opts?.startSeason) useSeasonStore.getState().startNewSeason();
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory, watchlist: save.watchlist, clubFinance: save.clubFinance, coachContracts: save.coachContracts });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory, watchlist: save.watchlist, clubFinance: save.clubFinance, coachContracts: save.coachContracts, seniorCoaches: save.seniorCoaches });
     await clearSaveInDB();
     await get().saveNow();
   },
 
   runOffSeason: async () => {
-    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist, get().clubFinance, get().coachContracts);
+    const current = snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist, get().clubFinance, get().coachContracts, get().seniorCoaches);
     const next = runOffSeasonOnSave(current);
     loadPool(next.players);
+    // ROADMAP #14 — the board's review may have warned, renewed, or sacked the coach.
+    useCareerStore.getState().setCoach(next.coach ?? null);
     useSeasonStore.getState().clearSeason();
     useCombineStore.getState().clearWindow();
     useContractStore.getState().clearWindow();
     useTradeStore.getState().clearWindow();
     useDraftStore.getState().clearWindow();
-    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches, developmentCoach: next.developmentCoach, clubHistory: next.clubHistory, watchlist: next.watchlist, clubFinance: next.clubFinance, coachContracts: next.coachContracts });
+    set({ year: next.year, poolVersion: get().poolVersion + 1, seasonArchives: next.seasonArchives, draftPickInventory: next.draftPickInventory, talentScout: next.talentScout, lineCoaches: next.lineCoaches, developmentCoach: next.developmentCoach, clubHistory: next.clubHistory, watchlist: next.watchlist, clubFinance: next.clubFinance, coachContracts: next.coachContracts, seniorCoaches: next.seniorCoaches });
     await get().saveNow();
   },
 
-  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist, get().clubFinance, get().coachContracts)), null, 2),
+  exportJSON: () => JSON.stringify(serializeSave(snapshotSave(get().year, get().seasonArchives, get().draftPickInventory, get().talentScout, get().lineCoaches, get().developmentCoach, get().clubHistory, get().watchlist, get().clubFinance, get().coachContracts, get().seniorCoaches)), null, 2),
 
   importJSON: async (text) => {
     const save = deserializeSave(JSON.parse(text));
     hydrateStoresFrom(save);
-    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory, watchlist: save.watchlist, clubFinance: save.clubFinance, coachContracts: save.coachContracts });
+    set({ year: save.year, poolVersion: get().poolVersion + 1, seasonArchives: save.seasonArchives, draftPickInventory: save.draftPickInventory, talentScout: save.talentScout, lineCoaches: save.lineCoaches, developmentCoach: save.developmentCoach, clubHistory: save.clubHistory, watchlist: save.watchlist, clubFinance: save.clubFinance, coachContracts: save.coachContracts, seniorCoaches: save.seniorCoaches });
     await get().saveNow();
   },
 
@@ -534,6 +573,8 @@ await writeSaveToDB(serializeSave(save));
     const year = get().year;
     const before = ALL_PLAYERS.find((p) => p.PlayerID === playerId);
     if (!before) return;
+    const clubFinance = withAsp(get().clubFinance, before, terms, year);
+    if (!clubFinance) return; // over the cap, or an ASP the club can't fund — Contracts.tsx blocks both before this
     const after = reSign(before, terms, year);
     loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? after : p)));
     useContractStore.getState().logEntry({
@@ -543,9 +584,9 @@ await writeSaveToDB(serializeSave(save));
       playerId,
       playerName: playerFullName(after),
       clubName: after.Team,
-      detail: `${playerFullName(after)} re-signs with ${after.Team} for ${terms.years} year${terms.years === 1 ? "" : "s"}.`,
+      detail: `${playerFullName(after)} re-signs with ${after.Team} for ${terms.years} year${terms.years === 1 ? "" : "s"}${aspNote(terms)}.`,
     });
-    set({ poolVersion: get().poolVersion + 1 });
+    set({ poolVersion: get().poolVersion + 1, clubFinance });
     void get().saveNow();
   },
 
@@ -575,6 +616,8 @@ await writeSaveToDB(serializeSave(save));
     const before = ALL_PLAYERS.find((p) => p.PlayerID === playerId);
     if (!before) return;
     const fromClub = before.Team;
+    const clubFinance = withAsp(get().clubFinance, before, terms, year);
+    if (!clubFinance) return; // over the cap, or an ASP the club can't fund — Contracts.tsx blocks both before this
     const signed = signFreeAgent(before, myClub, terms, year);
     loadPool(ALL_PLAYERS.map((p) => (p.PlayerID === playerId ? signed.player : p)));
     useSelectionStore.getState().removePlayer(fromClub, playerId);
@@ -586,9 +629,9 @@ await writeSaveToDB(serializeSave(save));
       playerName: playerFullName(signed.player),
       clubName: myClub,
       fromClubName: fromClub,
-      detail: `${myClub} signs ${playerFullName(signed.player)} from ${fromClub} as a free agent.`,
+      detail: `${myClub} signs ${playerFullName(signed.player)} from ${fromClub} as a free agent${aspNote(terms)}.`,
     });
-    set({ poolVersion: get().poolVersion + 1, clubHistory: appendClubHistory(get().clubHistory, playerId, signed.historyEntry.entry) });
+    set({ poolVersion: get().poolVersion + 1, clubFinance, clubHistory: appendClubHistory(get().clubHistory, playerId, signed.historyEntry.entry) });
     void get().saveNow();
   },
 
@@ -600,10 +643,11 @@ await writeSaveToDB(serializeSave(save));
     // rule every other stochastic engine step follows (Engine.md "Tech
     // stack"), not Date.now()/Math.random().
     const seed = year * 1000 + day;
-    const { players, activity, historyEntries } = simulateLeagueContracts(ALL_PLAYERS, myClub, year, day, seed, get().clubFinance);
+    const { players, activity, historyEntries, clubFinance } = simulateLeagueContracts(ALL_PLAYERS, myClub, year, day, seed, get().clubFinance);
     loadPool(players);
     useContractStore.getState().logDay(activity);
-    set({ poolVersion: get().poolVersion + 1, clubHistory: appendManyClubHistory(get().clubHistory, historyEntries) });
+    // ROADMAP #14 follow-up: rival clubs' ASP agreements and first-year payments from this sweep.
+    set({ poolVersion: get().poolVersion + 1, clubFinance, clubHistory: appendManyClubHistory(get().clubHistory, historyEntries) });
     void get().saveNow();
   },
 
@@ -928,6 +972,56 @@ await writeSaveToDB(serializeSave(save));
     const next = launchCampaignPure(current, campaignId, get().year);
     if (next === current) return; // no-op — unaffordable, no free slot, or already running
     set({ clubFinance: { ...clubFinance, [myClub]: next } });
+    void get().saveNow();
+  },
+
+  acceptJobOffer: (clubId, terms) => {
+    const career = useCareerStore.getState();
+    const coach = career.coach;
+    const next = clubById(clubId);
+    const oldName = useGameStore.getState().myClub;
+    const old = clubByName(oldName);
+    if (!coach || coach.unemployedSince === undefined || !next || next.name === oldName) return;
+    const year = get().year;
+    const oldHistory = get().clubFinance[oldName]?.history ?? [];
+    const reason = oldHistory[oldHistory.length - 1]?.board?.review === "notRenewed" ? "notRenewed" : "sacked";
+    career.setCoach({
+      ...coach,
+      clubId,
+      contractYears: terms.contractYears,
+      tenureStartYear: year,
+      contractStartYear: year,
+      warnedYear: undefined,
+      unemployedSince: undefined,
+      pastClubs: [...(coach.pastClubs ?? []), ...(old ? [{ clubId: old.ClubID, fromYear: tenureStartOf(coach, year), toYear: year - 1, reason: reason as "sacked" | "notRenewed" }] : [])],
+    });
+    career.setBoard({ expectation: terms.expectation, patience: terms.patience });
+    useGameStore.getState().setMyClub(next.name);
+    const clubFinance = get().clubFinance;
+    const target = clubFinance[next.name] ?? defaultClubFinanceState();
+    const lastYear = target.history?.[target.history.length - 1]?.year;
+    set({
+      poolVersion: get().poolVersion + 1,
+      // Assistant coaches were the old club's appointments.
+      talentScout: null,
+      lineCoaches: {},
+      developmentCoach: null,
+      coachContracts: {},
+      // ROADMAP #14 follow-up: the AI coach at the new club makes way, the old club falls vacant, and every
+      // vacancy left open for the job market is filled now. (Assistants were cleared above, so none are held back.)
+      seniorCoaches: coachJoinsClub(ensureSeniorCoaches(get().seniorCoaches, oldName, year), oldName, next.name, year - 1, new Set()),
+      // The new club's last season wasn't the coach's — don't show its Annual Report as theirs.
+      clubFinance: { ...clubFinance, [next.name]: { ...target, ...(lastYear !== undefined ? { annualReportSeenYear: lastYear } : {}) } },
+    });
+    void get().saveNow();
+  },
+
+  markAnnualReportSeen: (year) => {
+    const myClub = useGameStore.getState().myClub;
+    const clubFinance = get().clubFinance;
+    const current = clubFinance[myClub] ?? defaultClubFinanceState();
+    if ((current.annualReportSeenYear ?? 0) >= year) return;
+    set({ clubFinance: { ...clubFinance, [myClub]: { ...current, annualReportSeenYear: year } } });
     void get().saveNow();
   },
 

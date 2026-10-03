@@ -21,7 +21,8 @@
  * own placeholder figures.
  *
  * **Disclosed scope split — which facilities have a REAL wired effect this round, and which don't
- * yet.** Six facilities move a real number somewhere in the engine as of round 121: `gym`/`skills`
+ * yet.** Oct 2026 ([[Injuries]]): `sportsScience`, `recovery` and `medical` are now wired too —
+ * see `engine/injury.ts`. Six facilities move a real number somewhere in the engine as of round 121: `gym`/`skills`
  * (whole-list development speed, `engine/development.ts`), `vfl` (development speed for players
  * OUTSIDE the club's own best 22 specifically — the direct answer to Tyler's "maximise the
  * development of my under-23 players" fork, since `engine/progression.ts` had no such distinction
@@ -86,12 +87,12 @@ export const FACILITY_DEFS: readonly FacilityDef[] = [
   // --- Training: whole-list development, no selection-status distinction ---
   { id: "gym", category: "Training", name: "Gym & Strength Centre", description: "Speed, endurance and strength develop faster across the whole list.", effectLabel: "whole-list development speed", maxLevel: 4, baseCost: 90_000, costGrowth: 1.65, wired: true },
   { id: "skills", category: "Training", name: "Indoor Skills Centre", description: "Kicking, handball and marking develop faster across the whole list.", effectLabel: "whole-list development speed", maxLevel: 4, baseCost: 85_000, costGrowth: 1.65, wired: true },
-  { id: "sportsScience", category: "Training", name: "Sports Science & GPS", description: "Load monitoring, intended to cut soft-tissue injury risk.", effectLabel: "injury risk (not yet wired — no injury mechanic exists to attach it to)", maxLevel: 3, baseCost: 70_000, costGrowth: 1.6, wired: false },
+  { id: "sportsScience", category: "Training", name: "Sports Science & GPS", description: "Load monitoring that cuts soft-tissue injury risk.", effectLabel: "−10% soft-tissue injury risk per level", maxLevel: 3, baseCost: 70_000, costGrowth: 1.6, wired: true },
   { id: "analytics", category: "Training", name: "Analytics & Vision Room", description: "Opposition tendencies and set-up insight before each game.", effectLabel: "match-day tactics effect (not yet wired)", maxLevel: 3, baseCost: 60_000, costGrowth: 1.6, wired: false },
 
-  // --- Recovery: no real hook yet (no injury-occurrence mechanic in this codebase) ---
-  { id: "recovery", category: "Recovery", name: "Recovery Centre & Pools", description: "Intended to speed up return-from-injury time.", effectLabel: "injury return time (not yet wired)", maxLevel: 3, baseCost: 65_000, costGrowth: 1.6, wired: false },
-  { id: "medical", category: "Recovery", name: "Medical & Physio Suite", description: "Intended to speed up diagnosis and rehab for serious injuries.", effectLabel: "rehab speed (not yet wired)", maxLevel: 3, baseCost: 75_000, costGrowth: 1.6, wired: false },
+  // --- Recovery: shortens time out injured (Oct 2026, [[Injuries]]) ---
+  { id: "recovery", category: "Recovery", name: "Recovery Centre & Pools", description: "Players come back from injury sooner.", effectLabel: "−7% time out injured per level (concussion still costs a week)", maxLevel: 3, baseCost: 65_000, costGrowth: 1.6, wired: true },
+  { id: "medical", category: "Recovery", name: "Medical & Physio Suite", description: "Faster diagnosis and rehab for every injury.", effectLabel: "−7% time out injured per level (concussion still costs a week)", maxLevel: 3, baseCost: 75_000, costGrowth: 1.6, wired: true },
   { id: "nutrition", category: "Recovery", name: "Nutrition & Sleep Program", description: "Intended to soften late-season fatigue/form drop-off.", effectLabel: "late-season fatigue (not yet wired)", maxLevel: 3, baseCost: 45_000, costGrowth: 1.55, wired: false },
 
   // --- Development: the direct answer to the U23 fork ---
@@ -100,7 +101,7 @@ export const FACILITY_DEFS: readonly FacilityDef[] = [
   { id: "wellbeing", category: "Development", name: "Player Wellbeing & Education", description: "Settled players are a little easier to re-sign.", effectLabel: "re-signing chance", maxLevel: 3, baseCost: 55_000, costGrowth: 1.55, wired: true },
 
   // --- Commercial: funds Club Finance's own revenue side ---
-  { id: "fan", category: "Commercial", name: "Members & Match-Day Experience", description: "More members and bigger home crowds — the club's own base revenue line.", effectLabel: "membership & gate revenue", maxLevel: 4, baseCost: 110_000, costGrowth: 1.65, wired: true },
+  { id: "fan", category: "Commercial", name: "Members & Match-Day Experience", description: "More members every season and bigger home-game takings.", effectLabel: "membership growth & match-day revenue", maxLevel: 4, baseCost: 110_000, costGrowth: 1.65, wired: true },
   { id: "marketing", category: "Commercial", name: "Marketing Department", description: "Bigger campaign returns, plus an extra concurrent campaign slot every 2 levels.", effectLabel: "marketing campaign returns & concurrent slots", maxLevel: 4, baseCost: 65_000, costGrowth: 1.6, wired: true },
   { id: "admin", category: "Commercial", name: "Administration & Data Systems", description: "Lower day-to-day football department running costs.", effectLabel: "running costs", maxLevel: 3, baseCost: 50_000, costGrowth: 1.55, wired: true },
 ];
@@ -129,6 +130,84 @@ export interface ClubFinanceState {
    * the same as an empty array (see `engine/clubFinance.ts`'s `activeCampaignsOf` helper), never throws.
    */
   activeCampaigns?: ActiveMarketingCampaign[];
+  /**
+   * ROADMAP #14 real-scale rescale — the club's membership for the season currently being played.
+   * Seeded from the AFL's official 2025 tally (`data/realClubFinancials.ts`), then grown or shrunk once
+   * per off-season by `engine/clubFinance.ts`'s `nextMembers`. Optional (like everything added after
+   * round 121) so older saves still load; `ensureFinanceBaseline` fills it in.
+   */
+  members?: number;
+  /** Net assets (members' funds) in real dollars — the club's own balance sheet, seeded from its 2025 report and moved each off-season by the operating result less the Football Dept allocation. */
+  netAssets?: number;
+  /**
+   * The club's fixed football-and-operating cost base, calibrated ONCE so that a first game season with
+   * the real 2025 membership, the real AFL distribution and today's wage bill lands on the club's real
+   * 2025 operating result (see `ensureFinanceBaseline`). Not re-derived later — a club that cuts its
+   * wage bill, or grows its membership, sees that against a fixed baseline, which is the whole point.
+   */
+  fixedCosts?: number;
+  /** One row per completed season — real 2024/2025 rows first, then every simulated season. The pride layer (Club History tab, milestones, Annual Report ceremony) reads this. */
+  history?: ClubFinanceSeasonRecord[];
+  /** `myClub` only: the last season whose Annual Report ceremony the coach has already seen (so it shows once per off-season). */
+  annualReportSeenYear?: number;
+  /** Off-cap Additional Service Payments this club has committed to (see `AspAgreement`). Optional, like every post-round-121 field. */
+  aspAgreements?: AspAgreement[];
+}
+
+/**
+ * ROADMAP #14 — an Additional Service Payments agreement: real AFL clubs can pay a contracted player for
+ * genuine off-field commercial work (content, member events, sponsor activations) outside the
+ * Total Player Payments cap. Here it's a yearly top-up negotiated alongside a contract. It counts toward
+ * what the player will accept (`evaluateOffer`), never toward `committedWages`/`SALARY_CAP`, and is paid
+ * from the Football Dept budget: the first season at signing, each later season at the off-season
+ * advance (`engine/clubFinance.ts`'s `payAspCommitments`).
+ */
+export interface AspAgreement {
+  playerId: number;
+  amountPerYear: number;
+  /** First season covered (paid at signing). */
+  startYear: number;
+  /** Last season covered, inclusive. */
+  endYear: number;
+}
+
+/** How the board read a season — `myClub` gets one of these on every simulated history row. */
+export interface BoardVerdict {
+  /** Did the season meet the on-field brief the coach signed up for (`BoardSave.expectation`)? */
+  onField: "exceeded" | "met" | "missed";
+  /** How the operating result compared with the board's financial target. */
+  finance: "record" | "ahead" | "onTarget" | "below" | "heavyLoss";
+  /** 0-100, carried season to season. */
+  confidence: number;
+  /** The change in `confidence` this season. */
+  delta: number;
+  /** What the board decided about the coach's job at this review (`engine/boardReview.ts`). Absent on rows from before job security existed. */
+  review?: "secure" | "warning" | "renewed" | "sacked" | "notRenewed";
+  /** Set with `review: "renewed"`. */
+  renewedYears?: number;
+}
+
+export interface ClubFinanceSeasonRecord {
+  year: number;
+  /** `real` = straight from the club's annual report (or the disclosed West Coast/GWS estimate); `sim` = a season played in this save. */
+  source: "real" | "sim";
+  revenue: number;
+  expenses: number;
+  /** Operating result (revenue − expenses). */
+  result: number;
+  /** Absent only on a real 2024 row whose report didn't state that year's membership. */
+  members?: number;
+  netAssets?: number;
+  /** Football Dept discretionary allocation the club made from this season (sim rows only). */
+  allocation?: number;
+  /** ASP commitments paid at this off-season for the coming season (sim rows only; absent when none). */
+  aspPaid?: number;
+  /** Sim rows only — 1-18. */
+  ladderRank?: number;
+  madeFinals?: boolean;
+  premiers?: boolean;
+  /** Sim rows, `myClub` only. */
+  board?: BoardVerdict;
 }
 
 /**

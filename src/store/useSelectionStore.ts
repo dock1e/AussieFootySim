@@ -3,6 +3,7 @@ import type { Player } from "../types/player";
 import { autoFillLineup, emptyLineup, type Lineup } from "../engine/selection";
 import { POSITIONS, type Position } from "../types/archetype";
 import type { Cover } from "../engine/team";
+import type { RestPolicy } from "../engine/rotation";
 import type { LastWeekPlan } from "../engine/saveGame";
 
 /**
@@ -43,6 +44,8 @@ interface SelectionState {
    * whole derived set plus the change.
    */
   covers: Record<string, Record<number, Cover | null>>;
+  /** ROADMAP #16 — per club, per player rest policy. Absent = "normal". */
+  restPolicy: Record<string, Record<number, RestPolicy>>;
   /** Round 130 — the line-up and game style that last took the field, per club. */
   lastWeek: Record<string, LastWeekPlan>;
 
@@ -79,6 +82,9 @@ interface SelectionState {
   setLastWeek: (clubName: string, plan: LastWeekPlan) => void;
   restoreCovers: (covers: Record<string, Record<number, Cover | null>>) => void;
   restoreLastWeek: (lastWeek: Record<string, LastWeekPlan>) => void;
+  /** Sets one player's rest policy ("normal" clears it). */
+  setRestPolicy: (clubName: string, playerId: number, policy: RestPolicy) => void;
+  restoreRestPolicy: (restPolicy: Record<string, Record<number, RestPolicy>>) => void;
 }
 
 /**
@@ -90,6 +96,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
   lineups: {},
   eligibility: {},
   covers: {},
+  restPolicy: {},
   lastWeek: {},
 
   lineupFor: (clubName) => {
@@ -164,4 +171,10 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
   setLastWeek: (clubName, plan) => set((state) => ({ lastWeek: { ...state.lastWeek, [clubName]: plan } })),
   restoreCovers: (covers) => set({ covers }),
   restoreLastWeek: (lastWeek) => set({ lastWeek }),
+  setRestPolicy: (clubName, playerId, policy) =>
+    set((state) => {
+      const { [playerId]: _old, ...rest } = state.restPolicy[clubName] ?? {};
+      return { restPolicy: { ...state.restPolicy, [clubName]: policy === "normal" ? rest : { ...rest, [playerId]: policy } } };
+    }),
+  restoreRestPolicy: (restPolicy) => set({ restPolicy }),
 }));

@@ -1,7 +1,7 @@
 import type { Player } from "../types/player.ts";
 import type { Archetype, Position } from "../types/archetype.ts";
 import { ARCHETYPE_LINE, type Line } from "../data/lines.ts";
-import { ZONE_FOR_POSITION, ZONE_FOR_LINE, ownZone, type Side, type Zone } from "./zones.ts";
+import { ZONE_FOR_POSITION, ZONE_FOR_LINE, type Side, type Zone } from "./zones.ts";
 import { DEFAULT_GAME_STYLE, type GameStyle } from "./tactics.ts";
 import { yBound, goalPosts } from "./groundGeometry.ts";
 import type { AFLStadium } from "../data/stadiums.ts";
@@ -401,14 +401,14 @@ export function proximityFor(
   player: Player,
   side: Side,
   position: Position | null | undefined,
-  ballZone: Zone,
+  ballZone: number, // Oct 2026: the ball's continuous position (0-4), not just a whole zone; a whole Zone still works
   ballPossession: Side,
   style: GameStyle = DEFAULT_GAME_STYLE,
   teamPositions?: Map<number, Position>,
 ): AbstractPosition {
   const anchor = homeAnchor(player, position, style, teamPositions);
   const mobility = mobilityFor(player, position);
-  const ownBallZone = ownZone(side, ballZone);
+  const ownBallZone = mirrorZoneFrac(side, ballZone);
   const centred = (ownBallZone - 2) / 2; // -1 (deep in this side's own defence) .. +1 (deep in their own attack)
   const press = ballPossession === side ? centred : centred * 0.5;
   const shiftedOwnZone = Math.min(4, Math.max(0, anchor.zoneFrac + press * mobility));
@@ -427,7 +427,7 @@ export function proximityFor(
  * already raw/home-relative, so nothing here depends on which side the
  * carrier plays for.
  */
-export function carrierPosition(carrier: Player, position: Position | null | undefined, ballZone: Zone, teamPositions?: Map<number, Position>): AbstractPosition {
+export function carrierPosition(carrier: Player, position: Position | null | undefined, ballZone: number, teamPositions?: Map<number, Position>): AbstractPosition {
   return { zoneFrac: ballZone, lane: homeAnchor(carrier, position, DEFAULT_GAME_STYLE, teamPositions).lane };
 }
 
@@ -618,8 +618,17 @@ export function spaceWeight(distance: number): number {
  */
 export const BACKWARD_KICK_FACTOR = 0.12;
 
+/**
+ * Oct 2026 — ROADMAP #18. Once a kick's zone came from where it was literally aimed (rather than
+ * always one step forward), it showed that this only ever *penalised* going backward: among forward
+ * options an 8m sideways target weighed the same as a 50m lead, and the median kick gained ~8m.
+ * Real kicking looks forward first, so forward progress now earns a soft bonus too, scaled by how
+ * many zone-units (~40m each) it gains, capped at a zone and a half.
+ */
+export const FORWARD_KICK_PREFERENCE = 5;
+
 export function directionWeight(progress: number): number {
-  return progress >= 0 ? 1 : BACKWARD_KICK_FACTOR;
+  return progress >= 0 ? 1 + FORWARD_KICK_PREFERENCE * Math.min(progress, 1.5) : BACKWARD_KICK_FACTOR;
 }
 
 /**

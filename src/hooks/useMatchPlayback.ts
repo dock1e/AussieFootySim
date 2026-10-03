@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MatchResult, MatchEvent, BoxScoreLine } from "../engine/match";
-import { kickFlightDurationMs, shotFlightDurationMs } from "../engine/ground";
+import { eventHoldMs } from "../engine/pacing";
 
 /**
  * Turns a fully- or partially-simulated MatchResult into a controllable
@@ -31,7 +31,9 @@ import { kickFlightDurationMs, shotFlightDurationMs } from "../engine/ground";
  * instant index jump, exactly like `skipToFullTime` already was.
  */
 export type PlaybackSpeed = 0.5 | 1 | 2 | 4 | 8 | 16;
-const BASE_TICK_MS = 450; // ms between events at 1x — tune freely, purely a UX feel constant
+// ROADMAP #11 (Oct 2026): how long each event stays up is now `engine/pacing.ts`'s `eventHoldMs` —
+// variable by event type (quick handballs, pauses at marks, free kicks, stoppages and goals). The
+// round-30 history below still describes the flight-duration part of that hold.
 // Aug 2026 round 30 (Tyler, live testing: "players moving before the ball has
 // actually reached their position... add additional tick rates for
 // movement... so there is still that feeling of suspense") — a flat
@@ -164,10 +166,11 @@ export function useMatchPlayback(result: MatchResult | null, homeIds: Set<number
     // tick previously got no extra hold at all, so the ball's new flight-to-
     // goal animation would have been cut off mid-flight by the very next
     // tick advancing on schedule. Purely additive, same `Math.max` shape.
-    const holdMs = Math.max(BASE_TICK_MS, kickFlightDurationMs(prevEv, currentEv), shotFlightDurationMs(currentEv));
+    // ROADMAP #11 — plus a dead-ball pause where play genuinely stops; see engine/pacing.ts.
+    const nextEv = result.events[currentIndex + 1] ?? null;
     timerRef.current = setTimeout(() => {
       setCurrentIndex((i) => Math.min(i + 1, result.events.length - 1));
-    }, holdMs / speed);
+    }, eventHoldMs(prevEv, currentEv, nextEv, speed));
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };

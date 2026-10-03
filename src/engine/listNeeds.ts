@@ -192,7 +192,7 @@ function verdictFor(listed: number, ideal: number, qualityCount: number, starter
     clauses.push(`${n} bod${n === 1 ? "y" : "ies"} short of shape`);
   }
   if (eliteCount === 0) {
-    clauses.push("no elite (84+)");
+    clauses.push("no elite (104+)"); // lines.ts' elite threshold since Round C147's +20 recentre
   }
   return clauses.length ? clauses.join(" · ") : "Healthy";
 }

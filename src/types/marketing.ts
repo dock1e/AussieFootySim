@@ -38,6 +38,8 @@ export interface MarketingCampaignDef {
   risk: CampaignRisk;
   /** One real disclosed side-effect some campaigns have beyond their revenue return, per the design note's own examples — purely descriptive; not read by any engine code this round (see the design note's round 122 addendum for why a real mechanical hook was deliberately left for a later round rather than invented here). */
   sideEffectNote?: string;
+  /** ROADMAP #14 — the campaign's real effect on next season's membership (a fraction, e.g. 0.015 = +1.5%), applied when it resolves (`engine/clubFinance.ts`'s `nextMembers`). Absent = no membership effect. */
+  memberEffect?: number;
 }
 
 export const MARKETING_CAMPAIGNS: readonly MarketingCampaignDef[] = [
@@ -49,6 +51,7 @@ export const MARKETING_CAMPAIGNS: readonly MarketingCampaignDef[] = [
     durationWeeks: 6,
     expectedReturn: 55_000,
     risk: "Low",
+    memberEffect: 0.015,
   },
   {
     id: "social",
@@ -76,6 +79,7 @@ export const MARKETING_CAMPAIGNS: readonly MarketingCampaignDef[] = [
     durationWeeks: 5,
     expectedReturn: 38_000,
     risk: "Low",
+    memberEffect: 0.004,
     sideEffectNote: "Plausibly strengthens a home-region academy read down the line — not wired to anything yet (the Academy facility itself is still unwired too, see Facilities).",
   },
   {
@@ -95,6 +99,7 @@ export const MARKETING_CAMPAIGNS: readonly MarketingCampaignDef[] = [
     durationWeeks: 2,
     expectedReturn: 24_000,
     risk: "Low",
+    memberEffect: 0.005,
   },
   {
     id: "interstate",
@@ -104,7 +109,8 @@ export const MARKETING_CAMPAIGNS: readonly MarketingCampaignDef[] = [
     durationWeeks: 1,
     expectedReturn: 160_000,
     risk: "High",
-    sideEffectNote: "A real, disclosed one-off tension per the design note: big guaranteed upside on paper, but the highest-variance campaign here — a real live risk to home-crowd goodwill some seasons, not just a bigger number every time.",
+    memberEffect: -0.01,
+    sideEffectNote: "Costs home-crowd goodwill: about 1% of next season's membership, on top of the highest-variance return here.",
   },
 ];
 

@@ -1,5 +1,7 @@
 import { CLUBS, clubByName } from "../types/club.ts";
 import type { LadderRow } from "./ladder.ts";
+import { CURRENT_SEASON_YEAR } from "../config.ts";
+import { PICK_TRADES_2026 } from "../data/realOffSeason2026.ts";
 
 /**
  * Draft-pick-as-asset inventory — Sep 2026, Tyler's own explicit instruction: "Yes, we need to
@@ -339,8 +341,22 @@ export const REAL_FUTURE_PICKS_2027: DraftPick[] = futureRowsToPicks(RAW_2027, 2
 export const REAL_FUTURE_PICKS_2028: DraftPick[] = futureRowsToPicks(RAW_2028, 2028);
 
 /** Fresh inventory for a new save (or to reseed an old save with no `draftPickInventory` field at all — see `saveGame.ts`). Concatenates every real year this file has; any year/round/slot not covered here simply isn't tracked, and `resolveDraftOrder` falls back to the natural reverse-ladder owner for anything untracked (a pre-round-74 save degrades to exactly today's behaviour). */
-export function seedDraftPickInventory(): DraftPick[] {
-  return [...REAL_PICKS_2026, ...REAL_FUTURE_PICKS_2027, ...REAL_FUTURE_PICKS_2028];
+export function seedDraftPickInventory(startYear: number = CURRENT_SEASON_YEAR): DraftPick[] {
+  if (startYear <= 2026) return [...REAL_PICKS_2026, ...REAL_FUTURE_PICKS_2027, ...REAL_FUTURE_PICKS_2028];
+  // 2027 start (Oct 2026): the 2026 draft is history. Every club still holds its own 2029 hand (no real
+  // 2029 trades yet), and the real 2026 trade period's pick swaps (`PICK_TRADES_2026`) move 2027/2028
+  // picks to their new owners. A pick id that doesn't exist is ignored here and reported by the
+  // readiness check rather than thrown.
+  const own2029 = futureRowsToPicks(
+    CLUBS.flatMap((c) => [1, 2, 3, 4].map((round) => [c.name, round, c.name] as FutureRow)),
+    2029,
+  );
+  let picks = [...REAL_FUTURE_PICKS_2027, ...REAL_FUTURE_PICKS_2028, ...own2029];
+  for (const t of PICK_TRADES_2026) {
+    const to = clubByName(t.toClub);
+    if (to) picks = transferPick(picks, t.pickId, to.ClubID);
+  }
+  return picks;
 }
 
 /** Real anchor points: AFL's 2025+ Draft Value Index confirms pick 1 = 3000, pick 54 = 14, picks 55+ = 0 (afl.com.au, draftguru.com.au). Smooth geometric decay between the two published values — see this file's top doc comment for why this is a disclosed derived curve, not a reproduction of AFL's unpublished full table. */

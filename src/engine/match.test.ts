@@ -200,7 +200,10 @@ describe("simulateMatch with tactics/game-style plans", () => {
   });
 
   it("a plan's game style shifts average combined scoring in the documented direction", () => {
-    const N = 20;
+    // ROADMAP #16: 20 -> 40. The post-goal 6-6-6 realign shaved a few points off scoring, and 20
+    // matches with this synthetic pool's low totals (~70) was then too few to separate the styles
+    // reliably. Real clubs keep a wide gap (Attack the Middle +20-40 over Balanced over 40 matches).
+    const N = 40;
     function avgCombined(homePlan?: TeamPlan): number {
       let total = 0;
       for (let i = 0; i < N; i++) {
@@ -304,6 +307,12 @@ describe("Phase 8: position-weighted involvement (engine/involvement.ts wired in
     expect(findByPosition(home, "FF")).toBeDefined();
   });
 
+  // Oct 2026 performance pass: the home and away checks below used to simulate two separate 30-match
+  // samples (seeds 20000+ and 21000+). Each only reads its own side's players, so both now read one
+  // shared 30-match sample: the same sample size per assertion, half the simulation.
+  let sample: ReturnType<typeof simulateMatch>[] | null = null;
+  const involvementSample = () => (sample ??= Array.from({ length: 30 }, (_, i) => simulateMatch(home, away, mulberry32(20000 + i), 20000 + i, { recordEvents: true })));
+
   it("the real FB is measurably more involved in defensive-50 events than the real FF, and vice versa in forward-50, aggregated across many seeds", () => {
     const homeFbId = findByPosition(home, "FB");
     const homeFfId = findByPosition(home, "FF");
@@ -313,10 +322,7 @@ describe("Phase 8: position-weighted involvement (engine/involvement.ts wired in
     let fbInFwd50 = 0;
     let ffInFwd50 = 0;
 
-    const N = 30;
-    for (let i = 0; i < N; i++) {
-      const seed = 20000 + i;
-      const result = simulateMatch(home, away, mulberry32(seed), seed, { recordEvents: true });
+    for (const result of involvementSample()) {
       for (const ev of result.events) {
         if (ev.zone === 0) {
           if (ev.playerIds.includes(homeFbId)) fbInDef50++;
@@ -348,10 +354,7 @@ describe("Phase 8: position-weighted involvement (engine/involvement.ts wired in
     let fbInOwnDef50 = 0;
     let ffInOwnDef50 = 0;
 
-    const N = 30;
-    for (let i = 0; i < N; i++) {
-      const seed = 21000 + i;
-      const result = simulateMatch(home, away, mulberry32(seed), seed, { recordEvents: true });
+    for (const result of involvementSample()) {
       for (const ev of result.events) {
         if (ev.zone === 0) {
           if (ev.playerIds.includes(awayFbId)) fbInOwnFwd50++;

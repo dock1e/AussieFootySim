@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Dashboard } from "./components/Dashboard";
+import { AnnualReportHost } from "./components/AnnualReport";
 import { List } from "./components/List";
 import { LiveMatch } from "./components/LiveMatch";
 import type { FlowStep } from "./components/matchday/flow/FlowChrome";
@@ -364,6 +365,10 @@ export default function App() {
             onGoToContracts={() => setScreen("contracts")}
             onGoToSeason={() => setScreen("season")}
             onDayOne={goDayOne}
+            onOpenClubHistory={() => {
+              setDeptTab("history");
+              setScreen("facilities");
+            }}
           />
         )}
         {screen === "squad" && <List />}
@@ -389,6 +394,13 @@ export default function App() {
         {screen === "themeSystem" && <ThemeSystemScreen />}
       </main>
       <PlayerProfileModal />
+      <AnnualReportHost
+        onOpenHistory={() => {
+          setDeptTab("history");
+          setScreen("facilities");
+        }}
+        onRetire={() => setNewGameFlow(true)}
+      />
       </div>
       </div>
     </div>

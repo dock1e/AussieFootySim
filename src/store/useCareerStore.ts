@@ -15,6 +15,9 @@ interface CareerState {
 
   restore: (save: Pick<SaveGameData, "saveId" | "coach" | "board" | "narrative" | "dayOne">) => void;
   setNarrative: (narrative: NarrativeSave) => void;
+  /** ROADMAP #14 job security — the board's review and a move to a new club both rewrite the coach/board records. */
+  setCoach: (coach: CoachSave | null) => void;
+  setBoard: (board: BoardSave | null) => void;
   setDayOne: (dayOne: DayOneSave) => void;
   toggleTask: (key: string) => void;
 }
@@ -41,6 +44,8 @@ export const useCareerStore = create<CareerState>((set) => ({
       dayOne: save.dayOne ?? null,
     }),
   setNarrative: (narrative) => set({ narrative }),
+  setCoach: (coach) => set({ coach }),
+  setBoard: (board) => set({ board }),
   setDayOne: (dayOne) => set({ dayOne }),
   toggleTask: (key) =>
     set((s) => (s.dayOne ? { dayOne: { ...s.dayOne, done: { ...s.dayOne.done, [key]: !s.dayOne.done[key] } } } : {})),

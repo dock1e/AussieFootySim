@@ -230,6 +230,12 @@ function eventPoints(
   events: MatchEvent[],
   sideOf: Map<number, Side>,
 ): { playerId: number; base: number } | null {
+  // ROADMAP #11 / gap #76 (Oct 2026) — a tagged free kick credits its taker directly. Before the tag, an
+  // Out on the Full free matched the kicker's own `kicks` delta first (the taker got nothing), and an In
+  // the Back free logs under MARKING_CONTEST, which no branch below scores. A Holding the Ball free is
+  // left to the tackle branch: the tackler and the taker are the same man.
+  if (ev.freeKick && ev.freeKick.kind !== "holdingTheBall") return { playerId: ev.freeKick.forId, base: FREE_KICK_WON };
+
   if (ev.phase === "STOPPAGE") {
     const hitout = findDelta(ev.statDeltas, "hitouts");
     if (hitout) return { playerId: hitout.playerId, base: hitoutOutcome(hitout, index, events, sideOf) };

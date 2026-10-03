@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "build:data": "node --experimental-strip-types scripts/buildData.ts",
     "build:prospects": "node --experimental-strip-types scripts/buildRealProspects.ts",
-    "simulate": "node --experimental-strip-types scripts/simulate.ts"
+    "simulate": "node --experimental-strip-types scripts/simulate.ts",
+    "readiness:2027": "node --experimental-strip-types scripts/readiness2027.ts"
   },
   "dependencies": {
     "idb": "^8.0.0",

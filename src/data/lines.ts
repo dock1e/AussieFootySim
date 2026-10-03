@@ -39,7 +39,7 @@ export interface LineSummary {
   players: Player[];
   avgOvr: number;
   gapToLeague: number;
-  elite: Player[]; // OVR >= 84, per Engine.md "List Needs report" elite threshold
+  elite: Player[]; // OVR >= 104 (Engine.md's "List Needs report" 84, +20 for Round C147's recentre)
   avgAge: number;
   young: Player[]; // <= 22
   veteran: Player[]; // >= 30

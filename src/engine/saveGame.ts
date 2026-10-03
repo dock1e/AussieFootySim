@@ -19,9 +19,13 @@ import type { CoachContract } from "./coachContracts.ts";
 import { computeSeasonAwards } from "./awards.ts";
 import { computeSeasonGrades, type SeasonGradeEntry } from "./seasonGrading.ts";
 import type { ClubHistoryEntry } from "./clubHistory.ts";
-import { advanceClubFinances, simulateAiFacilityInvestment } from "./clubFinance.ts";
+import { advanceClubFinances, ensureAllFinanceBaselines, simulateAiFacilityInvestment } from "./clubFinance.ts";
+import { reviewCoach, tenureStartOf } from "./boardReview.ts";
+import { ensureSeniorCoaches, fillVacancies, reviewAiCoaches, seedSeniorCoaches, type SeniorCoachesState } from "./seniorCoaches.ts";
 import { defaultClubFinanceState, type ClubFinanceState } from "../types/clubFinance.ts";
 import { pickBest22, type Cover } from "./team.ts";
+import type { RestPolicy } from "./rotation.ts";
+import { injuriesCarriedOver, type ActiveInjury } from "./injury.ts";
 import { CLUBS } from "../types/club.ts";
 
 /**
@@ -157,6 +161,16 @@ export interface CoachSave {
   /** Big Game Splash — the season the coach started (for "first premiership, season 2"). */
   startYear?: number;
   premierships?: number;
+  /** ROADMAP #14 job security — first season at the CURRENT club (differs from `startYear` once the coach has moved clubs). Absent = `startYear`. */
+  tenureStartYear?: number;
+  /** First season of the current contract term (`contractYears` counts from here). Absent = `tenureStartYear`. */
+  contractStartYear?: number;
+  /** The off-season (closing year) the board issued a formal warning, cleared once confidence recovers. */
+  warnedYear?: number;
+  /** Set when the coach has been sacked or not renewed and hasn't taken a new job yet — the season they're out of work for. */
+  unemployedSince?: number;
+  /** Clubs coached before the current one, oldest first. */
+  pastClubs?: { clubId: number; fromYear: number; toYear: number; reason: "sacked" | "notRenewed" }[];
 }
 
 export interface BoardSave {
@@ -204,12 +218,13 @@ export interface SaveGameData {
    */
   eligibility: Record<string, Record<number, Position[]>>;
   /**
-   * Round 130 (Match Day flow v2) — keyed by club name, then the resting player's PlayerID: who covers
-   * him (`null` = plays through). Mirrors useSelectionStore's `covers`. A club with no entry uses
-   * covers derived from its old per-position `eligibility` (see `defaultCovers`), so an older save
-   * migrates on first read. Plain JSON, no schema bump — same treatment as `eligibility`.
+   * Round 130 (Match Day flow v2) — keyed by club name, then the resting player's PlayerID. Since
+   * ROADMAP #16 these are optional pinned relievers (see `validCovers`). Mirrors useSelectionStore's
+   * `covers`. Plain JSON, no schema bump — same treatment as `eligibility`.
    */
   covers?: Record<string, Record<number, Cover | null>>;
+  /** ROADMAP #16 — per club, per player rest policy. Mirrors useSelectionStore's `restPolicy`. Plain JSON, no schema bump. */
+  restPolicy?: Record<string, Record<number, RestPolicy>>;
   /** Round 130 — the team and style that last took the field, per club ("Last week's team", "Changes vs last week"). */
   lastWeek?: Record<string, LastWeekPlan>;
   /** New Game Onboarding — seeds the phrase bank (same save, same text). Absent on saves made before onboarding existed. */
@@ -357,6 +372,12 @@ export interface SaveGameData {
    * (`committedStaffSpend`) already treats as "nothing committed", never throws.
    */
   coachContracts: Partial<Record<CoachRole, CoachContract>>;
+  /**
+   * ROADMAP #14 follow-up — every AI club's senior coach, the free-agent coaching market, and the log of
+   * coaching changes (`engine/seniorCoaches.ts`). Optional like every field added since round 121: an older
+   * save is seeded with the real 2026 coaches on load (`ensureSeniorCoaches`).
+   */
+  seniorCoaches?: SeniorCoachesState;
 }
 
 /** See `SaveGameData.talentScout`'s own doc comment. */
@@ -391,9 +412,11 @@ export function newSaveGame(myClub: string, players: readonly Player[]): SaveGam
     clubHistory: {},
     watchlist: [],
     // Every club, not just myClub — same "AI clubs get real state too" treatment as draftPickInventory
-    // above; a brand-new save starts every club at the same STARTING_FOOTBALL_DEPT_BUDGET.
-    clubFinance: Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])),
+    // above; a brand-new save starts every club at the same STARTING_FOOTBALL_DEPT_BUDGET, with its real
+    // 2025 members/net assets/history and a cost base calibrated against today's wage bill (ROADMAP #14).
+    clubFinance: ensureAllFinanceBaselines(Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])), players, CURRENT_SEASON_YEAR),
     coachContracts: {},
+    seniorCoaches: seedSeniorCoaches(myClub, CURRENT_SEASON_YEAR),
   };
 }
 
@@ -484,14 +507,39 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
   // costs (uses save.players/seasonArchives BEFORE this step's own aging, same timing as
   // developmentMultipliers above — a club's revenue is earned by the season it actually played), then
   // let every AI club (not myClub) spend on its own facility upgrade for next season.
-  const advancedClubFinance = advanceClubFinances(save.clubFinance, save.players, save.seasonArchives, save.year);
-  const nextClubFinance = simulateAiFacilityInvestment(advancedClubFinance, save.myClub, save.year);
+  // ROADMAP #14: the archives passed here now INCLUDE the season being closed (round 121 passed the
+  // pre-append list, so its ladder/finals revenue always read the season before last). `myClub` + the
+  // board's brief let the coach's own row carry the board's verdict for the Annual Report.
+  const archivesInclFinished = finishedSeasonArchive ? [...save.seasonArchives, finishedSeasonArchive] : save.seasonArchives;
+  const advancedClubFinance = advanceClubFinances(save.clubFinance, save.players, archivesInclFinished, save.year, {
+    myClub: save.myClub,
+    board: save.board ?? null,
+    tenureStartYear: save.coach ? tenureStartOf(save.coach, save.year) : undefined,
+  });
+  const investedClubFinance = simulateAiFacilityInvestment(advancedClubFinance, save.myClub, save.year);
+  // ROADMAP #14 job security: the board reviews the coach on the verdict it just gave, and the outcome is
+  // stamped onto that same history row so the Annual Report can announce it.
+  const { clubFinance: nextClubFinance, coach: nextCoach } = applyBoardReview(investedClubFinance, save.myClub, save.coach, save.year);
+  // ROADMAP #14 follow-up: every AI board reviews its own senior coach on the same rulebook. Vacancies
+  // are filled straight away — unless the coach has just lost their own job, in which case they stay
+  // open for the job market and are filled once the coach picks a club (`useSaveStore.acceptJobOffer`).
+  const reviewedCoaches = reviewAiCoaches(ensureSeniorCoaches(save.seniorCoaches, save.myClub, save.year), nextClubFinance, archivesInclFinished, save.year).state;
+  const nextSeniorCoaches = nextCoach?.unemployedSince !== undefined ? reviewedCoaches : fillVacancies(reviewedCoaches, save.year, hiredAssistantIds(save));
   // Round C152 Priority 3 — same "compute from the season about to be archived, before anyone ages"
   // timing as developmentMultipliers above. See engine/skillEmphasis.ts's own doc comment.
   const skillEmphases = skillEmphasesFor(save.players, save.season);
+  // Oct 2026 — [[Injuries]]: only an ACL outlasts the off-season; everyone else starts next season fit.
+  const carried = injuriesCarriedOver(save.season?.injuries);
+  const aged = runOffSeason(save.players, developmentMultipliers, skillEmphases).map((p) => {
+    const c = carried.get(p.PlayerID);
+    if (c) return { ...p, longTermInjury: c };
+    if (!p.longTermInjury) return p;
+    const { longTermInjury: _cleared, ...rest } = p;
+    return rest as Player;
+  });
   return {
     ...save,
-    players: runOffSeason(save.players, developmentMultipliers, skillEmphases),
+    players: aged,
     year: save.year + 1,
     season: null,
     combineWindow: null,
@@ -500,6 +548,8 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     draftWindow: null,
     seasonArchives: finishedSeasonArchive ? [...save.seasonArchives, finishedSeasonArchive] : save.seasonArchives,
     clubFinance: nextClubFinance,
+    coach: nextCoach,
+    seniorCoaches: nextSeniorCoaches,
     savedAt: new Date().toISOString(),
     // draftPickInventory, clubHistory deliberately NOT reset here — unlike combineWindow/
     // contractWindow/tradeWindow/draftWindow (per-off-season sessions that genuinely restart each
@@ -507,6 +557,33 @@ export function runOffSeasonOnSave(save: SaveGameData): SaveGameData {
     // away in 2026 for a 2027 future selection must still read as traded away when 2027 actually
     // arrives, and a player's draft/trade timeline obviously doesn't reset just because a new season
     // started. Both carry over unchanged via the `...save` spread above.
+  };
+}
+
+/** The coach's own hired assistants — they can't be poached as another club's senior coach. */
+export function hiredAssistantIds(save: Pick<SaveGameData, "talentScout" | "lineCoaches" | "developmentCoach">): Set<number> {
+  const ids = new Set<number>(Object.values(save.lineCoaches).filter((id): id is number => typeof id === "number"));
+  if (save.talentScout) ids.add(save.talentScout.coachId);
+  if (save.developmentCoach !== null) ids.add(save.developmentCoach);
+  return ids;
+}
+
+/** See `engine/boardReview.ts`. No coach (a pre-onboarding save), a coach already out of work, or no verdict this off-season: nothing changes. */
+function applyBoardReview(
+  clubFinance: Record<string, ClubFinanceState>,
+  myClub: string,
+  coach: CoachSave | undefined,
+  closingYear: number,
+): { clubFinance: Record<string, ClubFinanceState>; coach: CoachSave | undefined } {
+  const state = clubFinance[myClub];
+  const history = state?.history ?? [];
+  const row = history[history.length - 1];
+  if (!coach || coach.unemployedSince !== undefined || !row?.board || row.year !== closingYear) return { clubFinance, coach };
+  const review = reviewCoach(coach, row.board, closingYear);
+  const board = { ...row.board, review: review.outcome, ...(review.renewedYears ? { renewedYears: review.renewedYears } : {}) };
+  return {
+    clubFinance: { ...clubFinance, [myClub]: { ...state, history: [...history.slice(0, -1), { ...row, board }] } },
+    coach: review.coach,
   };
 }
 
@@ -533,7 +610,9 @@ export interface LastWeekPlan {
   gameStyle: GameStyle;
 }
 
-interface SerializedSeason extends Omit<Season, "condition" | "disgruntlement"> {
+interface SerializedSeason extends Omit<Season, "condition" | "disgruntlement" | "injuries"> {
+  /** Oct 2026 — [[Injuries]]. Absent on older saves. */
+  injuries?: [number, ActiveInjury][];
   condition: [number, number][];
   /** Same Map->entries treatment as `condition` above — see engine/disgruntlement.ts's `DisgruntlementState`. */
   disgruntlement: [number, DisgruntlementState][];
@@ -550,6 +629,7 @@ export interface SerializedSaveGame {
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `lineups`. */
   eligibility: Record<string, Record<number, Position[]>>;
   covers?: Record<string, Record<number, Cover | null>>;
+  restPolicy?: Record<string, Record<number, RestPolicy>>;
   lastWeek?: Record<string, LastWeekPlan>;
   /** New Game Onboarding — seeds the phrase bank (same save, same text). Absent on saves made before onboarding existed. */
   saveId?: string;
@@ -584,6 +664,8 @@ export interface SerializedSaveGame {
   clubFinance: Record<string, ClubFinanceState>;
   /** Already plain JSON-safe data (no Map/Set inside) — passed straight through, same as `clubFinance`. See `SaveGameData.coachContracts`'s own doc comment. */
   coachContracts: Partial<Record<CoachRole, CoachContract>>;
+  /** Plain JSON-safe data — passed straight through. See `SaveGameData.seniorCoaches`. */
+  seniorCoaches?: SeniorCoachesState;
 }
 
 function serializeTeamPlan(plan: TeamPlan): SerializedTeamPlan {
@@ -603,11 +685,12 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     savedAt: save.savedAt,
     players: save.players,
     season: save.season
-      ? { ...save.season, condition: [...save.season.condition.entries()], disgruntlement: [...save.season.disgruntlement.entries()] }
+      ? { ...save.season, condition: [...save.season.condition.entries()], disgruntlement: [...save.season.disgruntlement.entries()], injuries: save.season.injuries ? [...save.season.injuries.entries()] : undefined }
       : null,
     lineups: save.lineups,
     eligibility: save.eligibility,
     covers: save.covers,
+    restPolicy: save.restPolicy,
     lastWeek: save.lastWeek,
     saveId: save.saveId,
     coach: save.coach,
@@ -628,6 +711,7 @@ export function serializeSave(save: SaveGameData): SerializedSaveGame {
     watchlist: save.watchlist,
     clubFinance: save.clubFinance,
     coachContracts: save.coachContracts,
+    seniorCoaches: save.seniorCoaches,
   };
 }
 
@@ -660,11 +744,12 @@ export function deserializeSave(json: unknown): SaveGameData {
     savedAt: typeof s.savedAt === "string" ? s.savedAt : new Date().toISOString(),
     players: s.players,
     season: s.season
-      ? { ...s.season, condition: new Map(s.season.condition), disgruntlement: new Map(s.season.disgruntlement ?? []) }
+      ? { ...s.season, condition: new Map(s.season.condition), disgruntlement: new Map(s.season.disgruntlement ?? []), injuries: s.season.injuries ? new Map(s.season.injuries) : undefined }
       : null,
     lineups: s.lineups ?? {},
     eligibility: s.eligibility ?? {},
     covers: s.covers,
+    restPolicy: s.restPolicy,
     lastWeek: s.lastWeek,
     saveId: s.saveId,
     coach: s.coach,
@@ -687,7 +772,10 @@ export function deserializeSave(json: unknown): SaveGameData {
     // Reseeded per-club (not {}) for a pre-round-121 save — see this field's own doc comment on
     // SaveGameData: a pre-existing save should still get every club started at a real
     // STARTING_FOOTBALL_DEPT_BUDGET rather than reading as "budget 0, nothing built" forever.
-    clubFinance: s.clubFinance ?? Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])),
+    // ROADMAP #14: any club missing the real-scale fields (every pre-#14 save) gets them filled in here,
+    // calibrated against this save's own current wage bill — see `ensureFinanceBaseline`.
+    clubFinance: ensureAllFinanceBaselines(s.clubFinance ?? Object.fromEntries(CLUBS.map((c) => [c.name, defaultClubFinanceState()])), s.players, typeof s.year === "number" ? s.year : CURRENT_SEASON_YEAR),
     coachContracts: s.coachContracts ?? {},
+    seniorCoaches: ensureSeniorCoaches(s.seniorCoaches, s.myClub, typeof s.year === "number" ? s.year : CURRENT_SEASON_YEAR),
   };
 }

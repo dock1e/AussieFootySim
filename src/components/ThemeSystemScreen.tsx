@@ -93,7 +93,7 @@ export function ThemeSystemScreen() {
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <KpiTile value="49.9" label="Avg OVR" />
-                    <KpiTile value="1" label="Elite 84+" tone="accent" />
+                    <KpiTile value="1" label="Elite 104+" tone="accent" />
                   </div>
                   <button
                     type="button"

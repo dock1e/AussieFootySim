@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type CSSProperties, type DragEvent } from "r
 import type { Player } from "../../../types/player";
 import { POSITIONS, type Position } from "../../../types/archetype";
 import type { Lineup } from "../../../engine/selection";
+import { injuryShortText, type ActiveInjury } from "../../../engine/injury";
 import { BARLOW, FALL, MONO } from "../shared";
 import { FORWARD_UP_SLOTS, INT_SLOTS, POSITION_FULL, SEL_LINES, fitTier, isOutOfPosition } from "./flowData";
 import { flowCard, monoLabel, pitchPanel } from "./FlowChrome";
@@ -15,6 +16,8 @@ import { flowCard, monoLabel, pitchPanel } from "./FlowChrome";
  *   - Tap a tile then another tile to swap; tap a tile then a row (or a row then a tile) to place.
  *   - Double-click a tile or a row, or press ×, to take a player off the sheet.
  * Every change writes the club's saved line-up straight away; the plan carries forward each week.
+ * Injured players ([[Injuries]]) are marked; one left on the sheet is covered automatically on match
+ * day and walks back into his spot once he's fit.
  */
 
 type Arm = { t: "slot"; v: number } | { t: "player"; v: number } | null;
@@ -45,12 +48,15 @@ const sheetButton: CSSProperties = {
 
 export function SelectionStep({
   players,
+  injuries,
   lineup,
   onChange,
   onAutoPick,
   onLastWeek,
 }: {
   players: Player[];
+  /** The season's current injury list (absent outside a season). */
+  injuries?: Map<number, ActiveInjury>;
   lineup: Lineup;
   onChange: (lineup: Lineup) => void;
   onAutoPick: () => void;
@@ -69,6 +75,8 @@ export function SelectionStep({
     return m;
   }, [lineup]);
 
+  const injuryOf = (id: number | null | undefined) => (id != null ? injuries?.get(id) : undefined);
+  const injuredOnSheet = lineup.filter((id) => injuryOf(id)).length;
   const armedSlotPos: Position | null = arm?.t === "slot" && POSITIONS[arm.v] !== "INT" ? POSITIONS[arm.v] : null;
   const rows = useMemo(() => {
     const list = [...players];
@@ -246,7 +254,7 @@ export function SelectionStep({
               background: on ? "color-mix(in oklch, var(--acc) 20%, transparent)" : "transparent",
               boxShadow: on ? "inset 3px 0 0 var(--acc)" : "none",
               borderBottom: "1px solid rgba(255,255,255,.04)",
-              opacity: sPos && !armedSlotPos ? 0.62 : 1,
+              opacity: (sPos && !armedSlotPos) || injuryOf(p.PlayerID) ? 0.62 : 1,
             };
             return (
               <div
@@ -272,8 +280,9 @@ export function SelectionStep({
                 }}
               >
                 <span style={{ font: `500 12px ${MONO}`, color: "#8f9ab0" }}>{p.jumperNumber}</span>
-                <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={injuryOf(p.PlayerID) ? injuryShortText(injuryOf(p.PlayerID)!) : undefined}>
                   {p.fname} {p.lname}
+                  {injuryOf(p.PlayerID) && <span style={{ marginLeft: 6, font: `600 10px ${MONO}`, color: FALL }}>INJ {injuryOf(p.PlayerID)!.weeksRemaining}W</span>}
                 </span>
                 <span className="mdf-hide-sm" style={{ font: `500 12px ${BARLOW}`, color: "#aab3c3", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {p.archetype}
@@ -306,6 +315,11 @@ export function SelectionStep({
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span style={monoLabel}>TEAM SHEET · FORWARD ↑</span>
             <span style={{ font: `500 12px ${BARLOW}`, color: "#aab3c3" }}>{lineupStat(lineup, byId)}</span>
+            {injuredOnSheet > 0 && (
+              <span style={{ font: `600 12px ${BARLOW}`, color: FALL }}>
+                {injuredOnSheet} injured on the sheet — covered automatically on match day until fit
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button
@@ -363,12 +377,16 @@ export function SelectionStep({
                     <span style={{ font: `600 13px ${BARLOW}`, color: p ? "#eef2f8" : "#8f9ab0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
                       {p ? `#${p.jumperNumber} ${p.lname}` : "Empty"}
                     </span>
+                    {injuryOf(id) ? (
+                      <span style={{ font: `600 10px ${MONO}`, color: FALL, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>INJ · {injuryShortText(injuryOf(id)!)}</span>
+                    ) : (
                     <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
                       <span style={{ flex: 1, height: 3, borderRadius: 2, background: "rgba(255,255,255,.08)", overflow: "hidden" }}>
                         <span style={{ display: "block", height: "100%", width: `${tier?.bar ?? 0}%`, background: tier?.color }} />
                       </span>
                       <span style={{ flex: "none", font: `600 10px ${MONO}`, color: tier?.color ?? "transparent" }}>{tier?.word ?? ""}</span>
                     </span>
+                    )}
                   </div>
                 );
               })}
@@ -388,7 +406,7 @@ export function SelectionStep({
                   <span style={{ font: `600 12px ${BARLOW}`, color: p ? "#eef2f8" : "#8f9ab0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
                     {p ? `#${p.jumperNumber} ${p.lname}` : "Empty"}
                   </span>
-                  <span style={{ font: `500 10px ${MONO}`, color: "#8f9ab0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{p?.archetype ?? ""}</span>
+                  <span style={{ font: `500 10px ${MONO}`, color: injuryOf(id) ? FALL : "#8f9ab0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{injuryOf(id) ? `INJ · ${injuryShortText(injuryOf(id)!)}` : (p?.archetype ?? "")}</span>
                 </div>
               );
             })}

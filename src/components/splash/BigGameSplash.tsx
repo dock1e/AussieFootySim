@@ -43,7 +43,7 @@ function prefersReducedMotion(): boolean {
 
 const vars = (abbr: string) => clubThemeStyle(clubTokensFor(abbr));
 
-function Confetti({ colors }: { colors: string[] }) {
+export function Confetti({ colors }: { colors: string[] }) {
   const bits = useMemo(() => {
     let s = 7;
     const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;

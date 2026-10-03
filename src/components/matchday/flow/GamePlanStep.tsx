@@ -1,8 +1,19 @@
 import { useState, type CSSProperties } from "react";
 import type { Player } from "../../../types/player";
 import { POSITIONS, type Archetype, type Position } from "../../../types/archetype";
-import { RELIEF_POSITIONS, type Lineup } from "../../../engine/selection";
+import type { Lineup } from "../../../engine/selection";
 import type { Cover } from "../../../engine/team";
+import {
+  REST_POLICIES,
+  ROTATION_GROUPS,
+  groupLabel,
+  groupOfPosition,
+  groupShort,
+  rotationGroupsOf,
+  uncoveredGroups,
+  type RestPolicy,
+  type RotationGroup,
+} from "../../../engine/rotation";
 import {
   defaultTacticForPosition,
   gameStyleModelledImpact,
@@ -22,9 +33,11 @@ import { flowCard, monoLabel, pitchPanel, selectStyle } from "./FlowChrome";
  * one screen. The style band's effect bars are the engine's own modelled effects
  * (`gameStyleModelledImpact`), and Fatigue is real — it scales fitness drain, so it changes how often
  * covered players rest. The grid is a read-only summary; all editing happens in the player panel,
- * one player at a time. Rotations are per-player covers: a bench player comes on for the rester, or
- * a teammate moves across and a bench player fills his spot (the chain). Roles are stored per player
- * per position. Time on ground is projected from real simulated matches.
+ * one player at a time. Rotations (ROADMAP #16) are the AI's job: at each goal reset the tiredest
+ * players come off and fresh bench players from the same rotation group come on, with the ground
+ * re-sorted so everyone stays in a position he suits. The coach only grooms it — rest policies,
+ * which groups a bench player covers, and an optional pinned reliever. Roles are stored per player per
+ * position. Time on ground is projected from real simulated matches.
  */
 
 const PANEL_BG: CSSProperties = {
@@ -54,6 +67,21 @@ function FitWord({ p, pos, on }: { p: Player; pos: Position; on?: boolean }) {
   return <span style={{ flex: "none", font: `600 10px ${MONO}`, color: on ? "var(--on)" : t.color }}>{t.word}</span>;
 }
 
+function RestPolicyChips({ playerId, policy, onRestPolicy }: { playerId: number; policy: RestPolicy; onRestPolicy: (id: number, p: RestPolicy) => void }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {REST_POLICIES.map((r) => (
+          <button key={r.key} onClick={() => onRestPolicy(playerId, r.key)} style={chip(policy === r.key)}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+      <span style={{ font: `500 12px/1.4 ${BARLOW}`, color: "#9aa4b5" }}>{REST_POLICIES.find((r) => r.key === policy)?.blurb}</span>
+    </div>
+  );
+}
+
 function roleOptions(p: Player, pos: Position): { options: Tactic[]; suggested: Tactic } {
   const group = tacticGroupForSlot(pos, p.archetype as Archetype);
   return { options: tacticsFor(group).filter((t) => t !== "Tagging"), suggested: defaultTacticForPosition(pos, group) };
@@ -71,8 +99,12 @@ export function GamePlanStep({
   byId,
   plan,
   covers,
+  restPolicy,
+  eligibility,
   onStyle,
   onCover,
+  onRestPolicy,
+  onBenchGroups,
   onRole,
   tog,
   projecting,
@@ -82,10 +114,16 @@ export function GamePlanStep({
   lineup: Lineup;
   byId: Map<number, Player>;
   plan: TeamPlan;
-  /** Valid covers for this line-up, keyed by rester. */
+  /** Pinned relievers for this line-up, keyed by rester (`{ by: benchId }`). */
   covers: Record<number, Cover>;
+  restPolicy: Record<number, RestPolicy>;
+  /** The coach's per-player eligibility overrides — for a bench player, the groups he covers. */
+  eligibility: Record<number, Position[]> | undefined;
   onStyle: (s: GameStyle) => void;
   onCover: (resterId: number, cover: Cover | null) => void;
+  onRestPolicy: (playerId: number, policy: RestPolicy) => void;
+  /** `null` = back to his archetype's default groups. */
+  onBenchGroups: (playerId: number, groups: RotationGroup[] | null) => void;
   onRole: (playerId: number, pos: Position, tactic: Tactic) => void;
   tog: Map<number, number> | null;
   projecting: boolean;
@@ -105,33 +143,23 @@ export function GamePlanStep({
   const style = plan.gameStyle;
   const lineText = STYLE_LINE_TEXT[style];
 
-  // Who each chain mover covers, and what each bench player comes on for.
-  const moverOf = new Map<number, number[]>();
-  const benchFor = new Map<number, { pos: Position; text: string }[]>();
-  for (const [r, c] of Object.entries(covers)) {
-    const rester = Number(r);
-    const rp = byId.get(rester);
-    const restPos = posOf(rester);
-    if (!rp || !restPos) continue;
-    if (c.fill !== undefined) {
-      moverOf.set(c.by, [...(moverOf.get(c.by) ?? []), rester]);
-      const byPos = posOf(c.by)!;
-      benchFor.set(c.fill, [...(benchFor.get(c.fill) ?? []), { pos: byPos, text: `${byPos} · when ${byId.get(c.by)?.lname} moves to ${restPos}` }]);
-    } else {
-      benchFor.set(c.by, [...(benchFor.get(c.by) ?? []), { pos: restPos, text: `${restPos} · for ${rp.lname}` }]);
-    }
-  }
+  // Rotation groups: which groups each bench player covers, and who can relieve a given starter.
+  const groupsOf = (p: Player) => rotationGroupsOf(p, eligibility?.[p.PlayerID]);
+  const relieversFor = (pos: Position) => {
+    const g = groupOfPosition(pos);
+    return g ? bench.filter((b) => groupsOf(b).includes(g)) : [];
+  };
+  const policyOf = (id: number): RestPolicy => restPolicy[id] ?? "normal";
   const togOf = (id: number) => {
     const v = tog?.get(id);
     return v === undefined ? "…" : `${Math.round(v)}%`;
   };
-  const coveredStarters = Object.keys(covers).map(Number);
-  const restShare =
-    tog && coveredStarters.length ? Math.round(coveredStarters.reduce((a, id) => a + (100 - (tog.get(id) ?? 100)), 0) / coveredStarters.length) : null;
   const starters = PLAN_LINES.flatMap((l) => l.slots).filter((i) => lineup[i] !== null);
-  const atRisk = starters.filter((i) => !covers[lineup[i]!] && RELIEF_POSITIONS.includes(POSITIONS[i])).length;
-  const covStat = `${Object.keys(covers).length}/18 have relief${atRisk ? ` · ${atRisk} fatigue risk` : ""} · ${
-    restShare === null ? (projecting ? "projecting rests…" : "") : `covered players rest ~${restShare}% of the match`
+  const starterIds = starters.map((i) => lineup[i]!);
+  const restShare = tog && starterIds.length ? Math.round(starterIds.reduce((a, id) => a + (100 - (tog.get(id) ?? 100)), 0) / starterIds.length) : null;
+  const uncovered = uncoveredGroups(bench, eligibility);
+  const covStat = `${uncovered.length ? `No bench cover: ${uncovered.map(groupShort).join(", ")}` : "Bench covers every group"} · ${
+    restShare === null ? (projecting ? "projecting rests…" : "") : `starters rest ~${restShare}% of the match`
   }`;
 
   const impact = gameStyleModelledImpact(style);
@@ -163,22 +191,21 @@ export function GamePlanStep({
   if (selP && selPos && selPos !== "INT") {
     const { options, suggested } = roleOptions(selP, selPos);
     const current = roleOf(selP, selPos);
-    const vc = covers[selP.PlayerID];
-    const risky = RELIEF_POSITIONS.includes(selPos);
+    const pin = covers[selP.PlayerID]?.by;
+    const pinned = pin !== undefined ? byId.get(pin) : undefined;
+    const group = groupOfPosition(selPos);
+    const relievers = relieversFor(selPos);
+    const policy = policyOf(selP.PlayerID);
     const benchSorted = [...bench].sort((a, b) => fitTier(b, selPos).rank - fitTier(a, selPos).rank || b.OVR - a.OVR);
-    const movers = starters
-      .map((i) => byId.get(lineup[i]!)!)
-      .filter((t) => t.PlayerID !== selP.PlayerID && !covers[t.PlayerID] && fitTier(t, selPos).rank >= 2)
-      .sort((a, b) => fitTier(b, selPos).rank - fitTier(a, selPos).rank || b.OVR - a.OVR)
-      .slice(0, 3);
-    const chain = !vc
-      ? risky
-        ? "Plays the whole game — nobody relieves him."
-        : "Plays the whole game."
-      : vc.fill !== undefined
-        ? `${byId.get(vc.by)?.lname} moves ${posOf(vc.by)} → ${selPos} · ${byId.get(vc.fill)?.lname} comes on at ${posOf(vc.by)}`
-        : `${byId.get(vc.by)?.lname} comes on at ${selPos}`;
-    const alsoFor = moverOf.get(selP.PlayerID) ?? [];
+    const names = (ps: Player[]) => ps.map((p) => p.lname).join(", ");
+    const summary =
+      policy === "never"
+        ? "Plays the whole game unless you change it at a break."
+        : pinned
+          ? `${pinned.lname} comes on first when he needs a rest.`
+          : relievers.length
+            ? `Rests at goal resets when he tires. ${names(relievers)} cover${relievers.length === 1 ? "s" : ""} ${group ? groupLabel(group).toLowerCase() : "him"}.`
+            : "No bench player covers his group — he only rests if a teammate can move across.";
     const lineKey = lineKeyFor(selPos);
     panel = (
       <>
@@ -215,15 +242,16 @@ export function GamePlanStep({
           </span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,.08)" }}>
-          <span style={monoLabel}>WHEN HE RESTS</span>
-          <span style={{ font: `600 15px/1.35 ${BARLOW}`, color: !vc && risky ? FALL : "#fff", textWrap: "pretty" }}>{chain}</span>
+          <span style={monoLabel}>ROTATION{group ? ` · ${groupLabel(group).toUpperCase()}` : ""}</span>
+          <span style={{ font: `600 15px/1.35 ${BARLOW}`, color: !relievers.length && policy !== "never" && !pinned ? FALL : "#fff", textWrap: "pretty" }}>{summary}</span>
+          <RestPolicyChips playerId={selP.PlayerID} policy={policy} onRestPolicy={onRestPolicy} />
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "#8f9ab0", width: "100%" }}>FROM THE BENCH</span>
-            <button onClick={() => onCover(selP.PlayerID, null)} style={chip(!vc)}>
-              Plays through
+            <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "#8f9ab0", width: "100%" }}>FIRST OFF THE BENCH FOR HIM · OPTIONAL</span>
+            <button onClick={() => onCover(selP.PlayerID, null)} style={chip(!pinned)}>
+              AI picks
             </button>
             {benchSorted.map((b) => {
-              const on = !!vc && vc.fill === undefined && vc.by === b.PlayerID;
+              const on = pin === b.PlayerID;
               return (
                 <button key={b.PlayerID} onClick={() => onCover(selP.PlayerID, { by: b.PlayerID })} style={chip(on)}>
                   #{b.jumperNumber} {b.lname} <FitWord p={b} pos={selPos} on={on} />
@@ -231,79 +259,53 @@ export function GamePlanStep({
               );
             })}
           </div>
-          {movers.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "#8f9ab0", width: "100%" }}>OR MOVE A TEAMMATE ACROSS</span>
-              {movers.map((t) => {
-                const on = !!vc && vc.fill !== undefined && vc.by === t.PlayerID;
-                const tPos = posOf(t.PlayerID)!;
-                return (
-                  <button
-                    key={t.PlayerID}
-                    onClick={() => {
-                      const fill = [...bench].sort((a, b) => fitTier(b, tPos).rank - fitTier(a, tPos).rank || b.OVR - a.OVR)[0];
-                      if (fill) onCover(selP.PlayerID, { by: t.PlayerID, fill: fill.PlayerID });
-                    }}
-                    style={chip(on)}
-                  >
-                    #{t.jumperNumber} {t.lname} · from {tPos} <FitWord p={t} pos={selPos} on={on} />
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {vc && vc.fill !== undefined && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", padding: "8px 10px", borderRadius: 9, background: "rgba(0,0,0,.2)" }}>
-              <span style={{ font: `600 9px ${MONO}`, letterSpacing: ".8px", color: "var(--accT)", width: "100%" }}>
-                WHO COMES ON AT {posOf(vc.by)} FOR {byId.get(vc.by)?.lname.toUpperCase()}?
-              </span>
-              {[...bench]
-                .sort((a, b) => fitTier(b, posOf(vc.by)!).rank - fitTier(a, posOf(vc.by)!).rank || b.OVR - a.OVR)
-                .map((b) => {
-                  const on = vc.fill === b.PlayerID;
-                  return (
-                    <button key={b.PlayerID} onClick={() => onCover(selP.PlayerID, { by: vc.by, fill: b.PlayerID })} style={chip(on)}>
-                      #{b.jumperNumber} {b.lname} <FitWord p={b} pos={posOf(vc.by)!} on={on} />
-                    </button>
-                  );
-                })}
-            </div>
-          )}
         </div>
-        {alsoFor.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,.08)" }}>
-            <span style={monoLabel}>ALSO PLAYS</span>
-            {alsoFor.map((r) => {
-              const rPos = posOf(r)!;
-              return (
-                <div key={r} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8" }}>
-                    {POSITION_FULL[rPos]} — when {byId.get(r)?.lname} rests
-                  </span>
-                  <RoleSelect p={selP} pos={rPos} />
-                </div>
-              );
-            })}
-          </div>
-        )}
       </>
     );
   } else if (selP && selPos === "INT") {
-    const bf = benchFor.get(selP.PlayerID) ?? [];
-    panel = bf.length ? (
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <span style={monoLabel}>COMES ON AT</span>
-        {bf.map((x, i) => (
-          <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8" }}>{x.text}</span>
-            <RoleSelect p={selP} pos={x.pos} />
+    const override = eligibility?.[selP.PlayerID];
+    const groups = groupsOf(selP);
+    const toggle = (g: RotationGroup) => onBenchGroups(selP.PlayerID, groups.includes(g) ? groups.filter((x) => x !== g) : ROTATION_GROUPS.map((x) => x.key).filter((x) => x === g || groups.includes(x)));
+    // Roles for the positions he'll actually play: his covered groups' positions he suits.
+    const rolePositions = ROTATION_GROUPS.filter((g) => groups.includes(g.key))
+      .flatMap((g) => g.positions)
+      .filter((pos) => fitTier(selP, pos).rank >= 2);
+    panel = (
+      <>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={monoLabel}>COVERS</span>
+          <span style={{ font: `600 15px/1.35 ${BARLOW}`, color: groups.length ? "#fff" : FALL, textWrap: "pretty" }}>
+            {groups.length
+              ? `Comes on for tired players in ${groups.map((g) => groupLabel(g).toLowerCase()).join(", ")}.`
+              : "Covers nothing — he won't come on unless you make a change at a break."}
+          </span>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={() => onBenchGroups(selP.PlayerID, null)} style={chip(!override)} title="The groups his archetype suits">
+              Auto
+            </button>
+            {ROTATION_GROUPS.map((g) => (
+              <button key={g.key} onClick={() => toggle(g.key)} style={chip(groups.includes(g.key))}>
+                {g.label}
+              </button>
+            ))}
           </div>
-        ))}
-      </div>
-    ) : (
-      <div style={{ font: `500 13px/1.45 ${BARLOW}`, color: FALL, textWrap: "pretty" }}>
-        Not covering anyone — he won't come on unless you make a change at a break. Pick an on-field player and choose him under "When he rests".
-      </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,.08)" }}>
+          <span style={monoLabel}>ONCE HE'S ON</span>
+          <RestPolicyChips playerId={selP.PlayerID} policy={policyOf(selP.PlayerID)} onRestPolicy={onRestPolicy} />
+        </div>
+        {rolePositions.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,.08)" }}>
+            <span style={monoLabel}>ROLE WHEN HE PLAYS</span>
+            {[...new Set(rolePositions)].map((pos) => (
+              <div key={pos} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ font: `600 14px ${BARLOW}`, color: "#eef2f8" }}>{POSITION_FULL[pos]}</span>
+                <RoleSelect p={selP} pos={pos} />
+              </div>
+            ))}
+          </div>
+        )}
+      </>
     );
   }
 
@@ -415,13 +417,23 @@ export function GamePlanStep({
                           <span style={{ font: `600 13px ${BARLOW}`, color: "#8f9ab0" }}>Empty</span>
                         </div>
                       );
-                    const vc = covers[p.PlayerID];
-                    const mv = moverOf.get(p.PlayerID) ?? [];
-                    const risky = RELIEF_POSITIONS.includes(pos);
-                    const rest = vc ? `↻ ${byId.get(vc.by)?.lname}${vc.fill !== undefined ? " moves across" : ""}` : risky ? "No relief · fatigue risk" : "Plays through";
-                    const badge = mv.length ? (mv.some((r) => posOf(r) === "R") ? "2ND RUCK" : `ALSO ${mv.map((r) => posOf(r)).join("/")}`) : "";
+                    const pin = covers[p.PlayerID]?.by;
+                    const policy = policyOf(p.PlayerID);
+                    const noCover = relieversFor(pos).length === 0 && pin === undefined;
+                    const rest =
+                      policy === "never"
+                        ? "Never rests"
+                        : pin !== undefined
+                          ? `↻ ${byId.get(pin)?.lname} first`
+                          : noCover
+                            ? "No bench cover"
+                            : policy === "normal"
+                              ? "Rotates"
+                              : REST_POLICIES.find((r) => r.key === policy)!.label;
+                    const restColor = policy === "never" ? "#f0c04a" : noCover ? FALL : pin !== undefined || policy !== "normal" ? "var(--accT)" : "#8f9ab0";
+                    const badge = tog ? togOf(p.PlayerID) : "";
                     return (
-                      <button key={slot} onClick={() => setSel(p.PlayerID)} style={{ ...tileBase(sel === p.PlayerID, mv.length > 0), minHeight: 78 }}>
+                      <button key={slot} onClick={() => setSel(p.PlayerID)} style={{ ...tileBase(sel === p.PlayerID, pin !== undefined || policy !== "normal"), minHeight: 78 }}>
                         <span style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 6, font: `600 9px ${MONO}`, letterSpacing: ".7px", color: "#8f9ab0" }}>
                           <span>{pos}</span>
                           <span style={{ color: "var(--accT)" }}>{badge}</span>
@@ -430,7 +442,7 @@ export function GamePlanStep({
                           #{p.jumperNumber} {p.lname}
                         </span>
                         <span style={{ font: `600 11px ${BARLOW}`, color: "#dfe5ee", opacity: 0.85, ...ellipsis }}>{roleOf(p, pos)}</span>
-                        <span style={{ font: `500 11px ${BARLOW}`, color: vc ? "var(--accT)" : risky ? FALL : "#8f9ab0", ...ellipsis }}>{rest}</span>
+                        <span style={{ font: `500 11px ${BARLOW}`, color: restColor, ...ellipsis }}>{rest}</span>
                       </button>
                     );
                   })}
@@ -448,7 +460,7 @@ export function GamePlanStep({
                       Empty
                     </div>
                   );
-                const bf = benchFor.get(b.PlayerID) ?? [];
+                const bg = groupsOf(b);
                 return (
                   <button key={slot} onClick={() => setSel(b.PlayerID)} style={{ ...tileBase(sel === b.PlayerID, false), minHeight: 62 }}>
                     <span style={{ display: "flex", justifyContent: "space-between", width: "100%", font: `600 9px ${MONO}`, letterSpacing: ".7px", color: "#8f9ab0" }}>
@@ -458,8 +470,8 @@ export function GamePlanStep({
                     <span style={{ font: `600 12px ${BARLOW}`, color: "#eef2f8", ...ellipsis }}>
                       #{b.jumperNumber} {b.lname}
                     </span>
-                    <span style={{ font: `500 11px ${BARLOW}`, color: bf.length ? "var(--accT)" : FALL, ...ellipsis }}>
-                      {bf.length ? `On for ${[...new Set(bf.map((x) => x.pos))].join(", ")}` : "Not covering anyone"}
+                    <span style={{ font: `500 11px ${BARLOW}`, color: bg.length ? "var(--accT)" : FALL, ...ellipsis }} title={bg.map(groupLabel).join(", ")}>
+                      {bg.length ? bg.map(groupShort).join(" · ") : "Covers nothing"}
                     </span>
                   </button>
                 );

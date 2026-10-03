@@ -3386,10 +3386,6 @@ function resolveUnpressuredDisposal(
   // ROADMAP #18 / Oct 2026 continuous ball — the ball goes where it was aimed (the receiver's real spot)
   // for a handball as well as a kick; see disposalLanding.
   const newZone = disposalLanding(ctx, isKick, kickCandidate, handballCandidate, newZoneIfKick, state.zone);
-  // Round 135 — see zoneEntryDeltas' own doc comment. A kick or (Oct 2026) a handball that carries the ball
-  // across the 50 arc earns the inside-50 / rebound-50. The free-kick-out-of-bounds branch just below uses
-  // the same deltas.
-  const zoneDeltas = zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone);
 
   if (isKick && ctx.rng() < P_KICK_GOES_OUT_ON_FULL) {
     const newSide = otherSide(state.possession);
@@ -3434,6 +3430,11 @@ function resolveUnpressuredDisposal(
     tagFreeKick(ctx, "outOnTheFull", freeKickTaker.PlayerID, carrier.PlayerID);
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
+  // Round C161 — computed only AFTER the out-on-the-full branch: zoneEntryDeltas bumps the box score
+  // as a side effect, so calling it before that branch credited inside50s/rebound50s the comment above
+  // says it deliberately doesn't (and the free-kick log line never carried them). Round 135 / Oct 2026:
+  // a kick or a handball that carries the ball across the 50 arc earns the inside-50 / rebound-50.
+  const zoneDeltas = zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone);
 
   // Aug 2026 round 109 — this disposal's own stat credit (disposals/kicks-or-
   // handballs, plus any carried-forward gatherDeltas) used to be logged here,
@@ -4067,8 +4068,6 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
   // Oct 2026 (continuous ball): a handball still only covers a short distance (its own range cap), but
   // the ball goes to the receiver's real spot, so a handball across the 50 arc changes the zone.
   const newZone = disposalLanding(ctx, isKick, kickCandidate, handballCandidate, newZoneIfKick, state.zone);
-  // Round 135 — see zoneEntryDeltas' own doc comment / resolveUnpressuredDisposal's identical site.
-  const zoneDeltas = zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone);
 
   // Out on the Full — Aug 2026 round 19, see P_KICK_GOES_OUT_ON_FULL's own
   // doc comment. Only a kick can literally sail out on the full; the
@@ -4115,6 +4114,11 @@ function runGeneralPlay(ctx: Ctx, state: State): State {
     tagFreeKick(ctx, "outOnTheFull", freeKickTaker.PlayerID, carrier.PlayerID);
     return freeKickState(newZone, newSide, freeKickTaker, freeKickGotShot);
   }
+  // Round C161 — computed only AFTER the out-on-the-full branch: zoneEntryDeltas bumps the box score
+  // as a side effect, so calling it before that branch credited inside50s/rebound50s the comment above
+  // says it deliberately doesn't (and the free-kick log line never carried them). Round 135 — see
+  // resolveUnpressuredDisposal's identical site (handballs count too).
+  const zoneDeltas = zoneEntryDeltas(ctx, carrier, state.possession, state.zone, newZone);
 
   // Aug 2026 round 109 — this disposal's own stat credit (disposals/kicks-or-
   // handballs/defender's tackleAttempts, plus any carried-forward
